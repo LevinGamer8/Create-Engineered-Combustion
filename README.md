@@ -40,6 +40,29 @@ Development runs:
 ./gradlew runServer
 ```
 
+### A note on Create's Maven version
+
+Create is **not** published under its plain release version. Its `build.gradle`
+appends the Jenkins build number:
+
+```groovy
+version = mod_version + (dev && buildNumber != null ? "-${buildNumber}" : "")
+```
+
+So Create 6.0.10 lives at `com.simibubi.create:create-1.21.1:6.0.10-280`, and
+asking for `6.0.10` fails with:
+
+```
+Could not find com.simibubi.create:create-1.21.1:6.0.10
+```
+
+`create_version` in `gradle.properties` therefore carries the build number, while
+`create_version_range` (used for the mod-loader dependency in
+`neoforge.mods.toml`) does not - Create reports plain `6.0.10` to the mod loader.
+To bump Create, list the available versions at
+<https://maven.createmod.net/com/simibubi/create/create-1.21.1/> and copy the
+full `x.y.z-buildnumber` string.
+
 ### Required Maven repositories
 
 Dependency resolution needs all of these to be reachable:
