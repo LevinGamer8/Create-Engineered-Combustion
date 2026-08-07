@@ -183,12 +183,35 @@ All in `EngineTuning`:
 | `NETWORK_RPM_DEADBAND` | 8 |
 | `STRESS_CAPACITY_PER_RPM` | 32 |
 
+## Goggle overlay
+
+Create draws the overlay icon at a fixed offset over the top-left of the tooltip
+box. Every Create machine leaves room for it because `LangBuilder#forGoggles`
+indents **every** line - the title included - by four spaces (five for detail
+lines). This mod builds its tooltip from plain `Component`s, so it reproduces
+that margin explicitly; without it the icon lands on top of the title.
+
+On top of that, `getIcon(boolean)` returns `ItemStack.EMPTY` so no Engineer's
+Goggles icon is drawn at all. Create renders it unconditionally through
+`GuiGameElement.of(item)`, and catnip's `GuiItemRenderBuilder#renderItemIntoGUI`
+has no empty check of its own - it relies on vanilla `ItemRenderer#render`,
+which draws nothing for an empty stack. The indentation alone already prevents
+the overlap, so the override can be removed if it ever misbehaves.
+
+`Redstone Signal: 0-15` is a developer line, read from
+`Level#getBestNeighborSignal` - the same call `ChainGearshiftBlockEntity` uses.
+Ignition is simply `signal > 0`; structure validity stays a separate line so the
+two can be diagnosed independently. Combustion still requires both.
+
 ## Manual test procedure
 
 Build the engine as in [milestone 1](milestone-1.md), then:
 
-1. **Redstone alone.** Valid engine, stationary, apply redstone. Expect 0 RPM, no
-   piston movement, `State: Stopped`. It must not start.
+1. **Redstone alone.** Valid engine, stationary, apply redstone. Expect
+   `Redstone Signal: 15`, `Ignition: Enabled`, `State: Stopped`, 0 RPM and no
+   piston movement. Ignition enabled must **not** mean the engine starts.
+   Removing the lever must return `Redstone Signal: 0` / `Ignition: Disabled`
+   immediately.
 2. **Hand crank, ignition off.** Attach a Create Hand Crank to a shaft on the
    flywheel's free end and hold right-click. Expect the flywheel, crankshaft and
    piston to move, `Mechanical RPM: 32.0`, `State: Cranking`,
@@ -197,6 +220,9 @@ Build the engine as in [milestone 1](milestone-1.md), then:
    within a second or so, `Rotation Source` flipping to `Engine`, generated RPM
    climbing 32 -> 40 -> 48 -> 56 -> 64. Release the crank: the engine keeps
    running at ~64 RPM.
+3b. **Below the start threshold.** Drive the engine at ~16 RPM with redstone on.
+   Expect `Ignition: Enabled`, `State: Cranking`, and no ignition, because 16 is
+   below `START_RPM` of 24.
 4. **Wrong direction.** Sneak-right-click the crank (or use one facing the other
    way) so Mechanical RPM reads negative. The engine turns and the piston moves,
    but it never ignites.

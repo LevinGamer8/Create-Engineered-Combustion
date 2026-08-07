@@ -26,6 +26,7 @@ import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -40,7 +41,7 @@ import net.minecraft.world.level.block.state.BlockState;
  * </ol>
  * Additionally on the server:
  * <ol start="3">
- * <li>re-check the structure and the redstone ignition signal (throttled);</li>
+ * <li>read the redstone ignition signal, and re-check the structure (throttled);</li>
  * <li>run combustion, inertia and friction;</li>
  * <li>if - and only if - the speed the engine wants to generate changed, tell
  * the flywheel to push it into Create.</li>
@@ -61,14 +62,27 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	/** Crank-angle resync interval while turning, in ticks. */
 	private static final int RESYNC_INTERVAL = 200;
 
+	/** Matches Create's {@code forGoggles(tooltip)} indent for a title line. */
+	private static final String GOGGLE_TITLE_INDENT = "    ";
+	/** Matches Create's {@code forGoggles(tooltip, 1)} indent for detail lines. */
+	private static final String GOGGLE_LINE_INDENT = "     ";
+
 	private static final String KEY_CRANK_ANGLE = "CrankAngle";
 	private static final String KEY_PHASE = "Phase";
 	private static final String KEY_SIMULATED_RPM = "SimulatedRpm";
 	private static final String KEY_PUBLISHED_RPM = "PublishedRpm";
 	private static final String KEY_IGNITION = "Ignition";
 	private static final String KEY_STRUCTURE_VALID = "StructureValid";
+	private static final String KEY_REDSTONE_SIGNAL = "RedstoneSignal";
 
 	private final EngineState engine = new EngineState();
+
+	/**
+	 * Strongest redstone signal reaching the crankshaft, 0-15. Server-authoritative,
+	 * synchronised to the client purely so the debug readout can show it - the
+	 * goggle overlay runs client-side and has no other way to know.
+	 */
+	private int redstoneSignal;
 
 	@Nullable
 	private EngineStructure structure;
@@ -107,16 +121,26 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 			refreshStructure(flywheel);
 		}
 
-		EnginePhase phaseBefore = engine.getPhase();
-		boolean generatedSpeedChanged = engine.tickSimulation(structure != null,
-			level.hasNeighborSignal(worldPosition), flywheel != null && flywheel.hasSource());
+		// Read live every tick. This is cheap (six neighbours) and is the only way
+		// the state can never go stale, whatever order neighbour updates arrive in.
+		int signalBefore = redstoneSignal;
+		redstoneSignal = level.getBestNeighborSignal(worldPosition);
 
-		if (generatedSpeedChanged) {
+		EnginePhase phaseBefore = engine.getPhase();
+		boolean structureValidBefore = engine.isStructureValid();
+		boolean generatedSpeedChanged = engine.tickSimulation(structure != null, redstoneSignal > 0,
+			flywheel != null && flywheel.hasSource());
+
+		if (generatedSpeedChanged && flywheel != null)
 			// The one and only place engine state crosses into Create's world.
-			if (flywheel != null)
-				flywheel.onEngineOutputChanged();
-			sync();
-		} else if (phaseBefore != engine.getPhase()) {
+			flywheel.onEngineOutputChanged();
+
+		// Anything the client displays has to trigger a block update, not just the
+		// things that change the engine's rotation. Toggling redstone on a stopped
+		// engine changes no speed and no phase, so without this the client would
+		// keep showing the ignition state it was last told about.
+		if (generatedSpeedChanged || signalBefore != redstoneSignal || phaseBefore != engine.getPhase()
+			|| structureValidBefore != engine.isStructureValid()) {
 			sync();
 		} else if (engine.getMechanicalRpm() != 0.0F && --resyncCountdown <= 0) {
 			resyncCountdown = RESYNC_INTERVAL;
@@ -250,6 +274,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		engine.setPublishedRpm(tag.getFloat(KEY_PUBLISHED_RPM));
 		engine.setIgnitionEnabled(tag.getBoolean(KEY_IGNITION));
 		engine.setStructureValid(tag.getBoolean(KEY_STRUCTURE_VALID));
+		redstoneSignal = tag.getInt(KEY_REDSTONE_SIGNAL);
 	}
 
 	@Override
@@ -262,6 +287,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		tag.putFloat(KEY_PUBLISHED_RPM, engine.getPublishedRpm());
 		tag.putBoolean(KEY_IGNITION, engine.isIgnitionEnabled());
 		tag.putBoolean(KEY_STRUCTURE_VALID, engine.isStructureValid());
+		tag.putInt(KEY_REDSTONE_SIGNAL, redstoneSignal);
 	}
 
 	@Override
@@ -283,14 +309,37 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 	// --- debug readout ------------------------------------------------------
 
+	/**
+	 * Create draws the overlay icon at a fixed offset over the top-left of the
+	 * tooltip box, and every Create machine leaves room for it because
+	 * {@code LangBuilder#forGoggles} indents <i>every</i> line - the title
+	 * included - by four spaces (five for detail lines). This tooltip is built
+	 * with plain Components, so it has to reproduce that margin itself.
+	 */
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
-		tooltip.add(Component.translatable("gui.engineered_combustion.engine_stats")
-			.withStyle(ChatFormatting.WHITE));
+		tooltip.add(Component.literal(GOGGLE_TITLE_INDENT)
+			.append(Component.translatable("gui.engineered_combustion.engine_stats")
+				.withStyle(ChatFormatting.WHITE)));
 		for (Component line : debugLines())
-			tooltip.add(Component.literal(" ")
+			tooltip.add(Component.literal(GOGGLE_LINE_INDENT)
 				.append(line));
 		return true;
+	}
+
+	/**
+	 * Suppresses the Engineer's Goggles icon Create draws next to the overlay.
+	 *
+	 * <p>Create renders it unconditionally via {@code GuiGameElement.of(item)},
+	 * and catnip's {@code GuiItemRenderBuilder#renderItemIntoGUI} has no empty
+	 * check of its own - but it delegates to vanilla's
+	 * {@code ItemRenderer#render}, which draws nothing for an empty stack. The
+	 * indentation above already keeps the icon clear of the text, so if this ever
+	 * misbehaves the override can simply be deleted.
+	 */
+	@Override
+	public ItemStack getIcon(boolean isPlayerSneaking) {
+		return ItemStack.EMPTY;
 	}
 
 	public void sendDebugReport(Player player) {
@@ -309,6 +358,10 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 		lines.add(state("structure", valid, "valid", "invalid"));
 		lines.add(state("piston", piston, "installed", "missing"));
+		lines.add(Component.translatable("gui.engineered_combustion.redstone_signal",
+			Component.literal(Integer.toString(redstoneSignal))
+				.withStyle(redstoneSignal > 0 ? ChatFormatting.GREEN : ChatFormatting.RED))
+			.withStyle(ChatFormatting.GRAY));
 		lines.add(state("ignition", ignition, "enabled", "disabled"));
 		lines.add(Component.translatable("gui.engineered_combustion.state",
 			Component.translatable(phase.translationKey())

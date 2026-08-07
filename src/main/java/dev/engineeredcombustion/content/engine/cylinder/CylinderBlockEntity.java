@@ -14,6 +14,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
@@ -127,21 +128,28 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 
 	// --- debug readout ------------------------------------------------------
 
+	/** Indentation and icon handling match {@code CrankshaftBlockEntity}; see there. */
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
-		tooltip.add(Component.translatable("gui.engineered_combustion.cylinder_stats")
-			.withStyle(ChatFormatting.WHITE));
-		tooltip.add(Component.literal(" ")
+		tooltip.add(Component.literal("    ")
+			.append(Component.translatable("gui.engineered_combustion.cylinder_stats")
+				.withStyle(ChatFormatting.WHITE)));
+		tooltip.add(Component.literal("     ")
 			.append(Component.translatable("gui.engineered_combustion.piston",
 				Component.translatable(pistonInstalled ? "gui.engineered_combustion.installed"
 					: "gui.engineered_combustion.missing")
 					.withStyle(pistonInstalled ? ChatFormatting.GREEN : ChatFormatting.RED))
 				.withStyle(ChatFormatting.GRAY)));
 		if (pistonInstalled)
-			tooltip.add(Component.literal(" ")
+			tooltip.add(Component.literal("     ")
 				.append(Component.translatable("gui.engineered_combustion.piston_position",
 					String.format("%.2f", CrankMath.pistonPosition(getCrankAngleForRender(0.0F))))
 					.withStyle(ChatFormatting.GRAY)));
 		return true;
+	}
+
+	@Override
+	public ItemStack getIcon(boolean isPlayerSneaking) {
+		return ItemStack.EMPTY;
 	}
 }
