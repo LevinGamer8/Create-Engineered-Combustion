@@ -1,0 +1,133 @@
+plugins {
+    id("java-library")
+    id("idea")
+    id("eclipse")
+    id("maven-publish")
+    // https://projects.neoforged.net/neoforged/ModDevGradle
+    // Same ModDevGradle version Create 6.0.10 builds with.
+    id("net.neoforged.moddev") version "2.0.107"
+}
+
+base {
+    archivesName = "${mod_id}-${minecraft_version}"
+    group = mod_group_id
+    version = mod_version
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+    options.release = 21
+}
+
+neoForge {
+    version = neo_version
+
+    parchment {
+        minecraftVersion = parchment_minecraft_version
+        mappingsVersion = parchment_version
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+
+    runs {
+        configureEach {
+            systemProperty("forge.logging.markers", "REGISTRIES")
+            jvmArgument("-XX:+IgnoreUnrecognizedVMOptions")
+            jvmArgument("-XX:+AllowEnhancedClassRedefinition")
+        }
+
+        client {
+            client()
+        }
+
+        server {
+            server()
+            gameDirectory = project.file("run/server")
+            programArgument("--nogui")
+        }
+
+        data {
+            data()
+            programArguments.addAll(
+                "--mod", mod_id as String,
+                "--all",
+                "--output", file("src/generated/resources/").getAbsolutePath(),
+                "--existing", file("src/main/resources/").getAbsolutePath()
+            )
+        }
+    }
+}
+
+repositories {
+    mavenLocal()
+    // Create, Ponder (contains Catnip) and Flywheel
+    maven { url = "https://maven.createmod.net" }
+    // Registrate - Create bundles it via jarJar, but the `slim` Create artifact
+    // used below does not, so the dev runtime needs it explicitly.
+    maven { url = "https://maven.ithundxr.dev/snapshots" }
+}
+
+dependencies {
+    // The `slim` classifier is Create without its jarJar'd libraries. Transitive
+    // resolution is disabled on purpose: Create's published POM also lists all of
+    // its optional compat mods (JEI, FTB, JourneyMap, ...), which an addon does
+    // not want to drag in. Everything Create genuinely needs is declared below.
+    implementation("com.simibubi.create:create-${minecraft_version}:${create_version}:slim") { transitive = false }
+
+    implementation("com.tterrag.registrate:Registrate:${registrate_version}")
+    implementation("net.createmod.ponder:ponder-neoforge:${ponder_version}+mc${minecraft_version}")
+
+    compileOnly("dev.engine-room.flywheel:flywheel-neoforge-api-${minecraft_version}:${flywheel_version}")
+    runtimeOnly("dev.engine-room.flywheel:flywheel-neoforge-${minecraft_version}:${flywheel_version}")
+}
+
+var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
+    var replaceProperties = [
+        mod_id                 : mod_id,
+        mod_name               : mod_name,
+        mod_version            : mod_version,
+        mod_authors            : mod_authors,
+        mod_description        : mod_description,
+        minecraft_version_range: minecraft_version_range,
+        neo_version_range      : neo_version_range,
+        loader_version_range   : loader_version_range,
+        create_version_range   : create_version_range,
+    ]
+    inputs.properties(replaceProperties)
+    expand(replaceProperties)
+    from("src/main/templates")
+    into("build/generated/sources/modMetadata")
+}
+
+sourceSets.main.resources.srcDir(generateModMetadata)
+neoForge.ideSyncTask(generateModMetadata)
+
+idea {
+    module {
+        downloadJavadoc = true
+        downloadSources = true
+    }
+}
+
+publishing {
+    publications {
+        register("mavenJava", MavenPublication) {
+            artifactId = base.archivesName.get()
+            from components.java
+        }
+    }
+    repositories {
+        maven { url = "file://${project.projectDir}/repo" }
+    }
+}
