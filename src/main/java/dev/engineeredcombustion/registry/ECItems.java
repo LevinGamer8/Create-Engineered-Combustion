@@ -3,7 +3,9 @@ package dev.engineeredcombustion.registry;
 import dev.engineeredcombustion.EngineeredCombustion;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.BucketItem;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
 
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.registries.DeferredHolder;
@@ -30,6 +32,19 @@ public class ECItems {
 
 	public static final DeferredHolder<Item, BlockItem> FLYWHEEL =
 		ITEMS.register("flywheel", () -> new BlockItem(ECBlocks.FLYWHEEL.get(), new Item.Properties()));
+
+	public static final DeferredHolder<Item, BlockItem> CARBURETOR =
+		ITEMS.register("carburetor", () -> new BlockItem(ECBlocks.CARBURETOR.get(), new Item.Properties()));
+
+	/**
+	 * Vanilla's BucketItem needs the Fluid itself, not a supplier. That is safe
+	 * here because the FLUID registry is populated before the ITEM registry, so
+	 * the fluid already exists by the time this supplier runs.
+	 */
+	public static final DeferredHolder<Item, BucketItem> GASOLINE_BUCKET =
+		ITEMS.register("gasoline_bucket", () -> new BucketItem(ECFluids.GASOLINE.get(),
+			new Item.Properties().craftRemainder(Items.BUCKET)
+				.stacksTo(1)));
 
 	public static void register(IEventBus modEventBus) {
 		ITEMS.register(modEventBus);

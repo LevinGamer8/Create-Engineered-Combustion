@@ -1,13 +1,19 @@
 # Milestone 1 - single-cylinder mechanical prototype
 
+> **Superseded in part by [milestone 2](milestone-2.md).** The debug power source
+> described below - redstone directly producing a fixed 32 RPM - has been removed.
+> Redstone is now a combustion *enable* only, and the engine has to be cranked
+> above a starting speed by an external Create source before it will run. The
+> structure layout, the piston-assembly mechanic and the crank-angle-drives-
+> everything principle are unchanged.
+
 The point of this milestone is to prove one thing:
 
 > player-built components -> structure detection -> synchronized crank/piston
 > motion -> Create rotational output
 
 There is no combustion, no fuel, no fluids, no valves, no timing, no thermal or
-lubrication model, and only one cylinder. A redstone signal stands in for the
-power source.
+lubrication model, and only one cylinder.
 
 ## Supported orientation
 
@@ -75,7 +81,7 @@ Keeping the generator on the flywheel gives the split the milestones need:
   kinetic API changes.
 
 The interface between the two halves is one method:
-`CrankshaftBlockEntity#getOutputRpmFor(BlockPos)`.
+`CrankshaftBlockEntity#getGeneratedRpmFor(BlockPos)`.
 
 ## Crank angle
 
@@ -93,16 +99,11 @@ Everything mechanical is derived from it:
 
 There is no separate cosmetic animation timer anywhere in the codebase.
 
-## Debug power (milestone 1 only)
+## Debug power (removed in milestone 2)
 
-The engine runs when **structure is valid AND the crankshaft has a redstone
-signal**. While running it produces a fixed `EngineState.DEBUG_TARGET_RPM`
-(32 RPM) and the flywheel registers 32 SU/RPM of capacity, i.e. 1024 SU at
-32 RPM.
-
-Removing the redstone signal, or breaking any required component, stops output.
-Replacing this with real combustion means changing `EngineState` and the one
-line in `CrankshaftBlockEntity#refresh` that reads `hasNeighborSignal`.
+Originally the engine ran whenever the structure was valid and the crankshaft
+had a redstone signal, producing a fixed 32 RPM out of nothing. See
+[milestone 2](milestone-2.md) for what replaced it.
 
 ## Structure validation and performance
 

@@ -1,6 +1,7 @@
 package dev.engineeredcombustion.registry;
 
 import dev.engineeredcombustion.EngineeredCombustion;
+import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlock;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlock;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlock;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlock;
@@ -27,6 +28,9 @@ public class ECBlocks {
 
 	public static final DeferredHolder<Block, EngineFlywheelBlock> FLYWHEEL =
 		BLOCKS.register("flywheel", () -> new EngineFlywheelBlock(metal().noOcclusion()));
+
+	public static final DeferredHolder<Block, CarburetorBlock> CARBURETOR =
+		BLOCKS.register("carburetor", () -> new CarburetorBlock(metal().noOcclusion()));
 
 	private static BlockBehaviour.Properties metal() {
 		return BlockBehaviour.Properties.of()

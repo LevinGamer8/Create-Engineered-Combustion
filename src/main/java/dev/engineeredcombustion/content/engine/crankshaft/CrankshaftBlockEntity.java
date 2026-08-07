@@ -1,21 +1,29 @@
 package dev.engineeredcombustion.content.engine.crankshaft;
 
 import java.util.List;
-import java.util.Objects;
 
 import org.jetbrains.annotations.Nullable;
 
 import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
 
-import dev.engineeredcombustion.content.engine.CrankMath;
+import dev.engineeredcombustion.content.engine.EnginePhase;
+import dev.engineeredcombustion.content.engine.EngineTuning;
+import dev.engineeredcombustion.content.engine.FuelSupply;
+import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
 import dev.engineeredcombustion.content.engine.EngineState;
 import dev.engineeredcombustion.content.engine.EngineStructure;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
+import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlock;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
+import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
+import dev.engineeredcombustion.registry.ECItems;
+import net.createmod.catnip.lang.LangBuilder;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.Direction.Axis;
+import net.minecraft.core.Direction.AxisDirection;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -23,56 +31,104 @@ import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
+import net.neoforged.neoforge.fluids.FluidStack;
+
 /**
  * Engine controller and host of the authoritative engine simulation.
  *
- * <p>Responsibilities, in order:
+ * <p>Per tick, on both sides:
  * <ol>
- * <li>Detect and cache the engine structure ({@link EngineStructure}).</li>
- * <li>Read the milestone-1 debug power source (a redstone signal).</li>
- * <li>Advance {@link EngineState}, which owns the authoritative crank angle.</li>
- * <li>Tell the adjacent {@link EngineFlywheelBlockEntity} - and only it - when
- * the engine's rotational output changed.</li>
+ * <li>read the flywheel's <i>actual</i> Create kinetic speed;</li>
+ * <li>advance the crank angle by exactly that much.</li>
+ * </ol>
+ * Additionally on the server:
+ * <ol start="3">
+ * <li>read the redstone ignition signal, and re-check the structure (throttled);</li>
+ * <li>run combustion, inertia and friction;</li>
+ * <li>if - and only if - the speed the engine wants to generate changed, tell
+ * the flywheel to push it into Create.</li>
  * </ol>
  *
- * <p>Note what is <b>not</b> here: nothing in this class touches a Create
- * kinetic network. That boundary is the whole point of the split - milestone 2
- * can rewrite the simulation without touching Create integration, and a Create
- * API change only affects the flywheel.
+ * <p>Because step 1 and 2 use a value Create already synchronises, client and
+ * server derive the same crank angle from the same input without this mod
+ * sending a packet per tick. Everything visible (piston, flywheel disc, attached
+ * shafts) therefore agrees by construction.
+ *
+ * <p>Nothing in this class touches a Create kinetic network directly. That stays
+ * in {@link EngineFlywheelBlockEntity}.
  */
 public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInformation {
 
-	/** Full structure + redstone re-check interval, in ticks, as a safety net. */
+	/** Structure + redstone re-check interval, in ticks. */
 	private static final int REVALIDATE_INTERVAL = 20;
-	/**
-	 * While running, re-send the crank angle this often (ticks) so that client and
-	 * server cannot drift apart indefinitely. Everything else is only sent when it
-	 * actually changes, so a running engine costs one packet every 10 seconds.
-	 */
+	/** Crank-angle resync interval while turning, in ticks. */
 	private static final int RESYNC_INTERVAL = 200;
 
-	private static final String KEY_RUNNING = "Running";
-	private static final String KEY_STRUCTURE_VALID = "StructureValid";
 	private static final String KEY_CRANK_ANGLE = "CrankAngle";
+	private static final String KEY_PHASE = "Phase";
+	private static final String KEY_SIMULATED_RPM = "SimulatedRpm";
+	private static final String KEY_PUBLISHED_RPM = "PublishedRpm";
+	private static final String KEY_IGNITION = "Ignition";
+	private static final String KEY_STRUCTURE_VALID = "StructureValid";
+	private static final String KEY_REDSTONE_SIGNAL = "RedstoneSignal";
+	private static final String KEY_START_PROGRESS = "StartProgress";
+	private static final String KEY_START_REQUIRED = "StartRequired";
+	private static final String KEY_FUEL_AVAILABLE = "FuelAvailable";
 
 	private final EngineState engine = new EngineState();
 
-	@Nullable
-	private EngineStructure structure;
-	private boolean redstonePowered;
+	/**
+	 * Picks how many firing cycles a start attempt needs. Lives on the block
+	 * entity rather than coming from the level so it can never be evaluated
+	 * client-side - tickSimulation only ever runs on the server.
+	 */
+	private final java.util.Random random = new java.util.Random();
 
 	/**
-	 * Only used for client-side debug readouts; the server always derives this
-	 * from {@link #structure}.
+	 * Strongest redstone signal reaching the crankshaft, 0-15. Server-authoritative,
+	 * synchronised to the client purely so the debug readout can show it - the
+	 * goggle overlay runs client-side and has no other way to know.
 	 */
-	private boolean clientStructureValid;
+	private int redstoneSignal;
+
+	@Nullable
+	private EngineStructure structure;
+	/**
+	 * The flywheel this crankshaft is mechanically coupled to. Tracked separately
+	 * from {@link #structure} on purpose: a crankshaft with no piston installed is
+	 * structurally invalid but must still be turnable by an external Create source.
+	 */
+	@Nullable
+	private BlockPos flywheelPos;
+	@Nullable
+	private EngineFlywheelBlockEntity cachedFlywheel;
 
 	private int revalidateCountdown;
 	private int resyncCountdown = RESYNC_INTERVAL;
+
+	/**
+	 * Bridges the simulation to the carburetor. EngineState never learns what a
+	 * fluid is; it only asks whether a combustion event can be paid for.
+	 */
+	private final FuelSupply fuelSupply = new FuelSupply() {
+
+		@Override
+		public boolean hasFuel() {
+			CarburetorBlockEntity carburetor = getCarburetor();
+			return carburetor != null && carburetor.hasFuel(EngineTuning.FUEL_PER_COMBUSTION_MB);
+		}
+
+		@Override
+		public boolean consume(int millibuckets) {
+			CarburetorBlockEntity carburetor = getCarburetor();
+			return carburetor != null && carburetor.consumeFuel(millibuckets);
+		}
+	};
 
 	public CrankshaftBlockEntity(BlockPos pos, BlockState state) {
 		super(ECBlockEntityTypes.CRANKSHAFT.get(), pos, state);
@@ -82,90 +138,154 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		if (level == null)
 			return;
 
+		EngineFlywheelBlockEntity flywheel = getFlywheel();
+		float mechanicalRpm = flywheel == null ? 0.0F : flywheel.getSpeed();
+		engine.advanceCrankAngle(mechanicalRpm);
+
 		if (level.isClientSide) {
-			// The client only integrates the crank angle so rendering stays smooth
-			// between the rare sync packets. It never decides whether the engine runs.
-			engine.tick();
+			engine.updateClientPowerStroke();
 			return;
 		}
 
 		if (--revalidateCountdown <= 0) {
 			revalidateCountdown = REVALIDATE_INTERVAL;
-			refresh();
+			refreshStructure(flywheel);
 		}
 
-		engine.tick();
+		// Read live every tick. This is cheap (six neighbours) and is the only way
+		// the state can never go stale, whatever order neighbour updates arrive in.
+		int signalBefore = redstoneSignal;
+		redstoneSignal = level.getBestNeighborSignal(worldPosition);
 
-		if (engine.isRunning() && --resyncCountdown <= 0) {
+		EnginePhase phaseBefore = engine.getPhase();
+		boolean structureValidBefore = engine.isStructureValid();
+		int startProgressBefore = engine.getStartProgress();
+		boolean fuelBefore = engine.isFuelAvailable();
+		boolean generatedSpeedChanged = engine.tickSimulation(structure != null, redstoneSignal > 0,
+			flywheel != null && flywheel.hasSource(), fuelSupply, random);
+
+		if (generatedSpeedChanged && flywheel != null)
+			// The one and only place engine state crosses into Create's world.
+			flywheel.onEngineOutputChanged();
+
+		// Anything the client displays has to trigger a block update, not just the
+		// things that change the engine's rotation. Toggling redstone on a stopped
+		// engine changes no speed and no phase, so without this the client would
+		// keep showing the ignition state it was last told about.
+		if (generatedSpeedChanged || signalBefore != redstoneSignal || phaseBefore != engine.getPhase()
+			|| structureValidBefore != engine.isStructureValid()
+			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()) {
+			sync();
+		} else if (engine.getMechanicalRpm() != 0.0F && --resyncCountdown <= 0) {
 			resyncCountdown = RESYNC_INTERVAL;
 			sync();
 		}
 	}
 
 	/**
-	 * Schedules a structure/power re-check for the next tick. Called from
+	 * Schedules a structure/ignition re-check for the next tick. Called from
 	 * {@code neighborChanged} and by the cylinder when its piston assembly is
 	 * installed or removed. Deferring by a tick coalesces the bursts of neighbour
 	 * updates a single block placement produces.
 	 */
 	public void onSurroundingsChanged() {
 		revalidateCountdown = 0;
+		cachedFlywheel = null;
+		flywheelPos = null;
 	}
 
 	/** Called from {@code CrankshaftBlock#onRemove} before the block entity dies. */
 	public void onEngineRemoved() {
-		BlockPos previousFlywheel = structure == null ? null : structure.flywheelPos();
+		BlockPos previousFlywheel = flywheelPos;
 		structure = null;
-		engine.setRunning(false);
-		notifyKineticAdapter(previousFlywheel);
-	}
-
-	private void refresh() {
-		if (level == null || level.isClientSide)
-			return;
-
-		BlockPos previousFlywheel = structure == null ? null : structure.flywheelPos();
-
-		structure = EngineStructure.detect(level, worldPosition, getAxis());
-		redstonePowered = level.hasNeighborSignal(worldPosition);
-
-		BlockPos currentFlywheel = structure == null ? null : structure.flywheelPos();
-		boolean structureChanged = !Objects.equals(previousFlywheel, currentFlywheel);
-		boolean runningChanged = engine.setRunning(structure != null && redstonePowered);
-
-		if (!runningChanged && !structureChanged)
-			return;
-
-		if (structureChanged)
-			notifyKineticAdapter(previousFlywheel);
-		notifyKineticAdapter(currentFlywheel);
-		sync();
-	}
-
-	/**
-	 * The one place where engine state crosses into Create's world. The flywheel
-	 * pulls the actual number back out via {@link #getOutputRpmFor(BlockPos)}.
-	 */
-	private void notifyKineticAdapter(@Nullable BlockPos flywheelPos) {
-		if (flywheelPos == null || level == null || level.isClientSide)
-			return;
-		if (!level.isLoaded(flywheelPos))
-			return;
-		if (level.getBlockEntity(flywheelPos) instanceof EngineFlywheelBlockEntity flywheel)
+		engine.setPhase(EnginePhase.STOPPED);
+		engine.setSimulatedRpm(0.0F);
+		engine.setPublishedRpm(0.0F);
+		flywheelPos = null;
+		cachedFlywheel = null;
+		if (previousFlywheel != null && level != null && !level.isClientSide && level.isLoaded(previousFlywheel)
+			&& level.getBlockEntity(previousFlywheel) instanceof EngineFlywheelBlockEntity flywheel)
 			flywheel.onEngineOutputChanged();
 	}
 
+	private void refreshStructure(@Nullable EngineFlywheelBlockEntity flywheel) {
+		if (level == null || level.isClientSide)
+			return;
+		structure = EngineStructure.detect(level, worldPosition, getAxis());
+
+		// Safety net. Create normally hands the kinetic source back to us on its own
+		// (GeneratingKineticBlockEntity#removeSource sets reActivateSource), but if a
+		// running engine ever ends up generating power that the network does not
+		// reflect, re-assert it instead of waiting for Create's 60-tick validation.
+		if (flywheel != null && engine.getPublishedRpm() != 0.0F && !flywheel.hasSource()
+			&& flywheel.getTheoreticalSpeed() == 0.0F)
+			flywheel.onEngineOutputChanged();
+	}
+
+	// --- mechanical coupling ------------------------------------------------
+
 	/**
-	 * Rotational output this crankshaft provides to the flywheel at the given
-	 * position, in RPM. Returns 0 for any block that is not <i>this</i> engine's
-	 * structural flywheel, which is what makes a second flywheel on the opposite
-	 * end inert.
+	 * The adjacent flywheel along the crankshaft's axis, independent of whether
+	 * the engine is structurally complete.
 	 */
-	public float getOutputRpmFor(BlockPos flywheelPos) {
-		if (structure == null || !structure.flywheelPos()
-			.equals(flywheelPos))
+	@Nullable
+	public EngineFlywheelBlockEntity getFlywheel() {
+		if (cachedFlywheel != null && !cachedFlywheel.isRemoved())
+			return cachedFlywheel;
+		cachedFlywheel = null;
+		flywheelPos = null;
+		if (level == null)
+			return null;
+
+		Axis axis = getAxis();
+		for (AxisDirection axisDirection : AxisDirection.values()) {
+			BlockPos candidate = worldPosition.relative(Direction.get(axisDirection, axis));
+			if (!level.isLoaded(candidate))
+				continue;
+			BlockState state = level.getBlockState(candidate);
+			if (!(state.getBlock() instanceof EngineFlywheelBlock))
+				continue;
+			if (state.getValue(EngineFlywheelBlock.HORIZONTAL_AXIS) != axis)
+				continue;
+			if (level.getBlockEntity(candidate) instanceof EngineFlywheelBlockEntity flywheel) {
+				cachedFlywheel = flywheel;
+				flywheelPos = candidate;
+				return flywheel;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The carburetor attached to this engine, or null when it is missing. Read
+	 * through the detected structure so the position rule stays in one place.
+	 */
+	@Nullable
+	public CarburetorBlockEntity getCarburetor() {
+		if (level == null || structure == null || !structure.hasCarburetor())
+			return null;
+		BlockPos pos = structure.carburetorPos();
+		if (!level.isLoaded(pos))
+			return null;
+		return level.getBlockEntity(pos) instanceof CarburetorBlockEntity carburetor ? carburetor : null;
+	}
+
+	/**
+	 * Rotational speed this engine generates for the flywheel at the given
+	 * position, in RPM. Returns 0 for any block that is not the flywheel this
+	 * crankshaft is coupled to, which is what makes a second flywheel on the
+	 * opposite end inert.
+	 *
+	 * <p>The value is <i>latched</i>: it only changes when the simulation decides
+	 * to publish a new one. Create calls this from validation and propagation at
+	 * arbitrary times and must never see a value that drifts every tick.
+	 */
+	public float getGeneratedRpmFor(BlockPos queryingFlywheelPos) {
+		if (flywheelPos == null)
+			getFlywheel();
+		if (flywheelPos == null || !flywheelPos.equals(queryingFlywheelPos))
 			return 0.0F;
-		return engine.getOutputRpm();
+		return engine.getPublishedRpm();
 	}
 
 	public EngineState getEngineState() {
@@ -174,10 +294,6 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 	public Axis getAxis() {
 		return getBlockState().getValue(CrankshaftBlock.HORIZONTAL_AXIS);
-	}
-
-	public boolean isStructureValid() {
-		return level != null && level.isClientSide ? clientStructureValid : structure != null;
 	}
 
 	public boolean isPistonInstalled() {
@@ -197,21 +313,34 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		super.loadAdditional(tag, registries);
 		// The crank angle is persisted deliberately: it is one float, and keeping it
 		// means a chunk reload does not visibly snap the piston to a new position.
-		// Later milestones (combustion timing, firing order) want that continuity too.
 		engine.setCrankAngleDegrees(tag.getFloat(KEY_CRANK_ANGLE));
-		// Running/valid are only restored so the client has something to draw before
-		// the first server tick. The server overwrites both from the actual world in
-		// refresh(), which happens on the very next tick.
-		engine.setRunning(tag.getBoolean(KEY_RUNNING));
-		clientStructureValid = tag.getBoolean(KEY_STRUCTURE_VALID);
+		// A running engine should survive a chunk reload rather than silently dying,
+		// so the phase and both speeds are restored too. Structure validity and the
+		// ignition signal are re-derived from the world on the next server tick.
+		engine.setPhase(EnginePhase.byId(tag.getString(KEY_PHASE)));
+		engine.setSimulatedRpm(tag.getFloat(KEY_SIMULATED_RPM));
+		engine.setPublishedRpm(tag.getFloat(KEY_PUBLISHED_RPM));
+		engine.setIgnitionEnabled(tag.getBoolean(KEY_IGNITION));
+		engine.setStructureValid(tag.getBoolean(KEY_STRUCTURE_VALID));
+		redstoneSignal = tag.getInt(KEY_REDSTONE_SIGNAL);
+		engine.setStartAttempt(tag.getInt(KEY_START_PROGRESS), tag.getInt(KEY_START_REQUIRED));
+		engine.setFuelAvailable(tag.getBoolean(KEY_FUEL_AVAILABLE));
 	}
 
 	@Override
 	public void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
 		super.saveAdditional(tag, registries);
 		tag.putFloat(KEY_CRANK_ANGLE, engine.getCrankAngleDegrees());
-		tag.putBoolean(KEY_RUNNING, engine.isRunning());
-		tag.putBoolean(KEY_STRUCTURE_VALID, isStructureValid());
+		tag.putString(KEY_PHASE, engine.getPhase()
+			.getId());
+		tag.putFloat(KEY_SIMULATED_RPM, engine.getSimulatedRpm());
+		tag.putFloat(KEY_PUBLISHED_RPM, engine.getPublishedRpm());
+		tag.putBoolean(KEY_IGNITION, engine.isIgnitionEnabled());
+		tag.putBoolean(KEY_STRUCTURE_VALID, engine.isStructureValid());
+		tag.putInt(KEY_REDSTONE_SIGNAL, redstoneSignal);
+		tag.putInt(KEY_START_PROGRESS, engine.getStartProgress());
+		tag.putInt(KEY_START_REQUIRED, engine.getRequiredStartCycles());
+		tag.putBoolean(KEY_FUEL_AVAILABLE, engine.isFuelAvailable());
 	}
 
 	@Override
@@ -231,51 +360,146 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 			level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
 	}
 
-	// --- debug readout ------------------------------------------------------
+	// --- goggle overlay -----------------------------------------------------
 
+	/**
+	 * Built with catnip's LangBuilder rather than raw Components, so it lays out
+	 * exactly like Create's own overlays - including the indentation that leaves
+	 * room for the icon.
+	 *
+	 * <p>Normal goggles show gameplay state. Sneaking adds the diagnostics that
+	 * used to clutter the overlay permanently.
+	 */
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
-		tooltip.add(Component.translatable("gui.engineered_combustion.engine_stats")
-			.withStyle(ChatFormatting.WHITE));
-		for (Component line : debugLines())
-			tooltip.add(Component.literal(" ")
-				.append(line));
+		EnginePhase phase = engine.getPhase();
+
+		ECLang.translate("gui.engineered_combustion.engine_stats")
+			.style(ChatFormatting.WHITE)
+			.forGoggles(tooltip);
+
+		ECLang.translate("gui.engineered_combustion.state", ECLang.translate(phase.translationKey())
+			.style(phaseColor(phase))
+			.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
+		ECLang.translate("gui.engineered_combustion.speed", ECLang.number(engine.getMechanicalRpm())
+			.style(ChatFormatting.AQUA)
+			.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
+		boolean ignition = engine.isIgnitionEnabled();
+		ECLang.translate("gui.engineered_combustion.ignition",
+			ECLang.translate(ignition ? "gui.engineered_combustion.enabled" : "gui.engineered_combustion.disabled")
+				.style(ignition ? ChatFormatting.GREEN : ChatFormatting.RED)
+				.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
+		addFuelLines(tooltip);
+
+		if (phase == EnginePhase.STARTING)
+			ECLang.translate("gui.engineered_combustion.start_progress",
+				ECLang.number(engine.getStartProgress())
+					.style(ChatFormatting.GOLD)
+					.component(),
+				ECLang.number(engine.getRequiredStartCycles())
+					.style(ChatFormatting.DARK_GRAY)
+					.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
+
+		if (isPlayerSneaking)
+			addDiagnostics(tooltip);
 		return true;
 	}
 
+	private void addFuelLines(List<Component> tooltip) {
+		CarburetorBlockEntity carburetor = getCarburetor();
+		if (carburetor == null) {
+			ECLang.translate("gui.engineered_combustion.fuel",
+				ECLang.translate("gui.engineered_combustion.no_carburetor")
+					.style(ChatFormatting.RED)
+					.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
+			return;
+		}
+
+		FluidStack fluid = carburetor.getFluid();
+		boolean usable = carburetor.holdsValidFuel();
+		ECLang.translate("gui.engineered_combustion.fuel", (fluid.isEmpty()
+			? ECLang.translate("gui.engineered_combustion.fuel_empty")
+				.style(ChatFormatting.RED)
+			: ECLang.builder()
+				.add(fluid.getHoverName()
+					.copy())
+				.style(usable ? ChatFormatting.GREEN : ChatFormatting.RED)).component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
+		if (!fluid.isEmpty())
+			ECLang.translate("gui.engineered_combustion.fuel_available", ECLang.number(fluid.getAmount())
+				.style(ChatFormatting.AQUA)
+				.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
+	}
+
+	/** Sneak-only diagnostics, so the normal overlay stays readable. */
+	private void addDiagnostics(List<Component> tooltip) {
+		ECLang.translate("gui.engineered_combustion.diagnostics")
+			.style(ChatFormatting.DARK_GRAY)
+			.forGoggles(tooltip);
+
+		diagnostic(tooltip, "structure", ECLang
+			.translate(engine.isStructureValid() ? "gui.engineered_combustion.valid"
+				: "gui.engineered_combustion.invalid")
+			.style(engine.isStructureValid() ? ChatFormatting.GREEN : ChatFormatting.RED));
+		diagnostic(tooltip, "rotation_source", ECLang.translate(engine.getRotationSource()
+			.translationKey())
+			.style(ChatFormatting.WHITE));
+		diagnostic(tooltip, "redstone_signal", ECLang.number(redstoneSignal)
+			.style(redstoneSignal > 0 ? ChatFormatting.GREEN : ChatFormatting.RED));
+		diagnostic(tooltip, "crank_angle", ECLang.number(engine.getCrankAngleDegrees())
+			.style(ChatFormatting.AQUA));
+		diagnostic(tooltip, "simulated_rpm", ECLang.number(engine.getSimulatedRpm())
+			.style(ChatFormatting.AQUA));
+		diagnostic(tooltip, "generated_rpm", ECLang.number(engine.getPublishedRpm())
+			.style(ChatFormatting.AQUA));
+	}
+
+	private static void diagnostic(List<Component> tooltip, String key, LangBuilder value) {
+		ECLang.translate("gui.engineered_combustion." + key, value.component())
+			.style(ChatFormatting.DARK_GRAY)
+			.forGoggles(tooltip, 1);
+	}
+
+	private static ChatFormatting phaseColor(EnginePhase phase) {
+		return switch (phase) {
+			case RUNNING -> ChatFormatting.GREEN;
+			case STARTING, CRANKING, COASTING -> ChatFormatting.GOLD;
+			case STOPPED -> ChatFormatting.RED;
+		};
+	}
+
+	/** The engine's own component, so the overlay reads as part of this machine. */
+	@Override
+	public ItemStack getIcon(boolean isPlayerSneaking) {
+		return new ItemStack(ECItems.CRANKSHAFT.get());
+	}
+
+	/** Chat report for the right-click debug path; plain text, works server-side. */
 	public void sendDebugReport(Player player) {
 		player.displayClientMessage(Component.translatable("gui.engineered_combustion.engine_stats")
 			.withStyle(ChatFormatting.GOLD), false);
-		for (Component line : debugLines())
-			player.displayClientMessage(line, false);
-	}
-
-	private List<Component> debugLines() {
-		boolean valid = isStructureValid();
-		boolean running = engine.isRunning();
-		float angle = engine.getCrankAngleDegrees();
-		return List.of(
-			Component.translatable("gui.engineered_combustion.structure",
-				Component.translatable(valid ? "gui.engineered_combustion.valid" : "gui.engineered_combustion.invalid")
-					.withStyle(valid ? ChatFormatting.GREEN : ChatFormatting.RED))
-				.withStyle(ChatFormatting.GRAY),
-			Component.translatable("gui.engineered_combustion.piston",
-				Component.translatable(isPistonInstalled() ? "gui.engineered_combustion.installed"
-					: "gui.engineered_combustion.missing")
-					.withStyle(isPistonInstalled() ? ChatFormatting.GREEN : ChatFormatting.RED))
-				.withStyle(ChatFormatting.GRAY),
-			Component.translatable("gui.engineered_combustion.state",
-				Component.translatable(running ? "gui.engineered_combustion.running"
-					: "gui.engineered_combustion.stopped")
-					.withStyle(running ? ChatFormatting.GREEN : ChatFormatting.RED))
-				.withStyle(ChatFormatting.GRAY),
-			Component.translatable("gui.engineered_combustion.crank_angle", String.format("%.1f", angle))
-				.withStyle(ChatFormatting.GRAY),
-			Component.translatable("gui.engineered_combustion.piston_position",
-				String.format("%.2f", CrankMath.pistonPosition(angle)))
-				.withStyle(ChatFormatting.GRAY),
-			Component.translatable("gui.engineered_combustion.output_speed",
-				String.format("%.0f", engine.getOutputRpm()))
-				.withStyle(ChatFormatting.GRAY));
+		player.displayClientMessage(Component.literal(String.format(
+			"phase=%s  mech=%.1f  sim=%.1f  gen=%.1f  angle=%.1f  redstone=%d  fuel=%s  start=%d/%d",
+			engine.getPhase(), engine.getMechanicalRpm(), engine.getSimulatedRpm(), engine.getPublishedRpm(),
+			engine.getCrankAngleDegrees(), redstoneSignal, engine.isFuelAvailable(), engine.getStartProgress(),
+			engine.getRequiredStartCycles()))
+			.withStyle(ChatFormatting.GRAY), false);
 	}
 }

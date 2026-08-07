@@ -40,6 +40,29 @@ Development runs:
 ./gradlew runServer
 ```
 
+### A note on Create's Maven version
+
+Create is **not** published under its plain release version. Its `build.gradle`
+appends the Jenkins build number:
+
+```groovy
+version = mod_version + (dev && buildNumber != null ? "-${buildNumber}" : "")
+```
+
+So Create 6.0.10 lives at `com.simibubi.create:create-1.21.1:6.0.10-280`, and
+asking for `6.0.10` fails with:
+
+```
+Could not find com.simibubi.create:create-1.21.1:6.0.10
+```
+
+`create_version` in `gradle.properties` therefore carries the build number, while
+`create_version_range` (used for the mod-loader dependency in
+`neoforge.mods.toml`) does not - Create reports plain `6.0.10` to the mod loader.
+To bump Create, list the available versions at
+<https://maven.createmod.net/com/simibubi/create/create-1.21.1/> and copy the
+full `x.y.z-buildnumber` string.
+
 ### Required Maven repositories
 
 Dependency resolution needs all of these to be reachable:
@@ -63,3 +86,12 @@ resolution before it ever reaches compilation.
   detection, an authoritative crank angle, a piston animated from that angle, and
   rotational output into Create's kinetic network. See
   [`docs/milestone-1.md`](docs/milestone-1.md).
+* **Milestone 2** - real mechanical rotation and hand-crank starting: the engine
+  can be motored by any Create source, has angular velocity, flywheel inertia and
+  friction, fires once per revolution, and must be cranked above a starting speed
+  before it will run. Redstone is now only a combustion enable. See
+  [`docs/milestone-2.md`](docs/milestone-2.md).
+* **Milestone 3** - gasoline: a real fuel fluid, a Carburetor with a fluid tank,
+  fuel burned per combustion event, multi-cycle starting instead of an instant
+  threshold, and Create-style goggle overlays. See
+  [`docs/milestone-3.md`](docs/milestone-3.md).

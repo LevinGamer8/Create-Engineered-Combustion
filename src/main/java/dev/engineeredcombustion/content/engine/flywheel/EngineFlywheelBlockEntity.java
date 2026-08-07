@@ -37,17 +37,10 @@ import net.minecraft.world.level.block.state.BlockState;
  * milestone 2 can replace the whole simulation without touching this file.
  *
  * <p>The reverse also holds: everything Create needs is reachable through
- * {@link CrankshaftBlockEntity#getOutputRpmFor(BlockPos)}, so if Create's
+ * {@link CrankshaftBlockEntity#getGeneratedRpmFor(BlockPos)}, so if Create's
  * kinetic API changes, only this class has to follow.
  */
 public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
-
-	/**
-	 * Stress capacity per RPM, matching Create's convention. At the milestone-1
-	 * debug speed of 32 RPM this provides 1024 SU - comfortably enough for a small
-	 * mechanism, and in the same league as Create's own early generators.
-	 */
-	public static final double STRESS_CAPACITY_PER_RPM = 32.0D;
 
 	public EngineFlywheelBlockEntity(BlockPos pos, BlockState state) {
 		super(ECBlockEntityTypes.FLYWHEEL.get(), pos, state);
@@ -67,15 +60,28 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 			updateGeneratedRotation();
 	}
 
+	/**
+	 * What Create asks for. Zero whenever the engine is not making its own power,
+	 * which is exactly what turns this block into an ordinary <i>passive</i> kinetic
+	 * component that a hand crank or any other Create source can motor - see
+	 * {@code GeneratingKineticBlockEntity#applyNewSpeed}, which keeps a generator
+	 * attached to its external source while it generates 0.
+	 *
+	 * <p>The value is latched by the simulation rather than computed live: Create
+	 * calls this during propagation and during its periodic kinetic validation, and
+	 * a value that drifted every tick would make it re-propagate the network
+	 * constantly.
+	 */
 	@Override
 	public float getGeneratedSpeed() {
 		CrankshaftBlockEntity crankshaft = getAdjacentCrankshaft();
 		if (crankshaft == null)
 			return 0.0F;
-		// Positive along the block's own axis. The engine always turns the same way
-		// for now; direction becomes meaningful once the simulation has real
-		// angular velocity in milestone 2.
-		return crankshaft.getOutputRpmFor(worldPosition);
+		// Always positive along the block's own axis: the engine only ever fires
+		// while turning forwards, so the generated speed can never disagree in sign
+		// with the rotation already present - which matters, because
+		// RotationPropagator destroys blocks on opposing-sign sources.
+		return crankshaft.getGeneratedRpmFor(worldPosition);
 	}
 
 	/** Called by the crankshaft when the engine's rotational output changed. */
@@ -88,7 +94,7 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	 * flywheel's own rotation axis, with a matching axis of its own.
 	 *
 	 * <p>Whether that crankshaft actually drives <i>this</i> flywheel is decided by
-	 * the crankshaft in {@link CrankshaftBlockEntity#getOutputRpmFor(BlockPos)},
+	 * the crankshaft in {@link CrankshaftBlockEntity#getGeneratedRpmFor(BlockPos)},
 	 * which returns 0 for anything that is not its structural flywheel.
 	 */
 	@Nullable

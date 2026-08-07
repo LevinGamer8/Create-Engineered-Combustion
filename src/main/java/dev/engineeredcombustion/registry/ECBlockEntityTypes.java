@@ -1,6 +1,7 @@
 package dev.engineeredcombustion.registry;
 
 import dev.engineeredcombustion.EngineeredCombustion;
+import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
@@ -29,6 +30,11 @@ public class ECBlockEntityTypes {
 	public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<EngineFlywheelBlockEntity>> FLYWHEEL =
 		BLOCK_ENTITY_TYPES.register("flywheel", () -> BlockEntityType.Builder
 			.of(EngineFlywheelBlockEntity::new, ECBlocks.FLYWHEEL.get())
+			.build(null));
+
+	public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<CarburetorBlockEntity>> CARBURETOR =
+		BLOCK_ENTITY_TYPES.register("carburetor", () -> BlockEntityType.Builder
+			.of(CarburetorBlockEntity::new, ECBlocks.CARBURETOR.get())
 			.build(null));
 
 	public static void register(IEventBus modEventBus) {
