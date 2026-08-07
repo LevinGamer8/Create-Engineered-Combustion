@@ -2,6 +2,7 @@ package dev.engineeredcombustion.content.engine;
 
 import org.jetbrains.annotations.Nullable;
 
+import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlock;
 import net.minecraft.core.BlockPos;
@@ -20,6 +21,7 @@ import net.minecraft.world.level.block.state.BlockState;
  *
  * <h2>Supported orientation</h2>
  * <pre>
+ *             [Carburetor]       &lt;- directly above the cylinder (optional)
  *              [Cylinder]        &lt;- directly above the crankshaft
  *                  |             &lt;- connecting rod (implicit)
  *   ... [Crankshaft] [Flywheel] [Create Shaft] ...
@@ -40,12 +42,25 @@ import net.minecraft.world.level.block.state.BlockState;
  * Anything else - diagonal placements, vertical crankshafts, a cylinder to the
  * side, more than one cylinder - is deliberately not supported yet.
  */
-public record EngineStructure(BlockPos crankshaftPos, Axis axis, BlockPos cylinderPos, BlockPos flywheelPos) {
+public record EngineStructure(BlockPos crankshaftPos, Axis axis, BlockPos cylinderPos, BlockPos flywheelPos,
+	@Nullable BlockPos carburetorPos) {
+
+	/**
+	 * Whether the engine can burn fuel, as opposed to merely being turnable.
+	 *
+	 * <p>The crankshaft, cylinder, piston and flywheel alone form a <i>mechanically
+	 * valid</i> assembly that any Create source can motor. Combustion additionally
+	 * needs the carburetor - and fuel in it - which is why the two are separate
+	 * questions everywhere in the codebase.
+	 */
+	public boolean hasCarburetor() {
+		return carburetorPos != null;
+	}
 
 	/**
 	 * Attempts to find a complete, valid engine around the given crankshaft.
 	 *
-	 * <p>Touches at most three block positions and never scans the world. Returns
+	 * <p>Touches at most four block positions and never scans the world. Returns
 	 * {@code null} when any required component is missing, when the cylinder has
 	 * no piston assembly installed, or when a required position is in an unloaded
 	 * chunk (an unloaded neighbour is treated as "not valid right now" rather than
@@ -72,7 +87,14 @@ public record EngineStructure(BlockPos crankshaftPos, Axis axis, BlockPos cylind
 			if (flywheelState.getValue(EngineFlywheelBlock.HORIZONTAL_AXIS) != axis)
 				continue;
 
-			return new EngineStructure(crankshaftPos, axis, cylinderPos, flywheelPos);
+			// The carburetor sits directly on top of the cylinder. It is optional
+			// here: without it the engine is still mechanically complete.
+			BlockPos carburetorPos = cylinderPos.above();
+			boolean hasCarburetor = level.isLoaded(carburetorPos)
+				&& level.getBlockEntity(carburetorPos) instanceof CarburetorBlockEntity;
+
+			return new EngineStructure(crankshaftPos, axis, cylinderPos, flywheelPos,
+				hasCarburetor ? carburetorPos : null);
 		}
 
 		return null;

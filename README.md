@@ -91,3 +91,7 @@ resolution before it ever reaches compilation.
   friction, fires once per revolution, and must be cranked above a starting speed
   before it will run. Redstone is now only a combustion enable. See
   [`docs/milestone-2.md`](docs/milestone-2.md).
+* **Milestone 3** - gasoline: a real fuel fluid, a Carburetor with a fluid tank,
+  fuel burned per combustion event, multi-cycle starting instead of an instant
+  threshold, and Create-style goggle overlays. See
+  [`docs/milestone-3.md`](docs/milestone-3.md).

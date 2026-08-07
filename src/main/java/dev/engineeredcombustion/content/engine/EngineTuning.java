@@ -121,6 +121,49 @@ public final class EngineTuning {
 	/** Minimum ticks between two non-zero generated-speed updates. */
 	public static final int NETWORK_MIN_UPDATE_INTERVAL_TICKS = 4;
 
+	// --- fuel ---------------------------------------------------------------
+
+	/**
+	 * Gasoline drawn per combustion event, in millibuckets. Charged per <i>firing
+	 * event</i>, never per tick, so consumption scales with engine speed exactly
+	 * like a real engine: one revolution, one charge. At idle (64 RPM ~ 1.07
+	 * revolutions per second) a full 1000 mB carburetor lasts about 16 minutes.
+	 *
+	 * <p>Pre-start firing attempts are charged the same amount - a real engine
+	 * burns fuel while you crank it too.
+	 */
+	public static final int FUEL_PER_COMBUSTION_MB = 1;
+
+	/** Carburetor tank size, in millibuckets. */
+	public static final int CARBURETOR_CAPACITY_MB = 1000;
+
+	// --- starting -----------------------------------------------------------
+
+	/**
+	 * A start attempt needs this many successful firing opportunities before the
+	 * engine catches, chosen once per attempt in {@code [MIN, MAX]}. This is what
+	 * turns starting into "crank... puff... puff... BRUMM" instead of the engine
+	 * snapping to RUNNING the instant it crosses START_RPM.
+	 *
+	 * <p>The count is rolled once when an attempt begins and then held; it is
+	 * never re-rolled per tick or per revolution.
+	 */
+	public static final int MIN_START_CYCLES = 2;
+	public static final int MAX_START_CYCLES = 5;
+
+	/**
+	 * Fraction of normal combustion torque delivered by a pre-start firing kick.
+	 * Enough to feel the engine trying to catch, far too little to run on.
+	 */
+	public static final float START_KICK_TORQUE_FACTOR = 0.35F;
+
+	/**
+	 * A start attempt is abandoned after this many ticks without a usable firing
+	 * opportunity - the engine stopped turning, ran dry, or ignition went away.
+	 * Stops a half-finished start from being remembered indefinitely.
+	 */
+	public static final int START_ATTEMPT_TIMEOUT_TICKS = 30;
+
 	// --- stress -------------------------------------------------------------
 
 	/** Capacity per RPM, Create's convention. 32 * 64 RPM = 2048 SU at idle. */

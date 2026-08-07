@@ -49,7 +49,15 @@ public final class EngineState {
 	// --- combustion ---------------------------------------------------------
 	private boolean firedThisRevolution;
 	private boolean powerStrokeActive;
+	/** 1 while running, a fraction of that for a pre-start kick. */
+	private float powerStrokeStrength;
 	private int ticksSinceCombustion = -1;
+	private boolean fuelAvailable;
+
+	// --- start attempt ------------------------------------------------------
+	private int startProgress;
+	private int requiredStartCycles;
+	private int ticksSinceStartActivity;
 
 	private EnginePhase phase = EnginePhase.STOPPED;
 	private int ticksSincePublish;
@@ -79,7 +87,8 @@ public final class EngineState {
 	 * synced phase and the locally advanced crank angle, so it costs no packets.
 	 */
 	public void updateClientPowerStroke() {
-		powerStrokeActive = phase == EnginePhase.RUNNING && isWithinPowerStroke();
+		powerStrokeActive = (phase == EnginePhase.RUNNING || phase == EnginePhase.STARTING)
+			&& isWithinPowerStroke();
 	}
 
 	// ------------------------------------------------------------------------
@@ -95,10 +104,12 @@ public final class EngineState {
 	 * @return true when {@link #getPublishedRpm()} changed and Create's generated
 	 *         rotation therefore has to be updated
 	 */
-	public boolean tickSimulation(boolean structureValid, boolean ignitionEnabled, boolean externallyDriven) {
+	public boolean tickSimulation(boolean structureValid, boolean ignitionEnabled, boolean externallyDriven,
+		FuelSupply fuel, java.util.Random random) {
 		this.structureValid = structureValid;
 		this.ignitionEnabled = ignitionEnabled;
 		this.externallyDriven = externallyDriven;
+		this.fuelAvailable = fuel.hasFuel();
 
 		if (ticksSinceCombustion >= 0 && ticksSinceCombustion < Integer.MAX_VALUE)
 			ticksSinceCombustion++;
@@ -107,36 +118,96 @@ public final class EngineState {
 
 		// While something else is turning us and we are not making our own power,
 		// the simulation has no say: Create's speed IS the engine's speed.
-		if (externallyDriven && phase != EnginePhase.RUNNING)
+		if (externallyDriven && !phase.simulationOwnsSpeed())
 			simulatedRpm = mechanicalRpm;
 
-		boolean combustionPossible = structureValid && ignitionEnabled;
+		// Fuel is now a hard requirement. An engine with a missing or empty
+		// carburetor is mechanically fine but can never produce power.
+		boolean combustionPossible = structureValid && ignitionEnabled && fuelAvailable;
 		float requiredRpm = phase == EnginePhase.RUNNING ? EngineTuning.STALL_RPM : EngineTuning.START_RPM;
 		// Forward rotation only. Cranking the engine backwards never ignites it.
 		boolean mayIgnite = combustionPossible && lastAngleDeltaDegrees > 0.0F && simulatedRpm >= requiredRpm;
 
+		boolean ignitedThisTick = false;
 		if (crossedFiringAngle()) {
-			firedThisRevolution = mayIgnite;
-			if (firedThisRevolution)
+			// Fuel is drawn per firing event, never per tick, and only if the whole
+			// charge is actually available - a partial draw must not produce power.
+			if (mayIgnite && fuel.consume(EngineTuning.FUEL_PER_COMBUSTION_MB)) {
+				firedThisRevolution = true;
+				ignitedThisTick = true;
 				ticksSinceCombustion = 0;
+				ticksSinceStartActivity = 0;
+				if (phase != EnginePhase.RUNNING)
+					registerStartCycle(random);
+			} else {
+				firedThisRevolution = false;
+			}
 		}
-		powerStrokeActive = firedThisRevolution && combustionPossible && isWithinPowerStroke();
+
+		// The crank must actually be turning forwards for a power stroke to push.
+		// firedThisRevolution only changes when the firing angle is crossed, so on a
+		// stalled crank it would otherwise stay latched and deliver free torque
+		// every tick forever. This also makes an overstressed network - where
+		// Create reports speed 0 - correctly produce no combustion torque.
+		powerStrokeActive = firedThisRevolution && combustionPossible && lastAngleDeltaDegrees > 0.0F
+			&& isWithinPowerStroke();
+		powerStrokeStrength = phase == EnginePhase.RUNNING ? 1.0F : EngineTuning.START_KICK_TORQUE_FACTOR;
 
 		integrate();
 
 		// A source that is faster than us wins; our own speed can never be below
-		// what Create is physically imposing on the shaft.
-		if (externallyDriven && phase == EnginePhase.RUNNING)
+		// what Create is physically imposing on the shaft. Applies while STARTING
+		// too, so a firing kick shows as a brief rise above the cranking speed.
+		if (externallyDriven && phase.simulationOwnsSpeed())
 			simulatedRpm = Math.max(simulatedRpm, mechanicalRpm);
 
-		advancePhase(combustionPossible);
+		expireStaleStartAttempt(mayIgnite);
+		advancePhase(combustionPossible, ignitedThisTick);
 
 		return updatePublishedRpm();
 	}
 
+	/**
+	 * Counts one successful pre-start firing opportunity, rolling the number of
+	 * cycles this attempt needs the first time.
+	 *
+	 * <p>The required count is chosen once per attempt and then held - re-rolling
+	 * it per revolution would make starting feel arbitrary, which is exactly what
+	 * this is meant to avoid.
+	 */
+	private void registerStartCycle(java.util.Random random) {
+		if (requiredStartCycles <= 0)
+			requiredStartCycles = EngineTuning.MIN_START_CYCLES
+				+ random.nextInt(EngineTuning.MAX_START_CYCLES - EngineTuning.MIN_START_CYCLES + 1);
+		startProgress++;
+	}
+
+	/**
+	 * Abandons a start attempt that has gone quiet - the engine stopped turning,
+	 * ran out of fuel, or ignition was switched off - so a nearly-complete start
+	 * is not remembered indefinitely.
+	 */
+	private void expireStaleStartAttempt(boolean mayIgnite) {
+		if (mayIgnite)
+			ticksSinceStartActivity = 0;
+		else if (ticksSinceStartActivity < Integer.MAX_VALUE)
+			ticksSinceStartActivity++;
+
+		if (startProgress > 0 && ticksSinceStartActivity > EngineTuning.START_ATTEMPT_TIMEOUT_TICKS)
+			resetStartAttempt();
+	}
+
+	private void resetStartAttempt() {
+		startProgress = 0;
+		requiredStartCycles = 0;
+		firedThisRevolution = false;
+		powerStrokeActive = false;
+	}
+
 	/** netTorque -> angular acceleration -> angular velocity. */
 	private void integrate() {
-		float netTorque = powerStrokeActive ? EngineTuning.combustionTorqueAt(simulatedRpm) : 0.0F;
+		float netTorque =
+			powerStrokeActive ? EngineTuning.combustionTorqueAt(simulatedRpm) * powerStrokeStrength : 0.0F;
 		// Friction always opposes the current direction of rotation, and is exactly
 		// zero at rest so it can never push a stationary engine into motion.
 		netTorque -= Math.signum(simulatedRpm) * EngineTuning.frictionTorqueAt(simulatedRpm);
@@ -150,17 +221,36 @@ public final class EngineState {
 		simulatedRpm = clamp(next, -EngineTuning.MAX_RPM, EngineTuning.MAX_RPM);
 	}
 
-	private void advancePhase(boolean combustionPossible) {
+	private void advancePhase(boolean combustionPossible, boolean ignitedThisTick) {
 		switch (phase) {
 			case STOPPED -> {
 				if (mechanicalRpm != 0.0F)
 					phase = EnginePhase.CRANKING;
 			}
 			case CRANKING -> {
-				if (firedThisRevolution)
-					phase = EnginePhase.RUNNING;
+				// The first successful firing opens a start attempt; it does not start
+				// the engine. That now takes several cycles. This deliberately tests
+				// "ignited on this tick" rather than the latched firedThisRevolution,
+				// which would otherwise bounce the phase back and forth once an
+				// abandoned attempt drops us out of STARTING.
+				if (ignitedThisTick)
+					phase = EnginePhase.STARTING;
 				else if (mechanicalRpm == 0.0F)
-					phase = EnginePhase.STOPPED;
+					// stop() rather than a bare phase change, so the simulated speed is
+					// zeroed too and the readout does not show a stopped engine still
+					// bleeding off RPM.
+					stop();
+			}
+			case STARTING -> {
+				if (requiredStartCycles > 0 && startProgress >= requiredStartCycles) {
+					phase = EnginePhase.RUNNING;
+					resetStartAttempt();
+				} else if (mechanicalRpm == 0.0F && simulatedRpm < EngineTuning.STALL_RPM) {
+					stop();
+				} else if (startProgress == 0) {
+					// expireStaleStartAttempt cleared it - the attempt went cold.
+					phase = EnginePhase.CRANKING;
+				}
 			}
 			case RUNNING -> {
 				if (!combustionPossible)
@@ -182,6 +272,7 @@ public final class EngineState {
 		simulatedRpm = 0.0F;
 		firedThisRevolution = false;
 		powerStrokeActive = false;
+		resetStartAttempt();
 	}
 
 	// ------------------------------------------------------------------------
@@ -292,6 +383,21 @@ public final class EngineState {
 		return powerStrokeActive;
 	}
 
+	/** Firing opportunities banked so far in the current start attempt. */
+	public int getStartProgress() {
+		return startProgress;
+	}
+
+	/** How many this attempt needs, or 0 when no attempt is in progress. */
+	public int getRequiredStartCycles() {
+		return requiredStartCycles;
+	}
+
+	/** Whether the fuel supply reported usable fuel on the last simulated tick. */
+	public boolean isFuelAvailable() {
+		return fuelAvailable;
+	}
+
 	public boolean isIgnitionEnabled() {
 		return ignitionEnabled;
 	}
@@ -335,6 +441,15 @@ public final class EngineState {
 
 	public void setPublishedRpm(float publishedRpm) {
 		this.publishedRpm = publishedRpm;
+	}
+
+	public void setStartAttempt(int startProgress, int requiredStartCycles) {
+		this.startProgress = Math.max(0, startProgress);
+		this.requiredStartCycles = Math.max(0, requiredStartCycles);
+	}
+
+	public void setFuelAvailable(boolean fuelAvailable) {
+		this.fuelAvailable = fuelAvailable;
 	}
 
 	public void setIgnitionEnabled(boolean ignitionEnabled) {

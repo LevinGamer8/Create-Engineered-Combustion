@@ -8,7 +8,9 @@ import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
 
 import dev.engineeredcombustion.content.engine.CrankMath;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
+import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
+import dev.engineeredcombustion.registry.ECItems;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -126,30 +128,35 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		return ClientboundBlockEntityDataPacket.create(this);
 	}
 
-	// --- debug readout ------------------------------------------------------
+	// --- goggle overlay -----------------------------------------------------
 
-	/** Indentation and icon handling match {@code CrankshaftBlockEntity}; see there. */
+	/** Deliberately concise - the full engine diagnostic lives on the crankshaft. */
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
-		tooltip.add(Component.literal("    ")
-			.append(Component.translatable("gui.engineered_combustion.cylinder_stats")
-				.withStyle(ChatFormatting.WHITE)));
-		tooltip.add(Component.literal("     ")
-			.append(Component.translatable("gui.engineered_combustion.piston",
-				Component.translatable(pistonInstalled ? "gui.engineered_combustion.installed"
-					: "gui.engineered_combustion.missing")
-					.withStyle(pistonInstalled ? ChatFormatting.GREEN : ChatFormatting.RED))
-				.withStyle(ChatFormatting.GRAY)));
+		ECLang.translate("gui.engineered_combustion.cylinder_stats")
+			.style(ChatFormatting.WHITE)
+			.forGoggles(tooltip);
+
+		ECLang.translate("gui.engineered_combustion.piston",
+			ECLang.translate(pistonInstalled ? "gui.engineered_combustion.installed"
+				: "gui.engineered_combustion.missing")
+				.style(pistonInstalled ? ChatFormatting.GREEN : ChatFormatting.RED)
+				.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
 		if (pistonInstalled)
-			tooltip.add(Component.literal("     ")
-				.append(Component.translatable("gui.engineered_combustion.piston_position",
-					String.format("%.2f", CrankMath.pistonPosition(getCrankAngleForRender(0.0F))))
-					.withStyle(ChatFormatting.GRAY)));
+			ECLang.translate("gui.engineered_combustion.piston_position",
+				ECLang.number(CrankMath.pistonPosition(getCrankAngleForRender(0.0F)))
+					.style(ChatFormatting.AQUA)
+					.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
 		return true;
 	}
 
 	@Override
 	public ItemStack getIcon(boolean isPlayerSneaking) {
-		return ItemStack.EMPTY;
+		return new ItemStack(ECItems.CYLINDER.get());
 	}
 }
