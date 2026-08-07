@@ -1,0 +1,11 @@
+{
+  "variants": {
+    "axis=x": {
+      "model": "engineered_combustion:block/crankshaft"
+    },
+    "axis=z": {
+      "model": "engineered_combustion:block/crankshaft",
+      "y": 90
+    }
+  }
+}

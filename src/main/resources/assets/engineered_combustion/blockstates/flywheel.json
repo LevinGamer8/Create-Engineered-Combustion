@@ -1,0 +1,11 @@
+{
+  "variants": {
+    "axis=x": {
+      "model": "engineered_combustion:block/flywheel"
+    },
+    "axis=z": {
+      "model": "engineered_combustion:block/flywheel",
+      "y": 90
+    }
+  }
+}
