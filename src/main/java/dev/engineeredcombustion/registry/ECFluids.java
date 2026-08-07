@@ -8,7 +8,10 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.FluidState;
 
+import java.util.function.Consumer;
+
 import net.neoforged.bus.api.IEventBus;
+import net.neoforged.neoforge.client.extensions.common.IClientFluidTypeExtensions;
 import net.neoforged.neoforge.fluids.BaseFlowingFluid;
 import net.neoforged.neoforge.fluids.FluidType;
 import net.neoforged.neoforge.registries.DeferredHolder;
@@ -42,7 +45,7 @@ public class ECFluids {
 		EngineeredCombustion.asResource("block/gasoline_flow");
 
 	public static final DeferredHolder<FluidType, FluidType> GASOLINE_TYPE =
-		FLUID_TYPES.register("gasoline", () -> new FluidType(FluidType.Properties.create()
+		FLUID_TYPES.register("gasoline", () -> new GasolineFluidType(FluidType.Properties.create()
 			.descriptionId("fluid.engineered_combustion.gasoline")
 			.density(750)
 			.viscosity(600)
@@ -70,6 +73,38 @@ public class ECFluids {
 			properties = new BaseFlowingFluid.Properties(GASOLINE_TYPE, GASOLINE, FLOWING_GASOLINE)
 				.bucket(ECItems.GASOLINE_BUCKET);
 		return properties;
+	}
+
+	/**
+	 * Supplies the client with gasoline's textures.
+	 *
+	 * <p>NeoForge 21.1 has no {@code RegisterClientExtensionsEvent} - that arrived
+	 * in 21.3. On this version the hook is {@code FluidType#initializeClient}, which
+	 * is what Create's own {@code AllFluids.TintedFluidType} uses. It is only ever
+	 * invoked on the client, so the client-only types referenced inside stay
+	 * unloaded on a dedicated server.
+	 */
+	public static class GasolineFluidType extends FluidType {
+
+		public GasolineFluidType(Properties properties) {
+			super(properties);
+		}
+
+		@Override
+		public void initializeClient(Consumer<IClientFluidTypeExtensions> consumer) {
+			consumer.accept(new IClientFluidTypeExtensions() {
+
+				@Override
+				public ResourceLocation getStillTexture() {
+					return GASOLINE_STILL_TEXTURE;
+				}
+
+				@Override
+				public ResourceLocation getFlowingTexture() {
+					return GASOLINE_FLOWING_TEXTURE;
+				}
+			});
+		}
 	}
 
 	/** Mirrors Create's VirtualFluid: a real fluid with no block form. */
