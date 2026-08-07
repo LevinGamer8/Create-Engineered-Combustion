@@ -86,3 +86,8 @@ resolution before it ever reaches compilation.
   detection, an authoritative crank angle, a piston animated from that angle, and
   rotational output into Create's kinetic network. See
   [`docs/milestone-1.md`](docs/milestone-1.md).
+* **Milestone 2** - real mechanical rotation and hand-crank starting: the engine
+  can be motored by any Create source, has angular velocity, flywheel inertia and
+  friction, fires once per revolution, and must be cranked above a starting speed
+  before it will run. Redstone is now only a combustion enable. See
+  [`docs/milestone-2.md`](docs/milestone-2.md).

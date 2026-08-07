@@ -8,17 +8,34 @@
 
   "gui.engineered_combustion.engine_stats": "Engine",
   "gui.engineered_combustion.cylinder_stats": "Cylinder",
+
   "gui.engineered_combustion.structure": "Structure: %s",
   "gui.engineered_combustion.piston": "Piston Assembly: %s",
+  "gui.engineered_combustion.ignition": "Ignition: %s",
   "gui.engineered_combustion.state": "State: %s",
+  "gui.engineered_combustion.rotation_source": "Rotation Source: %s",
   "gui.engineered_combustion.crank_angle": "Crank Angle: %s°",
+  "gui.engineered_combustion.mechanical_rpm": "Mechanical RPM: %s",
+  "gui.engineered_combustion.simulated_rpm": "Simulated RPM: %s",
+  "gui.engineered_combustion.generated_rpm": "Generated RPM: %s",
   "gui.engineered_combustion.piston_position": "Piston Position: %s",
-  "gui.engineered_combustion.output_speed": "Output: %s RPM",
+  "gui.engineered_combustion.power_stroke": "Power Stroke: %s",
 
   "gui.engineered_combustion.valid": "Valid",
   "gui.engineered_combustion.invalid": "Invalid",
   "gui.engineered_combustion.installed": "Installed",
   "gui.engineered_combustion.missing": "Missing",
-  "gui.engineered_combustion.running": "Running",
-  "gui.engineered_combustion.stopped": "Stopped"
+  "gui.engineered_combustion.enabled": "Enabled",
+  "gui.engineered_combustion.disabled": "Disabled",
+  "gui.engineered_combustion.yes": "Yes",
+  "gui.engineered_combustion.no": "No",
+
+  "gui.engineered_combustion.phase.stopped": "Stopped",
+  "gui.engineered_combustion.phase.cranking": "Cranking",
+  "gui.engineered_combustion.phase.running": "Running",
+  "gui.engineered_combustion.phase.coasting": "Coasting",
+
+  "gui.engineered_combustion.source.none": "None",
+  "gui.engineered_combustion.source.external": "External",
+  "gui.engineered_combustion.source.engine": "Engine"
 }
