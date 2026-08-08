@@ -25,7 +25,9 @@ public class ECCreativeTabs {
 				output.accept(ECItems.PISTON_ASSEMBLY.get());
 				output.accept(ECItems.FLYWHEEL.get());
 				output.accept(ECItems.CARBURETOR.get());
+				output.accept(ECItems.OIL_SUMP.get());
 				output.accept(ECItems.GASOLINE_BUCKET.get());
+				output.accept(ECItems.ENGINE_OIL_BUCKET.get());
 			})
 			.build());
 

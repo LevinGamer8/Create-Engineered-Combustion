@@ -6,6 +6,7 @@ import java.util.Iterator;
 import java.util.Map;
 
 import dev.engineeredcombustion.content.engine.EnginePhase;
+import dev.engineeredcombustion.content.engine.LubricationState;
 import dev.engineeredcombustion.content.engine.EngineTuning;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -52,7 +53,8 @@ public class EngineSoundManager {
 	 * <p>Not calling it is the supported way to stop the sound: the loop is on a
 	 * keep-alive timer and retires on its own once the refreshes stop.
 	 */
-	public static void tick(ClientLevel level, BlockPos pos, EnginePhase phase, float mechanicalRpm) {
+	public static void tick(ClientLevel level, BlockPos pos, EnginePhase phase, float mechanicalRpm,
+		LubricationState lubrication) {
 		rebindIfLevelChanged(level);
 
 		EngineLoopKind wanted = EngineLoopKind.forState(phase, mechanicalRpm);
@@ -82,7 +84,7 @@ public class EngineSoundManager {
 			return;
 		}
 
-		float pitch = wanted.pitchFor(mechanicalRpm);
+		float pitch = roughen(wanted.pitchFor(mechanicalRpm), lubrication, level.getGameTime());
 		if (current == null) {
 			current = new EngineLoopSound(wanted, pos, pitch);
 			ACTIVE.put(pos.immutable(), current);
@@ -95,6 +97,20 @@ public class EngineSoundManager {
 		current.keepAlive();
 		current.setPitch(pitch);
 		current.setVolumeFactor(volumeFactor(mechanicalRpm));
+	}
+
+	/**
+	 * Gives a dry engine a slight unevenness.
+	 *
+	 * <p>Optional flavour, kept as a pure function of game time so it adds no
+	 * state to the sound system and sounds the same for every player. The HUD is
+	 * the real lubrication warning; this only makes a dry engine sound like one.
+	 */
+	private static float roughen(float pitch, LubricationState lubrication, long gameTime) {
+		if (lubrication != LubricationState.DRY)
+			return pitch;
+		float wobble = (float) Math.sin(gameTime * EngineTuning.SOUND_DRY_ROUGHNESS_RATE);
+		return pitch * (1.0F + EngineTuning.SOUND_DRY_ROUGHNESS * wobble);
 	}
 
 	/**

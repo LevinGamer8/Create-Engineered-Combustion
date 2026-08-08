@@ -54,12 +54,15 @@ public class EngineeredCombustion {
 	}
 
 	/**
-	 * Exposes the Carburetor's tank through the standard NeoForge fluid
-	 * capability. That single registration is what lets Create's pipes, vanilla
-	 * buckets and any other mod's transport fill it, with no per-mod code.
+	 * Exposes the Carburetor's and Oil Sump's tanks through the standard NeoForge
+	 * fluid capability. These two registrations are what let Create's pipes,
+	 * vanilla buckets and any other mod's transport fill them, with no per-mod
+	 * code and no special-cased pipe integration.
 	 */
 	private static void registerCapabilities(RegisterCapabilitiesEvent event) {
 		event.registerBlockEntity(Capabilities.FluidHandler.BLOCK, ECBlockEntityTypes.CARBURETOR.get(),
+			(blockEntity, side) -> blockEntity.getFluidHandler());
+		event.registerBlockEntity(Capabilities.FluidHandler.BLOCK, ECBlockEntityTypes.OIL_SUMP.get(),
 			(blockEntity, side) -> blockEntity.getFluidHandler());
 	}
 

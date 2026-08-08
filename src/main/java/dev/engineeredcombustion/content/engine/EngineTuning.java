@@ -137,6 +137,42 @@ public final class EngineTuning {
 	/** Carburetor tank size, in millibuckets. */
 	public static final int CARBURETOR_CAPACITY_MB = 1000;
 
+	// --- lubrication --------------------------------------------------------
+
+	/** Oil sump tank size, in millibuckets. */
+	public static final int OIL_CAPACITY_MB = 1000;
+
+	/** Below this the engine reports LOW and friction starts to bite. */
+	public static final int LOW_OIL_THRESHOLD_MB = 100;
+
+	/**
+	 * Friction multipliers per lubrication state.
+	 *
+	 * <p>They multiply the existing friction torque rather than introducing a
+	 * second slowdown, so the consequence emerges from the same equilibrium the
+	 * engine already solves: combustion torque equals friction torque. Against the
+	 * tuned combustion torque that puts a low engine at about 57 RPM and a dry one
+	 * at about 26 - both still running, neither with anything in reserve.
+	 *
+	 * <p>Nothing here damages the engine. Wear and seizure are a later milestone.
+	 */
+	public static final float FRICTION_MULTIPLIER_NORMAL = 1.0F;
+	public static final float FRICTION_MULTIPLIER_LOW = 1.5F;
+	public static final float FRICTION_MULTIPLIER_DRY = 3.0F;
+
+	/**
+	 * Running combustion events per millibucket of oil drawn.
+	 *
+	 * <p>A gameplay abstraction, not a model of real oil consumption. At idle this
+	 * is roughly one millibucket a minute, so a full sump is observable within a
+	 * minute of running and lasts long enough that refilling is not a chore.
+	 * Starting attempts are excluded: only an engine actually running counts.
+	 */
+	public static final int COMBUSTION_EVENTS_PER_OIL_MB = 64;
+
+	/** Oil drawn each time that count is reached. */
+	public static final int OIL_PER_CONSUMPTION_MB = 1;
+
 	// --- starting -----------------------------------------------------------
 
 	/**
@@ -217,11 +253,36 @@ public final class EngineTuning {
 	/** Below this the engine is treated as not turning at all, audibly. */
 	public static final float SOUND_MIN_AUDIBLE_RPM = 1.0F;
 
+	/**
+	 * Depth of the pitch wobble a dry engine gets, as a fraction of its pitch.
+	 *
+	 * <p>Purely cosmetic roughness. It is deliberately tiny and derived from the
+	 * game time rather than from any random source, so it cannot desynchronise
+	 * between players or accumulate error; the HUD remains the authoritative
+	 * warning about lubrication and this only reinforces it.
+	 */
+	public static final float SOUND_DRY_ROUGHNESS = 0.04F;
+
+	/** Wobble rate of that roughness, in radians per tick. */
+	public static final float SOUND_DRY_ROUGHNESS_RATE = 0.9F;
+
 	// --- helpers ------------------------------------------------------------
 
-	/** Magnitude of friction torque at a given speed. Always positive. */
+	/** Magnitude of friction torque at a given speed, fully lubricated. Always positive. */
 	public static float frictionTorqueAt(float rpm) {
 		return FRICTION_BASE_TORQUE + FRICTION_TORQUE_PER_RPM * Math.abs(rpm);
+	}
+
+	/**
+	 * Friction torque including the penalty for poor lubrication.
+	 *
+	 * <p>This is the only place oil affects the engine mechanically. Everything
+	 * else about a dry engine - that it revs lower, hauls less and stalls sooner
+	 * under load - falls out of the existing simulation solving its equilibrium
+	 * against this larger number.
+	 */
+	public static float frictionTorqueAt(float rpm, LubricationState lubrication) {
+		return frictionTorqueAt(rpm) * lubrication.frictionMultiplier();
 	}
 
 	/**

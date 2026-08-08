@@ -9,6 +9,9 @@ import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
 import dev.engineeredcombustion.content.engine.EnginePhase;
 import dev.engineeredcombustion.content.engine.EngineTuning;
 import dev.engineeredcombustion.content.engine.FuelSupply;
+import dev.engineeredcombustion.content.engine.LubricationState;
+import dev.engineeredcombustion.content.engine.OilSupply;
+import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
 import dev.engineeredcombustion.content.engine.EngineState;
 import dev.engineeredcombustion.content.engine.EngineStructure;
@@ -86,6 +89,8 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	private static final String KEY_START_PROGRESS = "StartProgress";
 	private static final String KEY_START_REQUIRED = "StartRequired";
 	private static final String KEY_FUEL_AVAILABLE = "FuelAvailable";
+	private static final String KEY_LUBRICATION = "Lubrication";
+	private static final String KEY_OIL_WEAR = "OilWear";
 
 	private final EngineState engine = new EngineState();
 
@@ -137,6 +142,26 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		}
 	};
 
+	/**
+	 * Bridges the simulation to the oil sump. A missing sump is not an error
+	 * condition here - it simply reads as DRY, which the friction model already
+	 * knows how to punish.
+	 */
+	private final OilSupply oilSupply = new OilSupply() {
+
+		@Override
+		public LubricationState lubrication() {
+			OilSumpBlockEntity sump = getOilSump();
+			return sump == null ? LubricationState.DRY : sump.getLubricationState();
+		}
+
+		@Override
+		public boolean consume(int millibuckets) {
+			OilSumpBlockEntity sump = getOilSump();
+			return sump != null && sump.consumeOil(millibuckets);
+		}
+	};
+
 	public CrankshaftBlockEntity(BlockPos pos, BlockState state) {
 		super(ECBlockEntityTypes.CRANKSHAFT.get(), pos, state);
 	}
@@ -169,8 +194,9 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		boolean structureValidBefore = engine.isStructureValid();
 		int startProgressBefore = engine.getStartProgress();
 		boolean fuelBefore = engine.isFuelAvailable();
+		LubricationState lubricationBefore = engine.getLubrication();
 		boolean generatedSpeedChanged = engine.tickSimulation(structure != null, redstoneSignal > 0,
-			flywheel != null && flywheel.hasSource(), fuelSupply, random);
+			flywheel != null && flywheel.hasSource(), fuelSupply, oilSupply, random);
 
 		if (generatedSpeedChanged && flywheel != null)
 			// The one and only place engine state crosses into Create's world.
@@ -184,7 +210,8 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		// keep showing the ignition state it was last told about.
 		if (generatedSpeedChanged || signalBefore != redstoneSignal || phaseBefore != engine.getPhase()
 			|| structureValidBefore != engine.isStructureValid()
-			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()) {
+			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()
+			|| lubricationBefore != engine.getLubrication()) {
 			sync();
 		} else if (engine.getMechanicalRpm() != 0.0F && --resyncCountdown <= 0) {
 			resyncCountdown = RESYNC_INTERVAL;
@@ -292,7 +319,8 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	@OnlyIn(Dist.CLIENT)
 	private void tickAudio() {
 		if (level instanceof ClientLevel clientLevel)
-			EngineSoundManager.tick(clientLevel, worldPosition, engine.getPhase(), engine.getMechanicalRpm());
+			EngineSoundManager.tick(clientLevel, worldPosition, engine.getPhase(), engine.getMechanicalRpm(),
+				engine.getLubrication());
 	}
 
 	// --- mechanical coupling ------------------------------------------------
@@ -341,6 +369,20 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		if (!level.isLoaded(pos))
 			return null;
 		return level.getBlockEntity(pos) instanceof CarburetorBlockEntity carburetor ? carburetor : null;
+	}
+
+	/**
+	 * The oil sump attached to this engine, or null when it is missing. Read
+	 * through the detected structure so the position rule stays in one place.
+	 */
+	@Nullable
+	public OilSumpBlockEntity getOilSump() {
+		if (level == null || structure == null || !structure.hasOilSump())
+			return null;
+		BlockPos pos = structure.oilSumpPos();
+		if (!level.isLoaded(pos))
+			return null;
+		return level.getBlockEntity(pos) instanceof OilSumpBlockEntity sump ? sump : null;
 	}
 
 	/**
@@ -398,6 +440,10 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		redstoneSignal = tag.getInt(KEY_REDSTONE_SIGNAL);
 		engine.setStartAttempt(tag.getInt(KEY_START_PROGRESS), tag.getInt(KEY_START_REQUIRED));
 		engine.setFuelAvailable(tag.getBoolean(KEY_FUEL_AVAILABLE));
+		engine.setLubrication(LubricationState.byId(tag.getString(KEY_LUBRICATION)));
+		// Persisted so a chunk reload does not hand the player free oil by
+		// discarding the revolutions already banked towards the next draw.
+		engine.setCombustionEventsSinceOilDraw(tag.getInt(KEY_OIL_WEAR));
 	}
 
 	@Override
@@ -414,6 +460,9 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		tag.putInt(KEY_START_PROGRESS, engine.getStartProgress());
 		tag.putInt(KEY_START_REQUIRED, engine.getRequiredStartCycles());
 		tag.putBoolean(KEY_FUEL_AVAILABLE, engine.isFuelAvailable());
+		tag.putString(KEY_LUBRICATION, engine.getLubrication()
+			.getId());
+		tag.putInt(KEY_OIL_WEAR, engine.getCombustionEventsSinceOilDraw());
 	}
 
 	@Override
@@ -477,6 +526,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 			.forGoggles(tooltip, 1);
 
 		addFuelLines(tooltip);
+		addLubricationLines(tooltip);
 
 		if (phase == EnginePhase.STARTING)
 			ECLang.translate("gui.start_progress",
@@ -524,6 +574,53 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 				.component())
 				.style(ChatFormatting.GRAY)
 				.forGoggles(tooltip, 1);
+	}
+
+	/**
+	 * Lubrication state, and how much oil is left.
+	 *
+	 * <p>The state line is always shown - a dry engine is the single most useful
+	 * thing the overlay can tell a player about why it will not pull. The quantity
+	 * line is skipped when there is no sump, because "0 mB" would imply a tank
+	 * that exists.
+	 */
+	private void addLubricationLines(List<Component> tooltip) {
+		OilSumpBlockEntity sump = getOilSump();
+		LubricationState lubrication = sump == null ? LubricationState.DRY : sump.getLubricationState();
+
+		ECLang.translate("gui.lubrication", ECLang.translate(lubrication.translationKey())
+			.style(OilSumpBlockEntity.lubricationColor(lubrication))
+			.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
+		if (sump == null) {
+			ECLang.translate("gui.oil", ECLang.translate("gui.value.no_oil_sump")
+				.style(ChatFormatting.RED)
+				.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
+			return;
+		}
+
+		int oil = sump.getOilAmount();
+		if (oil <= 0) {
+			ECLang.translate("gui.oil", ECLang.translate("gui.value.empty")
+				.style(ChatFormatting.RED)
+				.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
+			return;
+		}
+
+		ECLang.translate("gui.oil_level", ECLang.number(oil)
+			.style(lubrication == LubricationState.LOW ? ChatFormatting.GOLD : ChatFormatting.AQUA)
+			.component(),
+			ECLang.number(sump.getCapacity())
+				.style(ChatFormatting.DARK_GRAY)
+				.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
 	}
 
 	/** Sneak-only diagnostics, so the normal overlay stays readable. */

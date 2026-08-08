@@ -5,6 +5,7 @@ import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlock;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlock;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlock;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlock;
+import dev.engineeredcombustion.content.engine.sump.OilSumpBlock;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.SoundType;
@@ -31,6 +32,9 @@ public class ECBlocks {
 
 	public static final DeferredHolder<Block, CarburetorBlock> CARBURETOR =
 		BLOCKS.register("carburetor", () -> new CarburetorBlock(metal().noOcclusion()));
+
+	public static final DeferredHolder<Block, OilSumpBlock> OIL_SUMP =
+		BLOCKS.register("oil_sump", () -> new OilSumpBlock(metal().noOcclusion()));
 
 	private static BlockBehaviour.Properties metal() {
 		return BlockBehaviour.Properties.of()

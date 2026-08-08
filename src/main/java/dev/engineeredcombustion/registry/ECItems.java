@@ -46,6 +46,14 @@ public class ECItems {
 			new Item.Properties().craftRemainder(Items.BUCKET)
 				.stacksTo(1)));
 
+	public static final DeferredHolder<Item, BlockItem> OIL_SUMP =
+		ITEMS.register("oil_sump", () -> new BlockItem(ECBlocks.OIL_SUMP.get(), new Item.Properties()));
+
+	public static final DeferredHolder<Item, BucketItem> ENGINE_OIL_BUCKET =
+		ITEMS.register("engine_oil_bucket", () -> new BucketItem(ECFluids.ENGINE_OIL.get(),
+			new Item.Properties().craftRemainder(Items.BUCKET)
+				.stacksTo(1)));
+
 	public static void register(IEventBus modEventBus) {
 		ITEMS.register(modEventBus);
 	}
