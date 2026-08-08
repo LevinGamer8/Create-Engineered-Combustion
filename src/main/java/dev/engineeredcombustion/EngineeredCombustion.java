@@ -9,6 +9,7 @@ import dev.engineeredcombustion.registry.ECBlocks;
 import dev.engineeredcombustion.registry.ECCreativeTabs;
 import dev.engineeredcombustion.registry.ECFluids;
 import dev.engineeredcombustion.registry.ECItems;
+import dev.engineeredcombustion.registry.ECSounds;
 import dev.engineeredcombustion.registry.ECStressValues;
 import net.minecraft.resources.ResourceLocation;
 
@@ -40,6 +41,7 @@ public class EngineeredCombustion {
 		ECItems.register(modEventBus);
 		ECBlockEntityTypes.register(modEventBus);
 		ECCreativeTabs.register(modEventBus);
+		ECSounds.register(modEventBus);
 
 		modEventBus.addListener(EngineeredCombustion::commonSetup);
 		modEventBus.addListener(EngineeredCombustion::registerCapabilities);

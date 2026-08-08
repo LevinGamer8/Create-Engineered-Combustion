@@ -15,11 +15,14 @@ import dev.engineeredcombustion.content.engine.EngineStructure;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlock;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
+import dev.engineeredcombustion.client.sound.EngineSoundManager;
 import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECItems;
+import dev.engineeredcombustion.registry.ECSounds;
 import net.createmod.catnip.lang.LangBuilder;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Direction.Axis;
@@ -30,12 +33,16 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.fluids.FluidStack;
 
 /**
@@ -144,6 +151,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 		if (level.isClientSide) {
 			engine.updateClientPowerStroke();
+			tickAudio();
 			return;
 		}
 
@@ -167,6 +175,8 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		if (generatedSpeedChanged && flywheel != null)
 			// The one and only place engine state crosses into Create's world.
 			flywheel.onEngineOutputChanged();
+
+		playTransitionSounds(phaseBefore, startProgressBefore);
 
 		// Anything the client displays has to trigger a block update, not just the
 		// things that change the engine's rotation. Toggling redstone on a stopped
@@ -220,6 +230,69 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		if (flywheel != null && engine.getPublishedRpm() != 0.0F && !flywheel.hasSource()
 			&& flywheel.getTheoreticalSpeed() == 0.0F)
 			flywheel.onEngineOutputChanged();
+	}
+
+	// --- audio --------------------------------------------------------------
+
+	/**
+	 * Plays the one-shot sounds, driven by the transitions the simulation just
+	 * made rather than by any timer of their own.
+	 *
+	 * <p>Server side only, and always through {@code Level#playSound} with a null
+	 * player, which broadcasts to everyone in range. Deriving the sounds from the
+	 * authoritative state means there is nothing to keep in step: a firing attempt
+	 * is audible exactly when start progress advanced, and no extra packet, event
+	 * or client-side guess is involved. It also makes double-playing impossible,
+	 * because the client never independently decides any of this.
+	 */
+	private void playTransitionSounds(EnginePhase phaseBefore, int startProgressBefore) {
+		if (level == null)
+			return;
+		EnginePhase phase = engine.getPhase();
+
+		// One cough per banked firing opportunity. The final cycle is deliberately
+		// not included: it becomes the catch instead, so starting reads as
+		// "puff, puff, BRUMM" rather than "puff, puff, puff+BRUMM".
+		if (engine.getStartProgress() > startProgressBefore)
+			playSound(ECSounds.ENGINE_FIRE_ATTEMPT.get(), EngineTuning.SOUND_FIRE_ATTEMPT_VOLUME,
+				EngineTuning.mapMechanicalRpmToCrankingPitch(engine.getMechanicalRpm()));
+
+		// The catch. Only on the transition, so it can never repeat while running.
+		if (phaseBefore == EnginePhase.STARTING && phase == EnginePhase.RUNNING)
+			playSound(ECSounds.ENGINE_START.get(), EngineTuning.SOUND_START_VOLUME, 1.0F);
+
+		// Only a running engine can stop; a start attempt that is simply abandoned
+		// stays silent, and an engine loading in stopped never transitions at all.
+		if (phaseBefore.generatesPower() && phase == EnginePhase.STOPPED) {
+			boolean wantedToRun = engine.isIgnitionEnabled();
+			playSound(wantedToRun ? ECSounds.ENGINE_STALL.get() : ECSounds.ENGINE_STOP.get(),
+				wantedToRun ? EngineTuning.SOUND_STALL_VOLUME : EngineTuning.SOUND_STOP_VOLUME, 1.0F);
+		}
+	}
+
+	private void playSound(SoundEvent event, float volume, float pitch) {
+		if (level == null || level.isClientSide)
+			return;
+		level.playSound(null, worldPosition.getX() + 0.5D, worldPosition.getY() + 0.5D, worldPosition.getZ() + 0.5D,
+			event, SoundSource.BLOCKS, volume, pitch);
+	}
+
+	/**
+	 * Keeps this engine's continuous sound alive for one more tick.
+	 *
+	 * <p>{@code @OnlyIn(Dist.CLIENT)} is what keeps the client sound classes off a
+	 * dedicated server: the method and its references are stripped there, so
+	 * nothing can accidentally load {@code Minecraft}. Create's steam whistle
+	 * handles its audio the same way.
+	 *
+	 * <p>Everything it needs is already synchronised - the phase travels in the
+	 * block entity's update tag, and the speed comes from Create's own kinetic
+	 * sync via the flywheel - so no packet exists purely for sound.
+	 */
+	@OnlyIn(Dist.CLIENT)
+	private void tickAudio() {
+		if (level instanceof ClientLevel clientLevel)
+			EngineSoundManager.tick(clientLevel, worldPosition, engine.getPhase(), engine.getMechanicalRpm());
 	}
 
 	// --- mechanical coupling ------------------------------------------------

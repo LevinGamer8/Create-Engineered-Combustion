@@ -52,5 +52,12 @@
   "engineered_combustion.gui.value.invalid": "Invalid",
   "engineered_combustion.gui.value.empty": "Empty",
   "engineered_combustion.gui.value.not_fuel": "Not a valid fuel",
-  "engineered_combustion.gui.value.no_carburetor": "No Carburetor"
+  "engineered_combustion.gui.value.no_carburetor": "No Carburetor",
+
+  "subtitles.engineered_combustion.engine_cranking": "Engine turns over",
+  "subtitles.engineered_combustion.engine_fire_attempt": "Engine coughs",
+  "subtitles.engineered_combustion.engine_start": "Engine catches",
+  "subtitles.engineered_combustion.engine_running": "Engine runs",
+  "subtitles.engineered_combustion.engine_stall": "Engine stalls",
+  "subtitles.engineered_combustion.engine_stop": "Engine shuts down"
 }
