@@ -54,8 +54,12 @@ public enum EnginePhase {
 		return this == RUNNING || this == STARTING;
 	}
 
+	/**
+	 * Key root only. Catnip's LangBuilder prepends the mod id, so this must NOT
+	 * contain it - that double-prefixing was the raw-key regression.
+	 */
 	public String translationKey() {
-		return "gui.engineered_combustion.phase." + id;
+		return "gui.phase." + id;
 	}
 
 	public String getId() {

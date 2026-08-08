@@ -111,14 +111,14 @@ public class CarburetorBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
-		ECLang.translate("gui.engineered_combustion.carburetor_stats")
+		ECLang.translate("gui.carburetor")
 			.style(ChatFormatting.WHITE)
 			.forGoggles(tooltip);
 
 		FluidStack fluid = tank.getFluid();
 		if (fluid.isEmpty()) {
-			ECLang.translate("gui.engineered_combustion.fuel",
-				ECLang.translate("gui.engineered_combustion.fuel_empty")
+			ECLang.translate("gui.fuel",
+				ECLang.translate("gui.value.empty")
 					.style(ChatFormatting.RED)
 					.component())
 				.style(ChatFormatting.GRAY)
@@ -127,7 +127,7 @@ public class CarburetorBlockEntity extends BlockEntity implements IHaveGoggleInf
 		}
 
 		boolean valid = holdsValidFuel();
-		ECLang.translate("gui.engineered_combustion.fuel", ECLang.builder()
+		ECLang.translate("gui.fuel", ECLang.builder()
 			.add(fluid.getHoverName()
 				.copy())
 			.style(valid ? ChatFormatting.GREEN : ChatFormatting.RED)
@@ -136,11 +136,11 @@ public class CarburetorBlockEntity extends BlockEntity implements IHaveGoggleInf
 			.forGoggles(tooltip, 1);
 
 		if (!valid)
-			ECLang.translate("gui.engineered_combustion.fuel_invalid")
+			ECLang.translate("gui.value.not_fuel")
 				.style(ChatFormatting.RED)
 				.forGoggles(tooltip, 1);
 
-		ECLang.translate("gui.engineered_combustion.fuel_amount",
+		ECLang.translate("gui.fuel_amount",
 			ECLang.number(tank.getFluidAmount())
 				.style(ChatFormatting.AQUA)
 				.component(),

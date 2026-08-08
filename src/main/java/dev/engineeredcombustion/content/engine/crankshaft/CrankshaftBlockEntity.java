@@ -374,25 +374,30 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
 		EnginePhase phase = engine.getPhase();
 
-		ECLang.translate("gui.engineered_combustion.engine_stats")
+		ECLang.translate("gui.engine")
 			.style(ChatFormatting.WHITE)
 			.forGoggles(tooltip);
 
-		ECLang.translate("gui.engineered_combustion.state", ECLang.translate(phase.translationKey())
+		// A coasting engine that has run dry reads as "Stalling" - same phase, but
+		// the player cares about the reason, not the internal name.
+		String phaseKey = phase == EnginePhase.COASTING && !engine.isFuelAvailable()
+			? "gui.phase.stalling"
+			: phase.translationKey();
+		ECLang.translate("gui.state", ECLang.translate(phaseKey)
 			.style(phaseColor(phase))
 			.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
-		ECLang.translate("gui.engineered_combustion.speed", ECLang.number(engine.getMechanicalRpm())
+		ECLang.translate("gui.speed", ECLang.number(engine.getMechanicalRpm())
 			.style(ChatFormatting.AQUA)
 			.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
 		boolean ignition = engine.isIgnitionEnabled();
-		ECLang.translate("gui.engineered_combustion.ignition",
-			ECLang.translate(ignition ? "gui.engineered_combustion.enabled" : "gui.engineered_combustion.disabled")
+		ECLang.translate("gui.ignition",
+			ECLang.translate(ignition ? "gui.value.enabled" : "gui.value.disabled")
 				.style(ignition ? ChatFormatting.GREEN : ChatFormatting.RED)
 				.component())
 			.style(ChatFormatting.GRAY)
@@ -401,7 +406,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		addFuelLines(tooltip);
 
 		if (phase == EnginePhase.STARTING)
-			ECLang.translate("gui.engineered_combustion.start_progress",
+			ECLang.translate("gui.start_progress",
 				ECLang.number(engine.getStartProgress())
 					.style(ChatFormatting.GOLD)
 					.component(),
@@ -419,8 +424,8 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	private void addFuelLines(List<Component> tooltip) {
 		CarburetorBlockEntity carburetor = getCarburetor();
 		if (carburetor == null) {
-			ECLang.translate("gui.engineered_combustion.fuel",
-				ECLang.translate("gui.engineered_combustion.no_carburetor")
+			ECLang.translate("gui.fuel",
+				ECLang.translate("gui.value.no_carburetor")
 					.style(ChatFormatting.RED)
 					.component())
 				.style(ChatFormatting.GRAY)
@@ -430,8 +435,8 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 		FluidStack fluid = carburetor.getFluid();
 		boolean usable = carburetor.holdsValidFuel();
-		ECLang.translate("gui.engineered_combustion.fuel", (fluid.isEmpty()
-			? ECLang.translate("gui.engineered_combustion.fuel_empty")
+		ECLang.translate("gui.fuel", (fluid.isEmpty()
+			? ECLang.translate("gui.value.empty")
 				.style(ChatFormatting.RED)
 			: ECLang.builder()
 				.add(fluid.getHoverName()
@@ -441,7 +446,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 			.forGoggles(tooltip, 1);
 
 		if (!fluid.isEmpty())
-			ECLang.translate("gui.engineered_combustion.fuel_available", ECLang.number(fluid.getAmount())
+			ECLang.translate("gui.fuel_level", ECLang.number(fluid.getAmount())
 				.style(ChatFormatting.AQUA)
 				.component())
 				.style(ChatFormatting.GRAY)
@@ -450,13 +455,13 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 	/** Sneak-only diagnostics, so the normal overlay stays readable. */
 	private void addDiagnostics(List<Component> tooltip) {
-		ECLang.translate("gui.engineered_combustion.diagnostics")
+		ECLang.translate("gui.diagnostics")
 			.style(ChatFormatting.DARK_GRAY)
 			.forGoggles(tooltip);
 
 		diagnostic(tooltip, "structure", ECLang
-			.translate(engine.isStructureValid() ? "gui.engineered_combustion.valid"
-				: "gui.engineered_combustion.invalid")
+			.translate(engine.isStructureValid() ? "gui.value.valid"
+				: "gui.value.invalid")
 			.style(engine.isStructureValid() ? ChatFormatting.GREEN : ChatFormatting.RED));
 		diagnostic(tooltip, "rotation_source", ECLang.translate(engine.getRotationSource()
 			.translationKey())
@@ -472,7 +477,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	}
 
 	private static void diagnostic(List<Component> tooltip, String key, LangBuilder value) {
-		ECLang.translate("gui.engineered_combustion." + key, value.component())
+		ECLang.translate("gui." + key, value.component())
 			.style(ChatFormatting.DARK_GRAY)
 			.forGoggles(tooltip, 1);
 	}
@@ -493,8 +498,9 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 	/** Chat report for the right-click debug path; plain text, works server-side. */
 	public void sendDebugReport(Player player) {
-		player.displayClientMessage(Component.translatable("gui.engineered_combustion.engine_stats")
-			.withStyle(ChatFormatting.GOLD), false);
+		player.displayClientMessage(ECLang.translate("gui.engine")
+			.style(ChatFormatting.GOLD)
+			.component(), false);
 		player.displayClientMessage(Component.literal(String.format(
 			"phase=%s  mech=%.1f  sim=%.1f  gen=%.1f  angle=%.1f  redstone=%d  fuel=%s  start=%d/%d",
 			engine.getPhase(), engine.getMechanicalRpm(), engine.getSimulatedRpm(), engine.getPublishedRpm(),

@@ -133,20 +133,20 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	/** Deliberately concise - the full engine diagnostic lives on the crankshaft. */
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
-		ECLang.translate("gui.engineered_combustion.cylinder_stats")
+		ECLang.translate("gui.cylinder")
 			.style(ChatFormatting.WHITE)
 			.forGoggles(tooltip);
 
-		ECLang.translate("gui.engineered_combustion.piston",
-			ECLang.translate(pistonInstalled ? "gui.engineered_combustion.installed"
-				: "gui.engineered_combustion.missing")
+		ECLang.translate("gui.piston",
+			ECLang.translate(pistonInstalled ? "gui.value.installed"
+				: "gui.value.missing")
 				.style(pistonInstalled ? ChatFormatting.GREEN : ChatFormatting.RED)
 				.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
 		if (pistonInstalled)
-			ECLang.translate("gui.engineered_combustion.piston_position",
+			ECLang.translate("gui.piston_position",
 				ECLang.number(CrankMath.pistonPosition(getCrankAngleForRender(0.0F)))
 					.style(ChatFormatting.AQUA)
 					.component())
