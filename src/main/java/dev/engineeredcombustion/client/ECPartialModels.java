@@ -11,16 +11,39 @@ import dev.engineeredcombustion.EngineeredCombustion;
  * <p>Uses Flywheel's {@code PartialModel}, the same mechanism Create itself
  * uses. The instances must exist before models are loaded, which is why
  * {@link #init()} is called from the client mod constructor.
+ *
+ * <h2>Why some parts come in X and Z variants</h2>
+ * A partial model is not affected by the blockstate's {@code y} rotation - that
+ * only applies to the baked model. Anything whose shape depends on which way the
+ * crankshaft runs therefore needs one file per axis, rather than one file plus a
+ * buffer rotation composed with the animation rotation, which is easy to get
+ * subtly wrong. Parts that are symmetric about the cylinder axis (the piston)
+ * need only one.
  */
 public class ECPartialModels {
 
 	/** The moving piston inside a cylinder. */
-	public static final PartialModel PISTON_HEAD = block("piston_head");
+	public static final PartialModel PISTON = block("piston_head");
 
 	/**
-	 * The spinning flywheel disc. Two variants instead of one plus a 90 degree
-	 * buffer rotation: composing two rotations on a SuperByteBuffer is easy to get
-	 * subtly wrong, and two tiny model files are not worth the risk.
+	 * The connecting rod, drawn by the cylinder because the rod is part of the
+	 * Piston Assembly. Authored hanging straight down from the wrist pin at the
+	 * middle of the block, which is exactly the point the renderer pivots about.
+	 */
+	public static final PartialModel CONNECTING_ROD_X = block("connecting_rod_x");
+	public static final PartialModel CONNECTING_ROD_Z = block("connecting_rod_z");
+
+	/**
+	 * Main journals, crank webs, counterweights and the offset crank pin.
+	 * Authored at crank angle 0 - pin at bottom dead centre.
+	 */
+	public static final PartialModel CRANK_ASSEMBLY_X = block("crank_assembly_x");
+	public static final PartialModel CRANK_ASSEMBLY_Z = block("crank_assembly_z");
+
+	/**
+	 * The spinning flywheel: rim, spokes, hub <i>and</i> the shaft through the
+	 * block. The shaft turns with everything else rather than being left in the
+	 * baked model, so no part of the output side is visibly stationary.
 	 */
 	public static final PartialModel FLYWHEEL_WHEEL_X = block("flywheel_wheel_x");
 	public static final PartialModel FLYWHEEL_WHEEL_Z = block("flywheel_wheel_z");

@@ -95,3 +95,8 @@ resolution before it ever reaches compilation.
   fuel burned per combustion event, multi-cycle starting instead of an instant
   threshold, and Create-style goggle overlays. See
   [`docs/milestone-3.md`](docs/milestone-3.md).
+* **Milestone 4** - visual rebuild: a cut-away crankcase with a real offset
+  crankshaft, a working connecting rod on exact slider-crank geometry, a finned
+  cutaway cylinder with an integrated head, and models that cross block
+  boundaries so the assembly reads as one machine. No gameplay change. See
+  [`docs/milestone-4.md`](docs/milestone-4.md).
