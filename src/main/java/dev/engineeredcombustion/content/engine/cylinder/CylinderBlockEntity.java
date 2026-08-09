@@ -13,6 +13,7 @@ import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECItems;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -91,6 +92,17 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		CrankshaftBlockEntity crankshaft = getCrankshaft();
 		return crankshaft == null ? 0.0F : crankshaft.getEngineState()
 			.getRenderCrankAngleDegrees(partialTicks);
+	}
+
+	/**
+	 * Which way the crankshaft below runs, so the renderer knows which plane the
+	 * connecting rod swings in. Falls back to the axis the models are authored
+	 * for when there is no crankshaft; with nothing to drive it the rod is
+	 * vertical anyway, so the choice is invisible.
+	 */
+	public Direction.Axis getEngineAxisForRender() {
+		CrankshaftBlockEntity crankshaft = getCrankshaft();
+		return crankshaft == null ? Direction.Axis.X : crankshaft.getAxis();
 	}
 
 	@Nullable

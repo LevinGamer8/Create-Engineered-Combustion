@@ -18,9 +18,13 @@ import net.minecraft.core.Direction.Axis;
 import net.minecraft.core.Direction.AxisDirection;
 
 /**
- * Spins the flywheel disc.
+ * Spins the flywheel: rim, spokes, hub and the shaft running through the block.
  *
- * <p>When an engine is attached, the disc uses the engine's crank angle - the
+ * <p>The block's baked model is empty on purpose - every part of a flywheel
+ * turns, so leaving the shaft in the chunk mesh would have left one visibly
+ * stationary piece of the engine's output side.
+ *
+ * <p>When an engine is attached, the wheel uses the engine's crank angle - the
  * same value the piston uses - so the two are visibly locked together. When the
  * flywheel is driven by something else entirely (a player put a motor on it),
  * it falls back to Create's standard kinetic angle so it still behaves like a
