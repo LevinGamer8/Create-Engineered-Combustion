@@ -5,6 +5,7 @@ import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
+import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 
@@ -35,6 +36,11 @@ public class ECBlockEntityTypes {
 	public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<CarburetorBlockEntity>> CARBURETOR =
 		BLOCK_ENTITY_TYPES.register("carburetor", () -> BlockEntityType.Builder
 			.of(CarburetorBlockEntity::new, ECBlocks.CARBURETOR.get())
+			.build(null));
+
+	public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<OilSumpBlockEntity>> OIL_SUMP =
+		BLOCK_ENTITY_TYPES.register("oil_sump", () -> BlockEntityType.Builder
+			.of(OilSumpBlockEntity::new, ECBlocks.OIL_SUMP.get())
 			.build(null));
 
 	public static void register(IEventBus modEventBus) {

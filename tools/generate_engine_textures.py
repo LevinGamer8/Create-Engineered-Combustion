@@ -352,6 +352,41 @@ def t_carburetor():
     return px
 
 
+def t_oil_sump():
+    """Oil pan casting: cast iron with a wet, slightly darker lower band."""
+    px = t_cast_iron(251, CAST, 9)
+    rng = Rng(257)
+    rect(px, 0, 20, S, 21, shade(CAST, -22))
+    rect(px, 0, 21, S, S, shade(CAST, -12))
+    rect(px, 0, 6, S, 7, shade(CAST, 16))
+    noise(px, rng, 4)
+    specks(px, rng, 12, -14)
+    border(px, 12, -18)
+    return px
+
+
+def _indicator(lens, glow):
+    """Tell-tale lamp: a cast bezel around a round lens."""
+    px = blank()
+    fill(px, shade(CAST, -8))
+    rng = Rng(263)
+    noise(px, rng, 6)
+    disc(px, 16, 16, 11, shade(CAST, 10), shade(CAST, -26))
+    disc(px, 16, 16, 8, lens, shade(CAST, -30))
+    disc(px, 16, 16, 5, glow)
+    disc(px, 13.5, 13.5, 2.2, shade(glow, 34))
+    border(px, 10, -16)
+    return px
+
+
+def t_indicator_off():
+    return _indicator((58, 46, 30, 255), (74, 60, 38, 255))
+
+
+def t_indicator_on():
+    return _indicator((214, 150, 44, 255), (255, 214, 120, 255))
+
+
 def t_brass():
     px = blank()
     fill(px, BRASS)
@@ -380,6 +415,9 @@ TEXTURES = {
     "block/flywheel_face": t_flywheel_face,
     "block/carburetor": t_carburetor,
     "block/brass": t_brass,
+    "block/oil_sump": t_oil_sump,
+    "block/indicator_off": t_indicator_off,
+    "block/indicator_on": t_indicator_on,
 }
 
 if __name__ == "__main__":

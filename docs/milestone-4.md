@@ -131,14 +131,32 @@ idle screw. Dark cast body; brass is an accent only.
 
 ## Oil sump
 
-**There is no Oil Sump block in this codebase**, so none was modelled. Adding
-one would be a new block, item, loot table and detection rule - a gameplay
-addition this pass is explicitly not allowed to make.
+The redesign was originally authored against a branch with no Oil Sump block, so
+it carried a pan inside the crankcase. Merging the oil and lubrication work
+brought a real `oil_sump` block at `crankshaft.below()`, and the pan now lives
+where it belongs.
 
-What the redesign does instead is put the pan *in* the crankcase: the bottom
-three units of the Crankshaft block are a tapered cast oil pan with a bolted
-flange line and a drain plug, so the engine already reads as crankcase + pan.
-When an Oil Sump block does arrive it can take that pan over unchanged.
+* The **Crankshaft** block ends in a machined, bolted joint face - no pan of its
+  own, so the engine can never show two.
+* The **Oil Sump** is the lower half of the crankcase: a wide bolted top flange,
+  a pan tapering down in three steps, flange bolts and a drain plug.
+
+The two interlock rather than butting. The sump's top flange runs 0.8 units *up*
+into the crankshaft block and is wider than the crankcase's joint face, so the
+crankcase's underside disappears inside it. Assembled, they read as one
+crankcase with a removable pan; separately, each still looks finished.
+
+## Running indicator
+
+The lubrication work added a `lit` blockstate on the Crankshaft. The rebuilt
+crankcase carries it as a tell-tale lamp on the lower rail of *both* side walls,
+so it reads from either flank, with a cast bezel around an amber lens.
+`crankshaft.json` and `crankshaft_lit.json` are generated from one element list
+with only the lens texture swapped, so the two can never drift apart.
+
+The lamp's outward faces take the whole lamp texture instead of the
+world-aligned slice every other face uses - a 3x2.4 boss would otherwise sample
+a corner of the sprite and never show the lens at all.
 
 ## Flywheel
 
@@ -156,7 +174,7 @@ hub. Still exactly centred on the crankshaft axis, still a
 
 | role | used for |
 | --- | --- |
-| dark cast iron | crankcase, cylinder barrel, fins, head, oil pan |
+| dark cast iron | crankcase, cylinder barrel, fins, head, oil sump |
 | darkest cast iron | flywheel |
 | machined grey | crankcase deck, head flanges |
 | forged steel | crank webs and counterweights (darker), connecting rod (lighter) |
@@ -164,8 +182,8 @@ hub. Still exactly centred on the crankshaft axis, still a
 | aluminium | piston |
 | brass | carburetor fittings only - never a whole component |
 
-Fifteen textures at **32x32**, two texels per model unit, consistent across every
-component. UVs are written explicitly and world-aligned, so the concentric rings
+Eighteen textures at **32x32**, two texels per model unit, consistent across
+every component. UVs are written explicitly and world-aligned, so the concentric rings
 on the flywheel face and the piston crown line up across the elements they span,
 and parts that stick out of their block cannot index off the edge of their
 sprite in the atlas.
@@ -192,11 +210,12 @@ the value is persisted - so nothing snaps to a default pose.
 | model | elements |
 | --- | --- |
 | cylinder | 34 |
-| crankcase (static) | 19 |
+| crankcase (static, x2 for lit) | 20 |
+| flywheel wheel | 14 |
 | crank assembly (rotating) | 13 |
 | piston | 12 |
 | carburetor | 11 |
-| flywheel wheel | 14 |
+| oil sump | 9 |
 | connecting rod | 6 |
 
 The rotating parts are cached `SuperByteBuffer`s, so per-frame cost is a buffer
@@ -216,3 +235,19 @@ and hand-editing 34-element JSON drifts:
 
 Both generators are deterministic; re-running them reproduces the committed
 assets byte for byte.
+
+`tools/generate_sounds.py`, from the audio work, is untouched and unrelated - it
+writes the `.ogg` files, not models. The earlier `tools/generate_models.py` was
+removed in the merge: two generators writing the same JSON files means whichever
+ran last silently won, which is exactly how model sets drift apart.
+
+## Merge note
+
+This pass and the oil/lubrication/audio work happened on two branches at once
+and both touched the visual layer. They were reconciled by keeping **all** of
+the gameplay from the oil/audio side and **all** of the visual layer from this
+side, then extending this side to cover the two things it had never seen: the
+Oil Sump block and the `lit` indicator. The superseded visual assets from the
+other branch - `crank_throw_x/z`, `crankcase.png`, `crank_steel.png`,
+`cylinder_bore.png`, the flat `item/piston_assembly.png` - were dropped rather
+than left orphaned.

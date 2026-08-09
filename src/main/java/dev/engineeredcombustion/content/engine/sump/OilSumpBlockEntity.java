@@ -1,4 +1,4 @@
-package dev.engineeredcombustion.content.engine.carburetor;
+package dev.engineeredcombustion.content.engine.sump;
 
 import java.util.List;
 
@@ -7,7 +7,8 @@ import org.jetbrains.annotations.Nullable;
 import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
 
 import dev.engineeredcombustion.content.engine.EngineTuning;
-import dev.engineeredcombustion.content.fuel.EngineFuel;
+import dev.engineeredcombustion.content.engine.LubricationState;
+import dev.engineeredcombustion.content.fuel.EngineLubricant;
 import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import net.minecraft.ChatFormatting;
@@ -28,18 +29,19 @@ import net.neoforged.neoforge.fluids.capability.IFluidHandler;
 import net.neoforged.neoforge.fluids.capability.templates.FluidTank;
 
 /**
- * The engine's fuel supply: a small tank that only accepts gasoline.
+ * The engine's oil reservoir: a small tank that only accepts engine oil.
  *
- * <p>It exposes nothing but the standard NeoForge fluid capability, so Create's
- * pipes, vanilla buckets and any other mod's fluid transport all work through the
- * same path. There is no Create-specific code here at all.
+ * <p>Structurally the mirror image of the carburetor - it exposes nothing but
+ * the standard NeoForge fluid capability, so Create's pipes, vanilla buckets and
+ * any other mod's fluid transport all reach it through the same path, with no
+ * Create-specific code and no per-mod integration.
  */
-public class CarburetorBlockEntity extends BlockEntity implements IHaveGoggleInformation {
+public class OilSumpBlockEntity extends BlockEntity implements IHaveGoggleInformation {
 
 	private static final String KEY_TANK = "Tank";
 
-	/** Rejects anything that is not gasoline, so pipes cannot push junk into it. */
-	private final FluidTank tank = new FluidTank(EngineTuning.CARBURETOR_CAPACITY_MB, EngineFuel::isValidFuel) {
+	/** Rejects anything that is not engine oil, so pipes cannot push junk into it. */
+	private final FluidTank tank = new FluidTank(EngineTuning.OIL_CAPACITY_MB, EngineLubricant::isValidOil) {
 
 		@Override
 		protected void onContentsChanged() {
@@ -49,8 +51,8 @@ public class CarburetorBlockEntity extends BlockEntity implements IHaveGoggleInf
 		}
 	};
 
-	public CarburetorBlockEntity(BlockPos pos, BlockState state) {
-		super(ECBlockEntityTypes.CARBURETOR.get(), pos, state);
+	public OilSumpBlockEntity(BlockPos pos, BlockState state) {
+		super(ECBlockEntityTypes.OIL_SUMP.get(), pos, state);
 	}
 
 	public IFluidHandler getFluidHandler() {
@@ -65,18 +67,23 @@ public class CarburetorBlockEntity extends BlockEntity implements IHaveGoggleInf
 		return tank.getCapacity();
 	}
 
-	/** True only for gasoline; an unexpected fluid reports as invalid, not as fuel. */
-	public boolean holdsValidFuel() {
-		return EngineFuel.isValidFuel(tank.getFluid());
+	/** True only for engine oil; an unexpected fluid reports as invalid, not as oil. */
+	public boolean holdsValidOil() {
+		return EngineLubricant.isValidOil(tank.getFluid());
 	}
 
-	public boolean hasFuel(int millibuckets) {
-		return holdsValidFuel() && tank.getFluidAmount() >= millibuckets;
+	/** Usable oil in the tank, in millibuckets. Anything that is not oil counts as none. */
+	public int getOilAmount() {
+		return holdsValidOil() ? tank.getFluidAmount() : 0;
 	}
 
-	/** @return true only when the full amount was removed. */
-	public boolean consumeFuel(int millibuckets) {
-		if (!hasFuel(millibuckets))
+	public LubricationState getLubricationState() {
+		return LubricationState.forAmount(getOilAmount());
+	}
+
+	/** @return true only when the full amount was removed, so the tank can never go negative. */
+	public boolean consumeOil(int millibuckets) {
+		if (getOilAmount() < millibuckets)
 			return false;
 		FluidStack drained = tank.drain(millibuckets, IFluidHandler.FluidAction.EXECUTE);
 		return drained.getAmount() == millibuckets;
@@ -111,32 +118,24 @@ public class CarburetorBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
-		ECLang.translate("gui.carburetor")
+		ECLang.translate("gui.oil_sump")
 			.style(ChatFormatting.WHITE)
 			.forGoggles(tooltip);
 
 		FluidStack fluid = tank.getFluid();
-		if (fluid.isEmpty()) {
-			ECLang.translate("gui.fuel",
-				ECLang.translate("gui.value.empty")
-					.style(ChatFormatting.RED)
-					.component())
-				.style(ChatFormatting.GRAY)
-				.forGoggles(tooltip, 1);
-			return true;
-		}
-
-		boolean valid = holdsValidFuel();
-		ECLang.translate("gui.fuel", ECLang.builder()
-			.add(fluid.getHoverName()
-				.copy())
-			.style(valid ? ChatFormatting.GREEN : ChatFormatting.RED)
-			.component())
+		boolean valid = holdsValidOil();
+		ECLang.translate("gui.fluid", (fluid.isEmpty()
+			? ECLang.translate("gui.value.empty")
+				.style(ChatFormatting.RED)
+			: ECLang.builder()
+				.add(fluid.getHoverName()
+					.copy())
+				.style(valid ? ChatFormatting.GREEN : ChatFormatting.RED)).component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
-		if (!valid)
-			ECLang.translate("gui.value.not_fuel")
+		if (!fluid.isEmpty() && !valid)
+			ECLang.translate("gui.value.not_oil")
 				.style(ChatFormatting.RED)
 				.forGoggles(tooltip, 1);
 
@@ -149,7 +148,23 @@ public class CarburetorBlockEntity extends BlockEntity implements IHaveGoggleInf
 				.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
+
+		LubricationState lubrication = getLubricationState();
+		ECLang.translate("gui.lubrication_supply", ECLang.translate(lubrication.translationKey())
+			.style(lubricationColor(lubrication))
+			.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
 		return true;
+	}
+
+	/** Shared with the engine overlay so both read the same way. */
+	public static ChatFormatting lubricationColor(LubricationState lubrication) {
+		return switch (lubrication) {
+			case NORMAL -> ChatFormatting.GREEN;
+			case LOW -> ChatFormatting.GOLD;
+			case DRY -> ChatFormatting.RED;
+		};
 	}
 
 	@Override

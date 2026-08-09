@@ -7,6 +7,7 @@ import org.jetbrains.annotations.Nullable;
 import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
 
 import dev.engineeredcombustion.content.engine.CrankMath;
+import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
@@ -76,7 +77,7 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
 		// Installing or removing the piston changes structural validity without
 		// changing any block state, so the crankshaft has to be told explicitly.
-		if (level.getBlockEntity(worldPosition.below()) instanceof CrankshaftBlockEntity crankshaft)
+		if (level.getBlockEntity(EngineComponents.crankshaftPosFromCylinder(worldPosition)) instanceof CrankshaftBlockEntity crankshaft)
 			crankshaft.onSurroundingsChanged();
 	}
 
@@ -110,7 +111,7 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		if (cachedCrankshaft != null && !cachedCrankshaft.isRemoved())
 			return cachedCrankshaft;
 		cachedCrankshaft = null;
-		if (level != null && level.getBlockEntity(worldPosition.below()) instanceof CrankshaftBlockEntity crankshaft)
+		if (level != null && level.getBlockEntity(EngineComponents.crankshaftPosFromCylinder(worldPosition)) instanceof CrankshaftBlockEntity crankshaft)
 			cachedCrankshaft = crankshaft;
 		return cachedCrankshaft;
 	}
@@ -145,20 +146,20 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	/** Deliberately concise - the full engine diagnostic lives on the crankshaft. */
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
-		ECLang.translate("gui.engineered_combustion.cylinder_stats")
+		ECLang.translate("gui.cylinder")
 			.style(ChatFormatting.WHITE)
 			.forGoggles(tooltip);
 
-		ECLang.translate("gui.engineered_combustion.piston",
-			ECLang.translate(pistonInstalled ? "gui.engineered_combustion.installed"
-				: "gui.engineered_combustion.missing")
+		ECLang.translate("gui.piston",
+			ECLang.translate(pistonInstalled ? "gui.value.installed"
+				: "gui.value.missing")
 				.style(pistonInstalled ? ChatFormatting.GREEN : ChatFormatting.RED)
 				.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
 		if (pistonInstalled)
-			ECLang.translate("gui.engineered_combustion.piston_position",
+			ECLang.translate("gui.piston_position",
 				ECLang.number(CrankMath.pistonPosition(getCrankAngleForRender(0.0F)))
 					.style(ChatFormatting.AQUA)
 					.component())

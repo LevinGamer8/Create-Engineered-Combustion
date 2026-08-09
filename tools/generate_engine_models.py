@@ -161,15 +161,17 @@ def gui_scale(scale):
 # Interior cavity: x 2..14, y 3..13, z 2.5..13.5. Everything that rotates is
 # sized to stay inside it (max swept radius 4.87 against a 5.0 limit).
 CASE_TEX = {"particle": "crankshaft", "case": "crankshaft",
-            "cast": "cast_iron", "deck": "crankcase_deck", "steel": "journal"}
+            "cast": "cast_iron", "deck": "crankcase_deck", "steel": "journal",
+            "ind": "indicator_off"}
 
 
 def crankcase_elements():
     e = []
-    # --- oil pan: the lower crankcase, tapered, with a drain plug ----------
-    e.append(el((3.0, 0.0, 4.0), (13.0, 1.2, 12.0), "cast"))
+    # --- crankcase floor and the machined joint face the Oil Sump bolts to.
+    # The pan itself is NOT here: an Oil Sump block lives at crankshaft.below()
+    # and carries it, so duplicating a pan would give the engine two of them.
     e.append(el((1.5, 0.6, 2.0), (14.5, 3.0, 14.0), "case"))
-    e.append(el((6.5, 0.4, 1.6), (9.5, 2.2, 4.5), "steel"))
+    e.append(el((1.0, 0.0, 1.5), (15.0, 1.4, 14.5), "deck"))
     # --- side walls, cut away so the crank is visible ---------------------
     for z0, z1 in ((0.5, 2.5), (13.5, 15.5)):
         e.append(el((1.0, 2.0, z0), (15.0, 5.0, z1), "case"))      # lower rail
@@ -188,6 +190,39 @@ def crankcase_elements():
     e.append(el((0.5, 13.0, 13.5), (15.5, 16.5, 15.5), "deck"))
     e.append(el((0.5, 13.0, 2.0), (5.0, 16.5, 14.0), "deck"))
     e.append(el((11.0, 13.0, 2.0), (15.5, 16.5, 14.0), "deck"))
+    # --- running tell-tale, one on each side so it reads from either flank.
+    # It sits on the solid lower rail rather than over a window, so it has
+    # crankcase behind it instead of floating in the opening. The outward faces
+    # take the whole lamp texture rather than a world-aligned slice of it -
+    # otherwise a 3x2.4 boss samples a corner of the sprite and the lens, which
+    # is drawn in the middle, never appears at all.
+    lens = {"north": [0, 0, 16, 16], "south": [0, 0, 16, 16]}
+    e.append(el((6.5, 2.4, 0.1), (9.5, 4.8, 1.1), "ind", uvs=lens))
+    e.append(el((6.5, 2.4, 14.9), (9.5, 4.8, 15.9), "ind", uvs=lens))
+    return e
+
+
+# ===========================================================================
+# OIL SUMP - the lower half of the crankcase, at crankshaft.below()
+# ===========================================================================
+# Its top flange runs 0.8 up into the crankshaft block and is wider than the
+# crankcase's own joint face, so the two swallow each other at the seam and the
+# pair reads as one crankcase assembly with a removable pan.
+SUMP_TEX = {"particle": "oil_sump", "sump": "oil_sump",
+            "deck": "crankcase_deck", "steel": "journal"}
+
+
+def oil_sump_elements():
+    e = [
+        el((0.6, 13.2, 0.6), (15.4, 16.8, 15.4), "deck"),     # bolted top flange
+        el((1.6, 8.5, 1.6), (14.4, 14.0, 14.4), "sump"),      # pan, tapering down
+        el((2.8, 4.5, 2.8), (13.2, 9.2, 13.2), "sump"),
+        el((4.2, 2.0, 4.2), (11.8, 5.2, 11.8), "sump"),
+        el((7.0, 1.2, 3.6), (9.0, 3.0, 5.0), "steel"),        # drain plug
+    ]
+    for x0, x1 in ((2.2, 3.8), (12.2, 13.8)):                 # flange bolts
+        e.append(el((x0, 13.8, 0.1), (x1, 15.4, 1.1), "steel"))
+        e.append(el((x0, 13.8, 14.9), (x1, 15.4, 15.9), "steel"))
     return e
 
 
@@ -357,7 +392,14 @@ def main():
     carb = carburetor_elements()
     fly = flywheel_elements()
 
+    sump = oil_sump_elements()
+
     write("block/crankshaft.json", model(CASE_TEX, case))
+    # Identical geometry, lit lens. The blockstate picks between the two, so the
+    # two files must never drift apart - hence one element list, two writes.
+    write("block/crankshaft_lit.json",
+          model({**CASE_TEX, "ind": "indicator_on"}, case))
+    write("block/oil_sump.json", model(SUMP_TEX, sump))
     write("block/crank_assembly_x.json", model(CRANK_TEX, crank))
     write("block/crank_assembly_z.json",
           model(CRANK_TEX, [transpose(x) for x in crank]))
@@ -386,6 +428,7 @@ def main():
     # The wheel faces along the crank axis, and the Z variant is the one that
     # turns its face towards the camera in the standard block-item pose.
     write("item/flywheel.json", model(FLY_TEX, [transpose(x) for x in fly]))
+    write("item/oil_sump.json", model(SUMP_TEX, sump))
     write("item/cylinder.json", model(CYL_TEX, cyl))
     write("item/carburetor.json",
           model(CARB_TEX, [shift(x, 0, 2.6, 3.4) for x in carb],

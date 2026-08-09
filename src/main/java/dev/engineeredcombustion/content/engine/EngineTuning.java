@@ -137,6 +137,42 @@ public final class EngineTuning {
 	/** Carburetor tank size, in millibuckets. */
 	public static final int CARBURETOR_CAPACITY_MB = 1000;
 
+	// --- lubrication --------------------------------------------------------
+
+	/** Oil sump tank size, in millibuckets. */
+	public static final int OIL_CAPACITY_MB = 1000;
+
+	/** Below this the engine reports LOW and friction starts to bite. */
+	public static final int LOW_OIL_THRESHOLD_MB = 100;
+
+	/**
+	 * Friction multipliers per lubrication state.
+	 *
+	 * <p>They multiply the existing friction torque rather than introducing a
+	 * second slowdown, so the consequence emerges from the same equilibrium the
+	 * engine already solves: combustion torque equals friction torque. Against the
+	 * tuned combustion torque that puts a low engine at about 57 RPM and a dry one
+	 * at about 26 - both still running, neither with anything in reserve.
+	 *
+	 * <p>Nothing here damages the engine. Wear and seizure are a later milestone.
+	 */
+	public static final float FRICTION_MULTIPLIER_NORMAL = 1.0F;
+	public static final float FRICTION_MULTIPLIER_LOW = 1.5F;
+	public static final float FRICTION_MULTIPLIER_DRY = 3.0F;
+
+	/**
+	 * Running combustion events per millibucket of oil drawn.
+	 *
+	 * <p>A gameplay abstraction, not a model of real oil consumption. At idle this
+	 * is roughly one millibucket a minute, so a full sump is observable within a
+	 * minute of running and lasts long enough that refilling is not a chore.
+	 * Starting attempts are excluded: only an engine actually running counts.
+	 */
+	public static final int COMBUSTION_EVENTS_PER_OIL_MB = 64;
+
+	/** Oil drawn each time that count is reached. */
+	public static final int OIL_PER_CONSUMPTION_MB = 1;
+
 	// --- starting -----------------------------------------------------------
 
 	/**
@@ -169,11 +205,95 @@ public final class EngineTuning {
 	/** Capacity per RPM, Create's convention. 32 * 64 RPM = 2048 SU at idle. */
 	public static final double STRESS_CAPACITY_PER_RPM = 32.0D;
 
+	// --- sound --------------------------------------------------------------
+
+	/**
+	 * Speed at which {@code engine_running.ogg} plays back unshifted.
+	 *
+	 * <p>The asset was synthesised at the engine's idle character, so idle is by
+	 * definition pitch 1.0 and the mapping only has to describe the deviation.
+	 */
+	public static final float SOUND_REFERENCE_RPM = IDLE_RPM;
+
+	/** Cranking speed at which {@code engine_cranking.ogg} plays unshifted, matching Create's Hand Crank. */
+	public static final float SOUND_CRANKING_REFERENCE_RPM = 32.0F;
+
+	/**
+	 * How strongly speed is allowed to bend pitch, as an exponent on the speed
+	 * ratio. Well below 1 on purpose: Create's RPM values are gameplay numbers,
+	 * not crankshaft RPM, so mapping them proportionally would take the engine
+	 * from a murmur to a chipmunk across its normal range.
+	 */
+	public static final float SOUND_PITCH_EXPONENT = 0.35F;
+
+	public static final float SOUND_MIN_PITCH = 0.80F;
+	public static final float SOUND_MAX_PITCH = 1.30F;
+
+	/**
+	 * Volume a loop is created at, before it fades up to its nominal level.
+	 *
+	 * <p>Must be greater than zero. {@code SoundEngine#play} discards any instance
+	 * whose volume is zero at the moment it is handed over ("Skipped playing sound,
+	 * volume was zero") and a discarded instance is never ticked, so a loop that
+	 * starts silent never becomes audible - it is not a fade-in, it is a deletion.
+	 * Create's own looping instances start at 0.01 and 0.05 for the same reason.
+	 */
+	public static final float SOUND_INITIAL_VOLUME = 0.05F;
+
+	/** Volumes are Minecraft attenuation units; blocks fall off over roughly 16 * volume blocks. */
+	public static final float SOUND_RUNNING_VOLUME = 0.55F;
+	public static final float SOUND_CRANKING_VOLUME = 0.40F;
+	public static final float SOUND_FIRE_ATTEMPT_VOLUME = 0.45F;
+	public static final float SOUND_START_VOLUME = 0.70F;
+	public static final float SOUND_STALL_VOLUME = 0.60F;
+	public static final float SOUND_STOP_VOLUME = 0.50F;
+
+	/** Per-tick volume ramp of the loops, so they never click in or cut out. */
+	public static final float SOUND_FADE_PER_TICK = 0.08F;
+
+	/**
+	 * Ticks a loop survives without being refreshed before it fades itself out.
+	 *
+	 * <p>This is the whole orphan-prevention mechanism: the block entity refreshes
+	 * its loop every client tick, so a broken, unloaded or replaced engine simply
+	 * stops refreshing and the sound retires on its own. Nothing has to notice the
+	 * block is gone and explicitly kill the audio.
+	 */
+	public static final int SOUND_KEEP_ALIVE_TICKS = 3;
+
+	/** Below this the engine is treated as not turning at all, audibly. */
+	public static final float SOUND_MIN_AUDIBLE_RPM = 1.0F;
+
+	/**
+	 * Depth of the pitch wobble a dry engine gets, as a fraction of its pitch.
+	 *
+	 * <p>Purely cosmetic roughness. It is deliberately tiny and derived from the
+	 * game time rather than from any random source, so it cannot desynchronise
+	 * between players or accumulate error; the HUD remains the authoritative
+	 * warning about lubrication and this only reinforces it.
+	 */
+	public static final float SOUND_DRY_ROUGHNESS = 0.04F;
+
+	/** Wobble rate of that roughness, in radians per tick. */
+	public static final float SOUND_DRY_ROUGHNESS_RATE = 0.9F;
+
 	// --- helpers ------------------------------------------------------------
 
-	/** Magnitude of friction torque at a given speed. Always positive. */
+	/** Magnitude of friction torque at a given speed, fully lubricated. Always positive. */
 	public static float frictionTorqueAt(float rpm) {
 		return FRICTION_BASE_TORQUE + FRICTION_TORQUE_PER_RPM * Math.abs(rpm);
+	}
+
+	/**
+	 * Friction torque including the penalty for poor lubrication.
+	 *
+	 * <p>This is the only place oil affects the engine mechanically. Everything
+	 * else about a dry engine - that it revs lower, hauls less and stalls sooner
+	 * under load - falls out of the existing simulation solving its equilibrium
+	 * against this larger number.
+	 */
+	public static float frictionTorqueAt(float rpm, LubricationState lubrication) {
+		return frictionTorqueAt(rpm) * lubrication.frictionMultiplier();
 	}
 
 	/**
@@ -189,6 +309,38 @@ public final class EngineTuning {
 	/** Combustion torque actually delivered during a power stroke at this speed. */
 	public static float combustionTorqueAt(float rpm) {
 		return PEAK_COMBUSTION_TORQUE * governorFactor(rpm);
+	}
+
+	/**
+	 * Playback pitch for the running engine loop at a given mechanical speed.
+	 *
+	 * <p>This is the single place engine speed becomes audio pitch. It is
+	 * deliberately <i>not</i> proportional: pitch follows the speed ratio raised to
+	 * {@link #SOUND_PITCH_EXPONENT}, then clamps. Over the engine's whole range
+	 * (stall to {@link #MAX_RPM}) that spans roughly 0.75x to 1.45x - audibly
+	 * responsive, never silly.
+	 *
+	 * <p>Safe to call with any value, including zero and negatives; the engine is
+	 * turned backwards often enough that this must not produce NaN.
+	 */
+	public static float mapMechanicalRpmToEnginePitch(float rpm) {
+		return mapSpeedRatioToPitch(rpm, SOUND_REFERENCE_RPM);
+	}
+
+	/** The same curve for the cranking loop, referenced to hand-crank speed instead of idle. */
+	public static float mapMechanicalRpmToCrankingPitch(float rpm) {
+		return mapSpeedRatioToPitch(rpm, SOUND_CRANKING_REFERENCE_RPM);
+	}
+
+	private static float mapSpeedRatioToPitch(float rpm, float referenceRpm) {
+		float ratio = Math.abs(rpm) / referenceRpm;
+		if (ratio <= 0.0F)
+			return SOUND_MIN_PITCH;
+		return clampPitch((float) Math.pow(ratio, SOUND_PITCH_EXPONENT));
+	}
+
+	private static float clampPitch(float pitch) {
+		return pitch < SOUND_MIN_PITCH ? SOUND_MIN_PITCH : Math.min(pitch, SOUND_MAX_PITCH);
 	}
 
 	/**

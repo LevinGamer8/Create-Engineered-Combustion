@@ -9,6 +9,7 @@ import dev.engineeredcombustion.registry.ECBlocks;
 import dev.engineeredcombustion.registry.ECCreativeTabs;
 import dev.engineeredcombustion.registry.ECFluids;
 import dev.engineeredcombustion.registry.ECItems;
+import dev.engineeredcombustion.registry.ECSounds;
 import dev.engineeredcombustion.registry.ECStressValues;
 import net.minecraft.resources.ResourceLocation;
 
@@ -40,6 +41,7 @@ public class EngineeredCombustion {
 		ECItems.register(modEventBus);
 		ECBlockEntityTypes.register(modEventBus);
 		ECCreativeTabs.register(modEventBus);
+		ECSounds.register(modEventBus);
 
 		modEventBus.addListener(EngineeredCombustion::commonSetup);
 		modEventBus.addListener(EngineeredCombustion::registerCapabilities);
@@ -52,12 +54,15 @@ public class EngineeredCombustion {
 	}
 
 	/**
-	 * Exposes the Carburetor's tank through the standard NeoForge fluid
-	 * capability. That single registration is what lets Create's pipes, vanilla
-	 * buckets and any other mod's transport fill it, with no per-mod code.
+	 * Exposes the Carburetor's and Oil Sump's tanks through the standard NeoForge
+	 * fluid capability. These two registrations are what let Create's pipes,
+	 * vanilla buckets and any other mod's transport fill them, with no per-mod
+	 * code and no special-cased pipe integration.
 	 */
 	private static void registerCapabilities(RegisterCapabilitiesEvent event) {
 		event.registerBlockEntity(Capabilities.FluidHandler.BLOCK, ECBlockEntityTypes.CARBURETOR.get(),
+			(blockEntity, side) -> blockEntity.getFluidHandler());
+		event.registerBlockEntity(Capabilities.FluidHandler.BLOCK, ECBlockEntityTypes.OIL_SUMP.get(),
 			(blockEntity, side) -> blockEntity.getFluidHandler());
 	}
 

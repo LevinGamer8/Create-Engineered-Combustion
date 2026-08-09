@@ -54,6 +54,14 @@ public final class EngineState {
 	private int ticksSinceCombustion = -1;
 	private boolean fuelAvailable;
 
+	// --- lubrication --------------------------------------------------------
+	private LubricationState lubrication = LubricationState.DRY;
+	/**
+	 * Running combustion events banked towards the next oil draw. Counted rather
+	 * than timed, so oil use follows how hard the engine has actually worked.
+	 */
+	private int combustionEventsSinceOilDraw;
+
 	// --- start attempt ------------------------------------------------------
 	private int startProgress;
 	private int requiredStartCycles;
@@ -105,11 +113,15 @@ public final class EngineState {
 	 *         rotation therefore has to be updated
 	 */
 	public boolean tickSimulation(boolean structureValid, boolean ignitionEnabled, boolean externallyDriven,
-		FuelSupply fuel, java.util.Random random) {
+		FuelSupply fuel, OilSupply oil, java.util.Random random) {
 		this.structureValid = structureValid;
 		this.ignitionEnabled = ignitionEnabled;
 		this.externallyDriven = externallyDriven;
 		this.fuelAvailable = fuel.hasFuel();
+		// Read every tick: the sump can be filled or drained by a pipe at any time,
+		// and lubrication has to take effect immediately rather than at some
+		// revalidation interval.
+		this.lubrication = oil.lubrication();
 
 		if (ticksSinceCombustion >= 0 && ticksSinceCombustion < Integer.MAX_VALUE)
 			ticksSinceCombustion++;
@@ -139,6 +151,10 @@ public final class EngineState {
 				ticksSinceStartActivity = 0;
 				if (phase != EnginePhase.RUNNING)
 					registerStartCycle(random);
+				else
+					// Only a running engine wears oil. Start attempts are deliberately
+					// free, so a hard-to-start engine is not also an oil sink.
+					drawOilForCombustion(oil);
 			} else {
 				firedThisRevolution = false;
 			}
@@ -183,6 +199,25 @@ public final class EngineState {
 	}
 
 	/**
+	 * Counts one running combustion event towards oil wear, and draws from the
+	 * sump once enough have accumulated.
+	 *
+	 * <p>Counting events rather than ticks is what keeps consumption honest at any
+	 * speed: one revolution costs the same whether the engine is idling or flat
+	 * out. The counter only resets on a draw that actually succeeded, so an engine
+	 * running dry does not silently forfeit the progress it made - and because the
+	 * supply refuses partial draws, the tank can never go negative.
+	 */
+	private void drawOilForCombustion(OilSupply oil) {
+		if (combustionEventsSinceOilDraw < Integer.MAX_VALUE)
+			combustionEventsSinceOilDraw++;
+		if (combustionEventsSinceOilDraw < EngineTuning.COMBUSTION_EVENTS_PER_OIL_MB)
+			return;
+		if (oil.consume(EngineTuning.OIL_PER_CONSUMPTION_MB))
+			combustionEventsSinceOilDraw = 0;
+	}
+
+	/**
 	 * Abandons a start attempt that has gone quiet - the engine stopped turning,
 	 * ran out of fuel, or ignition was switched off - so a nearly-complete start
 	 * is not remembered indefinitely.
@@ -210,7 +245,7 @@ public final class EngineState {
 			powerStrokeActive ? EngineTuning.combustionTorqueAt(simulatedRpm) * powerStrokeStrength : 0.0F;
 		// Friction always opposes the current direction of rotation, and is exactly
 		// zero at rest so it can never push a stationary engine into motion.
-		netTorque -= Math.signum(simulatedRpm) * EngineTuning.frictionTorqueAt(simulatedRpm);
+		netTorque -= Math.signum(simulatedRpm) * EngineTuning.frictionTorqueAt(simulatedRpm, lubrication);
 
 		float next = simulatedRpm + netTorque / EngineTuning.FLYWHEEL_INERTIA;
 
@@ -402,6 +437,16 @@ public final class EngineState {
 		return ignitionEnabled;
 	}
 
+	/** How well lubricated the engine was on the last simulated tick. */
+	public LubricationState getLubrication() {
+		return lubrication;
+	}
+
+	/** Running combustion events banked towards the next millibucket of oil. */
+	public int getCombustionEventsSinceOilDraw() {
+		return combustionEventsSinceOilDraw;
+	}
+
 	public boolean isStructureValid() {
 		return structureValid;
 	}
@@ -450,6 +495,15 @@ public final class EngineState {
 
 	public void setFuelAvailable(boolean fuelAvailable) {
 		this.fuelAvailable = fuelAvailable;
+	}
+
+	public void setLubrication(LubricationState lubrication) {
+		this.lubrication = lubrication;
+	}
+
+	/** Restores the wear counter so a chunk reload does not reset oil progress. */
+	public void setCombustionEventsSinceOilDraw(int events) {
+		this.combustionEventsSinceOilDraw = Math.max(0, events);
 	}
 
 	public void setIgnitionEnabled(boolean ignitionEnabled) {

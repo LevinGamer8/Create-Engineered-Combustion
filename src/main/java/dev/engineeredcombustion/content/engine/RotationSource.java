@@ -16,6 +16,6 @@ public enum RotationSource {
 	}
 
 	public String translationKey() {
-		return "gui.engineered_combustion.source." + id;
+		return "gui.source." + id;
 	}
 }

@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    "engineered_combustion:engine_oil",
+    "engineered_combustion:flowing_engine_oil"
+  ]
+}

@@ -19,13 +19,13 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 import net.neoforged.neoforge.registries.NeoForgeRegistries;
 
 /**
- * Gasoline.
+ * The mod's fluids: gasoline and engine oil.
  *
  * <h2>Why there is no placeable fluid block</h2>
- * Gasoline exists to be piped, stored and burned, not poured into pools, so no
- * {@code LiquidBlock} is registered and {@link Gasoline#createLegacyBlock} returns
+ * Both exist to be piped, stored and consumed, not poured into pools, so no
+ * {@code LiquidBlock} is registered and {@link SimpleFluid#createLegacyBlock} returns
  * air - the same arrangement Create uses for its own {@code VirtualFluid}. The
- * fluid still behaves normally everywhere it matters: buckets, tanks, pipes and
+ * fluids still behave normally everywhere it matters: buckets, tanks, pipes and
  * anything else that speaks the NeoForge fluid capability.
  *
  * <p>Adding a world-placeable block later is purely additive: register a
@@ -45,7 +45,7 @@ public class ECFluids {
 		EngineeredCombustion.asResource("block/gasoline_flow");
 
 	public static final DeferredHolder<FluidType, FluidType> GASOLINE_TYPE =
-		FLUID_TYPES.register("gasoline", () -> new GasolineFluidType(FluidType.Properties.create()
+		FLUID_TYPES.register("gasoline", () -> new SimpleFluidType(FluidType.Properties.create()
 			.descriptionId("fluid.engineered_combustion.gasoline")
 			.density(750)
 			.viscosity(600)
@@ -54,19 +54,43 @@ public class ECFluids {
 			.canSwim(false)
 			.canDrown(true)
 			.supportsBoating(false)
-			.canHydrate(false)));
+			.canHydrate(false), GASOLINE_STILL_TEXTURE, GASOLINE_FLOWING_TEXTURE));
 
-	public static final DeferredHolder<Fluid, Gasoline> FLOWING_GASOLINE =
-		FLUIDS.register("flowing_gasoline", () -> new Gasoline(properties(), false));
+	public static final DeferredHolder<Fluid, SimpleFluid> FLOWING_GASOLINE =
+		FLUIDS.register("flowing_gasoline", () -> new SimpleFluid(properties(), false));
 
-	public static final DeferredHolder<Fluid, Gasoline> GASOLINE =
-		FLUIDS.register("gasoline", () -> new Gasoline(properties(), true));
+	public static final DeferredHolder<Fluid, SimpleFluid> GASOLINE =
+		FLUIDS.register("gasoline", () -> new SimpleFluid(properties(), true));
+
+	public static final ResourceLocation ENGINE_OIL_STILL_TEXTURE =
+		EngineeredCombustion.asResource("block/engine_oil_still");
+	public static final ResourceLocation ENGINE_OIL_FLOWING_TEXTURE =
+		EngineeredCombustion.asResource("block/engine_oil_flow");
+
+	public static final DeferredHolder<FluidType, FluidType> ENGINE_OIL_TYPE =
+		FLUID_TYPES.register("engine_oil", () -> new SimpleFluidType(FluidType.Properties.create()
+			.descriptionId("fluid.engineered_combustion.engine_oil")
+			.density(890)
+			.viscosity(2500)
+			.temperature(300)
+			.lightLevel(0)
+			.canSwim(false)
+			.canDrown(true)
+			.supportsBoating(false)
+			.canHydrate(false), ENGINE_OIL_STILL_TEXTURE, ENGINE_OIL_FLOWING_TEXTURE));
+
+	public static final DeferredHolder<Fluid, SimpleFluid> FLOWING_ENGINE_OIL =
+		FLUIDS.register("flowing_engine_oil", () -> new SimpleFluid(engineOilProperties(), false));
+
+	public static final DeferredHolder<Fluid, SimpleFluid> ENGINE_OIL =
+		FLUIDS.register("engine_oil", () -> new SimpleFluid(engineOilProperties(), true));
 
 	/**
-	 * Built lazily and cached. It cannot be a plain field initialiser because the
+	 * Built lazily and cached. They cannot be plain field initialisers because the
 	 * properties reference the very holders declared above.
 	 */
 	private static BaseFlowingFluid.Properties properties;
+	private static BaseFlowingFluid.Properties engineOilProperties;
 
 	private static BaseFlowingFluid.Properties properties() {
 		if (properties == null)
@@ -75,8 +99,15 @@ public class ECFluids {
 		return properties;
 	}
 
+	private static BaseFlowingFluid.Properties engineOilProperties() {
+		if (engineOilProperties == null)
+			engineOilProperties = new BaseFlowingFluid.Properties(ENGINE_OIL_TYPE, ENGINE_OIL, FLOWING_ENGINE_OIL)
+				.bucket(ECItems.ENGINE_OIL_BUCKET);
+		return engineOilProperties;
+	}
+
 	/**
-	 * Supplies the client with gasoline's textures.
+	 * A fluid type that does nothing but tell the client which textures to use.
 	 *
 	 * <p>NeoForge 21.1 has no {@code RegisterClientExtensionsEvent} - that arrived
 	 * in 21.3. On this version the hook is {@code FluidType#initializeClient}, which
@@ -84,10 +115,16 @@ public class ECFluids {
 	 * invoked on the client, so the client-only types referenced inside stay
 	 * unloaded on a dedicated server.
 	 */
-	public static class GasolineFluidType extends FluidType {
+	public static class SimpleFluidType extends FluidType {
 
-		public GasolineFluidType(Properties properties) {
+		private final ResourceLocation stillTexture;
+		private final ResourceLocation flowingTexture;
+
+		public SimpleFluidType(Properties properties, ResourceLocation stillTexture,
+			ResourceLocation flowingTexture) {
 			super(properties);
+			this.stillTexture = stillTexture;
+			this.flowingTexture = flowingTexture;
 		}
 
 		@Override
@@ -96,23 +133,23 @@ public class ECFluids {
 
 				@Override
 				public ResourceLocation getStillTexture() {
-					return GASOLINE_STILL_TEXTURE;
+					return stillTexture;
 				}
 
 				@Override
 				public ResourceLocation getFlowingTexture() {
-					return GASOLINE_FLOWING_TEXTURE;
+					return flowingTexture;
 				}
 			});
 		}
 	}
 
 	/** Mirrors Create's VirtualFluid: a real fluid with no block form. */
-	public static class Gasoline extends BaseFlowingFluid {
+	public static class SimpleFluid extends BaseFlowingFluid {
 
 		private final boolean source;
 
-		public Gasoline(Properties properties, boolean source) {
+		public SimpleFluid(Properties properties, boolean source) {
 			super(properties);
 			this.source = source;
 		}

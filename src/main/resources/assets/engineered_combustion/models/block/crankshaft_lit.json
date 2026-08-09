@@ -6,7 +6,7 @@
     "cast": "engineered_combustion:block/cast_iron",
     "deck": "engineered_combustion:block/crankcase_deck",
     "steel": "engineered_combustion:block/journal",
-    "ind": "engineered_combustion:block/indicator_off"
+    "ind": "engineered_combustion:block/indicator_on"
   },
   "elements": [
     {

@@ -5,37 +5,47 @@ import java.util.List;
 import org.jetbrains.annotations.Nullable;
 
 import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
+import com.simibubi.create.api.equipment.goggles.IHaveHoveringInformation;
+import com.simibubi.create.content.equipment.goggles.GogglesItem;
 
 import dev.engineeredcombustion.content.engine.EnginePhase;
 import dev.engineeredcombustion.content.engine.EngineTuning;
 import dev.engineeredcombustion.content.engine.FuelSupply;
+import dev.engineeredcombustion.content.engine.LubricationState;
+import dev.engineeredcombustion.content.engine.OilSupply;
+import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
 import dev.engineeredcombustion.content.engine.EngineState;
-import dev.engineeredcombustion.content.engine.EngineStructure;
+import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
-import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlock;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
+import dev.engineeredcombustion.client.sound.EngineSoundManager;
 import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECItems;
+import dev.engineeredcombustion.registry.ECSounds;
 import net.createmod.catnip.lang.LangBuilder;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.core.Direction.Axis;
-import net.minecraft.core.Direction.AxisDirection;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.fluids.FluidStack;
 
 /**
@@ -48,7 +58,7 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * </ol>
  * Additionally on the server:
  * <ol start="3">
- * <li>read the redstone ignition signal, and re-check the structure (throttled);</li>
+ * <li>resolve the engine's components and read the redstone ignition signal;</li>
  * <li>run combustion, inertia and friction;</li>
  * <li>if - and only if - the speed the engine wants to generate changed, tell
  * the flywheel to push it into Create.</li>
@@ -62,10 +72,9 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * <p>Nothing in this class touches a Create kinetic network directly. That stays
  * in {@link EngineFlywheelBlockEntity}.
  */
-public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInformation {
+public class CrankshaftBlockEntity extends BlockEntity
+	implements IHaveGoggleInformation, IHaveHoveringInformation {
 
-	/** Structure + redstone re-check interval, in ticks. */
-	private static final int REVALIDATE_INTERVAL = 20;
 	/** Crank-angle resync interval while turning, in ticks. */
 	private static final int RESYNC_INTERVAL = 200;
 
@@ -79,6 +88,8 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	private static final String KEY_START_PROGRESS = "StartProgress";
 	private static final String KEY_START_REQUIRED = "StartRequired";
 	private static final String KEY_FUEL_AVAILABLE = "FuelAvailable";
+	private static final String KEY_LUBRICATION = "Lubrication";
+	private static final String KEY_OIL_WEAR = "OilWear";
 
 	private final EngineState engine = new EngineState();
 
@@ -91,24 +102,35 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 	/**
 	 * Strongest redstone signal reaching the crankshaft, 0-15. Server-authoritative,
-	 * synchronised to the client purely so the debug readout can show it - the
+	 * synchronised to the client purely so the sneak diagnostics can show it - the
 	 * goggle overlay runs client-side and has no other way to know.
 	 */
 	private int redstoneSignal;
 
-	@Nullable
-	private EngineStructure structure;
 	/**
-	 * The flywheel this crankshaft is mechanically coupled to. Tracked separately
-	 * from {@link #structure} on purpose: a crankshaft with no piston installed is
-	 * structurally invalid but must still be turnable by an external Create source.
+	 * Components resolved at the top of the current server tick, or null outside
+	 * one. Never survives the tick that set it - see {@link #engineComponents()}.
+	 */
+	@Nullable
+	private EngineComponents tickComponents;
+
+	/**
+	 * The flywheel this crankshaft is mechanically coupled to.
+	 *
+	 * <p>Cached separately from {@link #tickComponents} because Create asks for the
+	 * generated speed at arbitrary times, outside our tick, and the answer has to
+	 * be the same coupling every time. It is also tracked independently of whether
+	 * the engine is structurally complete: a crankshaft with no piston installed
+	 * cannot run, but must still be turnable by an external Create source.
+	 *
+	 * <p>The position rule itself lives in {@link EngineComponents#findFlywheelPos}
+	 * - this only caches its answer.
 	 */
 	@Nullable
 	private BlockPos flywheelPos;
 	@Nullable
 	private EngineFlywheelBlockEntity cachedFlywheel;
 
-	private int revalidateCountdown;
 	private int resyncCountdown = RESYNC_INTERVAL;
 
 	/**
@@ -130,6 +152,26 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		}
 	};
 
+	/**
+	 * Bridges the simulation to the oil sump. A missing sump is not an error
+	 * condition here - it simply reads as DRY, which the friction model already
+	 * knows how to punish.
+	 */
+	private final OilSupply oilSupply = new OilSupply() {
+
+		@Override
+		public LubricationState lubrication() {
+			OilSumpBlockEntity sump = getOilSump();
+			return sump == null ? LubricationState.DRY : sump.getLubricationState();
+		}
+
+		@Override
+		public boolean consume(int millibuckets) {
+			OilSumpBlockEntity sump = getOilSump();
+			return sump != null && sump.consumeOil(millibuckets);
+		}
+	};
+
 	public CrankshaftBlockEntity(BlockPos pos, BlockState state) {
 		super(ECBlockEntityTypes.CRANKSHAFT.get(), pos, state);
 	}
@@ -144,13 +186,16 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 		if (level.isClientSide) {
 			engine.updateClientPowerStroke();
+			tickAudio();
 			return;
 		}
 
-		if (--revalidateCountdown <= 0) {
-			revalidateCountdown = REVALIDATE_INTERVAL;
-			refreshStructure(flywheel);
-		}
+		// Resolved once per server tick and held only for the duration of that tick.
+		// The fuel and oil supplies read it, so combustion, fuel draw and lubrication
+		// all act on one consistent snapshot - and it is the same call the overlay
+		// makes, which is what keeps the HUD from ever contradicting the simulation.
+		tickComponents = resolveComponents();
+		reassertKineticSourceIfNeeded(flywheel);
 
 		// Read live every tick. This is cheap (six neighbours) and is the only way
 		// the state can never go stale, whatever order neighbour updates arrive in.
@@ -161,12 +206,16 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		boolean structureValidBefore = engine.isStructureValid();
 		int startProgressBefore = engine.getStartProgress();
 		boolean fuelBefore = engine.isFuelAvailable();
-		boolean generatedSpeedChanged = engine.tickSimulation(structure != null, redstoneSignal > 0,
-			flywheel != null && flywheel.hasSource(), fuelSupply, random);
+		LubricationState lubricationBefore = engine.getLubrication();
+		boolean generatedSpeedChanged = engine.tickSimulation(tickComponents.isMechanicallyValid(),
+			redstoneSignal > 0, flywheel != null && flywheel.hasSource(), fuelSupply, oilSupply, random);
 
 		if (generatedSpeedChanged && flywheel != null)
 			// The one and only place engine state crosses into Create's world.
 			flywheel.onEngineOutputChanged();
+
+		playTransitionSounds(phaseBefore, startProgressBefore);
+		updateIgnitionIndicator();
 
 		// Anything the client displays has to trigger a block update, not just the
 		// things that change the engine's rotation. Toggling redstone on a stopped
@@ -174,22 +223,29 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		// keep showing the ignition state it was last told about.
 		if (generatedSpeedChanged || signalBefore != redstoneSignal || phaseBefore != engine.getPhase()
 			|| structureValidBefore != engine.isStructureValid()
-			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()) {
+			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()
+			|| lubricationBefore != engine.getLubrication()) {
 			sync();
 		} else if (engine.getMechanicalRpm() != 0.0F && --resyncCountdown <= 0) {
 			resyncCountdown = RESYNC_INTERVAL;
 			sync();
 		}
+
+		// The snapshot is valid only for the tick that took it. Dropping it here is
+		// what guarantees no block entity reference is ever held across ticks.
+		tickComponents = null;
 	}
 
 	/**
-	 * Schedules a structure/ignition re-check for the next tick. Called from
-	 * {@code neighborChanged} and by the cylinder when its piston assembly is
-	 * installed or removed. Deferring by a tick coalesces the bursts of neighbour
-	 * updates a single block placement produces.
+	 * Drops the cached flywheel coupling. Called from {@code neighborChanged} and
+	 * by the cylinder when its piston assembly is installed or removed.
+	 *
+	 * <p>Nothing else needs invalidating: components are resolved fresh every tick
+	 * and every time the overlay asks, so placing or removing a Carburetor, an Oil
+	 * Sump or a Cylinder is picked up on the next tick with nothing to invalidate
+	 * and no stale block entity to hold.
 	 */
 	public void onSurroundingsChanged() {
-		revalidateCountdown = 0;
 		cachedFlywheel = null;
 		flywheelPos = null;
 	}
@@ -197,7 +253,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	/** Called from {@code CrankshaftBlock#onRemove} before the block entity dies. */
 	public void onEngineRemoved() {
 		BlockPos previousFlywheel = flywheelPos;
-		structure = null;
+		tickComponents = null;
 		engine.setPhase(EnginePhase.STOPPED);
 		engine.setSimulatedRpm(0.0F);
 		engine.setPublishedRpm(0.0F);
@@ -208,18 +264,103 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 			flywheel.onEngineOutputChanged();
 	}
 
-	private void refreshStructure(@Nullable EngineFlywheelBlockEntity flywheel) {
-		if (level == null || level.isClientSide)
-			return;
-		structure = EngineStructure.detect(level, worldPosition, getAxis());
-
-		// Safety net. Create normally hands the kinetic source back to us on its own
-		// (GeneratingKineticBlockEntity#removeSource sets reActivateSource), but if a
-		// running engine ever ends up generating power that the network does not
-		// reflect, re-assert it instead of waiting for Create's 60-tick validation.
+	/**
+	 * Safety net. Create normally hands the kinetic source back to us on its own
+	 * ({@code GeneratingKineticBlockEntity#removeSource} sets reActivateSource), but
+	 * if a running engine ever ends up generating power the network does not
+	 * reflect, re-assert it instead of waiting for Create's 60-tick validation.
+	 */
+	private void reassertKineticSourceIfNeeded(@Nullable EngineFlywheelBlockEntity flywheel) {
 		if (flywheel != null && engine.getPublishedRpm() != 0.0F && !flywheel.hasSource()
 			&& flywheel.getTheoreticalSpeed() == 0.0F)
 			flywheel.onEngineOutputChanged();
+	}
+
+	// --- audio --------------------------------------------------------------
+
+	/**
+	 * Plays the one-shot sounds, driven by the transitions the simulation just
+	 * made rather than by any timer of their own.
+	 *
+	 * <p>Server side only, and always through {@code Level#playSound} with a null
+	 * player, which broadcasts to everyone in range. Deriving the sounds from the
+	 * authoritative state means there is nothing to keep in step: a firing attempt
+	 * is audible exactly when start progress advanced, and no extra packet, event
+	 * or client-side guess is involved. It also makes double-playing impossible,
+	 * because the client never independently decides any of this.
+	 */
+	private void playTransitionSounds(EnginePhase phaseBefore, int startProgressBefore) {
+		if (level == null)
+			return;
+		EnginePhase phase = engine.getPhase();
+
+		// One cough per banked firing opportunity. The final cycle is deliberately
+		// not included: it becomes the catch instead, so starting reads as
+		// "puff, puff, BRUMM" rather than "puff, puff, puff+BRUMM".
+		if (engine.getStartProgress() > startProgressBefore)
+			playSound(ECSounds.ENGINE_FIRE_ATTEMPT.get(), EngineTuning.SOUND_FIRE_ATTEMPT_VOLUME,
+				EngineTuning.mapMechanicalRpmToCrankingPitch(engine.getMechanicalRpm()));
+
+		// The catch. Only on the transition, so it can never repeat while running.
+		if (phaseBefore == EnginePhase.STARTING && phase == EnginePhase.RUNNING)
+			playSound(ECSounds.ENGINE_START.get(), EngineTuning.SOUND_START_VOLUME, 1.0F);
+
+		// Only a running engine can stop; a start attempt that is simply abandoned
+		// stays silent, and an engine loading in stopped never transitions at all.
+		if (phaseBefore.generatesPower() && phase == EnginePhase.STOPPED) {
+			boolean wantedToRun = engine.isIgnitionEnabled();
+			playSound(wantedToRun ? ECSounds.ENGINE_STALL.get() : ECSounds.ENGINE_STOP.get(),
+				wantedToRun ? EngineTuning.SOUND_STALL_VOLUME : EngineTuning.SOUND_STOP_VOLUME, 1.0F);
+		}
+	}
+
+	/**
+	 * Keeps the crankcase indicator lamp in step with the ignition signal.
+	 *
+	 * <p>Only writes when the value actually differs, so a running engine is not
+	 * re-meshing its chunk every tick. {@code UPDATE_CLIENTS} alone is used
+	 * deliberately: this is a cosmetic property, and a full neighbour update would
+	 * make every ignition toggle ripple through the redstone graph for nothing.
+	 *
+	 * <p>Safe against the block's own teardown - {@code onRemove} only reacts when
+	 * the block itself changes, and this keeps the same block.
+	 */
+	private void updateIgnitionIndicator() {
+		if (level == null || level.isClientSide)
+			return;
+		BlockState state = getBlockState();
+		if (!state.hasProperty(CrankshaftBlock.LIT))
+			return;
+		boolean ignition = engine.isIgnitionEnabled();
+		if (state.getValue(CrankshaftBlock.LIT) == ignition)
+			return;
+		level.setBlock(worldPosition, state.setValue(CrankshaftBlock.LIT, ignition), Block.UPDATE_CLIENTS);
+	}
+
+	private void playSound(SoundEvent event, float volume, float pitch) {
+		if (level == null || level.isClientSide)
+			return;
+		level.playSound(null, worldPosition.getX() + 0.5D, worldPosition.getY() + 0.5D, worldPosition.getZ() + 0.5D,
+			event, SoundSource.BLOCKS, volume, pitch);
+	}
+
+	/**
+	 * Keeps this engine's continuous sound alive for one more tick.
+	 *
+	 * <p>{@code @OnlyIn(Dist.CLIENT)} is what keeps the client sound classes off a
+	 * dedicated server: the method and its references are stripped there, so
+	 * nothing can accidentally load {@code Minecraft}. Create's steam whistle
+	 * handles its audio the same way.
+	 *
+	 * <p>Everything it needs is already synchronised - the phase travels in the
+	 * block entity's update tag, and the speed comes from Create's own kinetic
+	 * sync via the flywheel - so no packet exists purely for sound.
+	 */
+	@OnlyIn(Dist.CLIENT)
+	private void tickAudio() {
+		if (level instanceof ClientLevel clientLevel)
+			EngineSoundManager.tick(clientLevel, worldPosition, engine.getPhase(), engine.getMechanicalRpm(),
+				engine.getLubrication());
 	}
 
 	// --- mechanical coupling ------------------------------------------------
@@ -237,37 +378,63 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		if (level == null)
 			return null;
 
-		Axis axis = getAxis();
-		for (AxisDirection axisDirection : AxisDirection.values()) {
-			BlockPos candidate = worldPosition.relative(Direction.get(axisDirection, axis));
-			if (!level.isLoaded(candidate))
-				continue;
-			BlockState state = level.getBlockState(candidate);
-			if (!(state.getBlock() instanceof EngineFlywheelBlock))
-				continue;
-			if (state.getValue(EngineFlywheelBlock.HORIZONTAL_AXIS) != axis)
-				continue;
-			if (level.getBlockEntity(candidate) instanceof EngineFlywheelBlockEntity flywheel) {
-				cachedFlywheel = flywheel;
-				flywheelPos = candidate;
-				return flywheel;
-			}
-		}
-		return null;
+		BlockPos candidate = EngineComponents.findFlywheelPos(level, worldPosition, getAxis());
+		if (candidate == null)
+			return null;
+		if (!(level.getBlockEntity(candidate) instanceof EngineFlywheelBlockEntity flywheel))
+			return null;
+
+		cachedFlywheel = flywheel;
+		flywheelPos = candidate;
+		return flywheel;
+	}
+
+	/**
+	 * This engine's components, resolved against the world right now.
+	 *
+	 * <p>The single entry point every subsystem uses - combustion, fuel draw,
+	 * lubrication, the overlay and the diagnostics. During a server tick it returns
+	 * the snapshot taken at the top of that tick, so everything the simulation does
+	 * in one tick sees one consistent set of parts; anywhere else (notably the
+	 * client-side goggle overlay) it resolves fresh.
+	 *
+	 * <p>It is deliberately side-agnostic. The overlay renders on the client and
+	 * used to consult a server-only field, which is how a running engine could
+	 * report "No Carburetor" while burning fuel from one.
+	 *
+	 * <p>Named {@code engineComponents} rather than {@code components} because
+	 * {@link BlockEntity#components()} already exists and returns a
+	 * {@code DataComponentMap} - the plain name would be an override clash.
+	 */
+	public EngineComponents engineComponents() {
+		return tickComponents != null ? tickComponents : resolveComponents();
+	}
+
+	/**
+	 * Always a fresh look at the world. Never cached beyond the tick that asked,
+	 * so no block entity reference here can outlive the block it belongs to.
+	 */
+	private EngineComponents resolveComponents() {
+		BlockPos pos = worldPosition;
+		return level == null
+			? new EngineComponents(pos, getAxis(), EngineComponents.cylinderPos(pos), null, null, null,
+				EngineComponents.carburetorPos(pos), null, EngineComponents.oilSumpPos(pos), null)
+			: EngineComponents.resolve(level, pos, getAxis());
 	}
 
 	/**
 	 * The carburetor attached to this engine, or null when it is missing. Read
-	 * through the detected structure so the position rule stays in one place.
+	 * through the shared resolver so the position rule stays in one place.
 	 */
 	@Nullable
 	public CarburetorBlockEntity getCarburetor() {
-		if (level == null || structure == null || !structure.hasCarburetor())
-			return null;
-		BlockPos pos = structure.carburetorPos();
-		if (!level.isLoaded(pos))
-			return null;
-		return level.getBlockEntity(pos) instanceof CarburetorBlockEntity carburetor ? carburetor : null;
+		return engineComponents().carburetor();
+	}
+
+	/** The oil sump attached to this engine, or null when it is missing. */
+	@Nullable
+	public OilSumpBlockEntity getOilSump() {
+		return engineComponents().oilSump();
 	}
 
 	/**
@@ -299,7 +466,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	public boolean isPistonInstalled() {
 		if (level == null)
 			return false;
-		BlockPos cylinderPos = worldPosition.above();
+		BlockPos cylinderPos = EngineComponents.cylinderPos(worldPosition);
 		if (!level.isLoaded(cylinderPos))
 			return false;
 		return level.getBlockEntity(cylinderPos) instanceof CylinderBlockEntity cylinder
@@ -325,6 +492,10 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		redstoneSignal = tag.getInt(KEY_REDSTONE_SIGNAL);
 		engine.setStartAttempt(tag.getInt(KEY_START_PROGRESS), tag.getInt(KEY_START_REQUIRED));
 		engine.setFuelAvailable(tag.getBoolean(KEY_FUEL_AVAILABLE));
+		engine.setLubrication(LubricationState.byId(tag.getString(KEY_LUBRICATION)));
+		// Persisted so a chunk reload does not hand the player free oil by
+		// discarding the revolutions already banked towards the next draw.
+		engine.setCombustionEventsSinceOilDraw(tag.getInt(KEY_OIL_WEAR));
 	}
 
 	@Override
@@ -341,6 +512,9 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		tag.putInt(KEY_START_PROGRESS, engine.getStartProgress());
 		tag.putInt(KEY_START_REQUIRED, engine.getRequiredStartCycles());
 		tag.putBoolean(KEY_FUEL_AVAILABLE, engine.isFuelAvailable());
+		tag.putString(KEY_LUBRICATION, engine.getLubrication()
+			.getId());
+		tag.putInt(KEY_OIL_WEAR, engine.getCombustionEventsSinceOilDraw());
 	}
 
 	@Override
@@ -374,34 +548,44 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
 		EnginePhase phase = engine.getPhase();
 
-		ECLang.translate("gui.engineered_combustion.engine_stats")
+		ECLang.translate("gui.engine")
 			.style(ChatFormatting.WHITE)
 			.forGoggles(tooltip);
 
-		ECLang.translate("gui.engineered_combustion.state", ECLang.translate(phase.translationKey())
+		// A coasting engine that has run dry reads as "Stalling" - same phase, but
+		// the player cares about the reason, not the internal name.
+		String phaseKey = phase == EnginePhase.COASTING && !engine.isFuelAvailable()
+			? "gui.phase.stalling"
+			: phase.translationKey();
+		ECLang.translate("gui.state", ECLang.translate(phaseKey)
 			.style(phaseColor(phase))
 			.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
-		ECLang.translate("gui.engineered_combustion.speed", ECLang.number(engine.getMechanicalRpm())
+		ECLang.translate("gui.speed", ECLang.number(engine.getMechanicalRpm())
 			.style(ChatFormatting.AQUA)
 			.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
 		boolean ignition = engine.isIgnitionEnabled();
-		ECLang.translate("gui.engineered_combustion.ignition",
-			ECLang.translate(ignition ? "gui.engineered_combustion.enabled" : "gui.engineered_combustion.disabled")
+		ECLang.translate("gui.ignition",
+			ECLang.translate(ignition ? "gui.value.enabled" : "gui.value.disabled")
 				.style(ignition ? ChatFormatting.GREEN : ChatFormatting.RED)
 				.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
-		addFuelLines(tooltip);
+		// One resolution for the whole overlay, and the same call the simulation
+		// makes. If combustion can draw from a Carburetor, these lines describe that
+		// same Carburetor - they cannot disagree.
+		EngineComponents components = engineComponents();
+		addFuelLines(tooltip, components.carburetor());
+		addLubricationLines(tooltip, components.oilSump());
 
 		if (phase == EnginePhase.STARTING)
-			ECLang.translate("gui.engineered_combustion.start_progress",
+			ECLang.translate("gui.start_progress",
 				ECLang.number(engine.getStartProgress())
 					.style(ChatFormatting.GOLD)
 					.component(),
@@ -416,11 +600,18 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		return true;
 	}
 
-	private void addFuelLines(List<Component> tooltip) {
-		CarburetorBlockEntity carburetor = getCarburetor();
+	/**
+	 * Fuel, distinguishing the three cases the player actually needs told apart:
+	 * no Carburetor at all, a Carburetor that is empty, and one with fuel in it.
+	 *
+	 * <p>"No Carburetor" now means precisely that the component is absent. It used
+	 * to also appear whenever the overlay simply could not see one, which is how it
+	 * could contradict an engine that was burning fuel.
+	 */
+	private void addFuelLines(List<Component> tooltip, @Nullable CarburetorBlockEntity carburetor) {
 		if (carburetor == null) {
-			ECLang.translate("gui.engineered_combustion.fuel",
-				ECLang.translate("gui.engineered_combustion.no_carburetor")
+			ECLang.translate("gui.fuel",
+				ECLang.translate("gui.value.no_carburetor")
 					.style(ChatFormatting.RED)
 					.component())
 				.style(ChatFormatting.GRAY)
@@ -430,8 +621,8 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 		FluidStack fluid = carburetor.getFluid();
 		boolean usable = carburetor.holdsValidFuel();
-		ECLang.translate("gui.engineered_combustion.fuel", (fluid.isEmpty()
-			? ECLang.translate("gui.engineered_combustion.fuel_empty")
+		ECLang.translate("gui.fuel", (fluid.isEmpty()
+			? ECLang.translate("gui.value.empty")
 				.style(ChatFormatting.RED)
 			: ECLang.builder()
 				.add(fluid.getHoverName()
@@ -440,24 +631,78 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
-		if (!fluid.isEmpty())
-			ECLang.translate("gui.engineered_combustion.fuel_available", ECLang.number(fluid.getAmount())
-				.style(ChatFormatting.AQUA)
+		// Shown whenever the tank exists, including at zero - an installed but empty
+		// Carburetor reads "Empty" and "0 / 1000 mB", which is different information
+		// from having no Carburetor.
+		ECLang.translate("gui.fuel_level", ECLang.number(fluid.getAmount())
+			.style(fluid.isEmpty() ? ChatFormatting.RED : ChatFormatting.AQUA)
+			.component(),
+			ECLang.number(carburetor.getCapacity())
+				.style(ChatFormatting.DARK_GRAY)
+				.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+	}
+
+	/**
+	 * Lubrication state, and how much oil is left.
+	 *
+	 * <p>The state line is always shown - a dry engine is the single most useful
+	 * thing the overlay can tell a player about why it will not pull. The quantity
+	 * line is skipped when there is no sump, because "0 mB" would imply a tank
+	 * that exists.
+	 */
+	private void addLubricationLines(List<Component> tooltip, @Nullable OilSumpBlockEntity sump) {
+		LubricationState lubrication = sump == null ? LubricationState.DRY : sump.getLubricationState();
+
+		ECLang.translate("gui.lubrication", ECLang.translate(lubrication.translationKey())
+			.style(OilSumpBlockEntity.lubricationColor(lubrication))
+			.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
+		if (sump == null) {
+			ECLang.translate("gui.oil", ECLang.translate("gui.value.no_oil_sump")
+				.style(ChatFormatting.RED)
 				.component())
 				.style(ChatFormatting.GRAY)
 				.forGoggles(tooltip, 1);
+			return;
+		}
+
+		int oil = sump.getOilAmount();
+		if (oil <= 0) {
+			ECLang.translate("gui.oil", ECLang.translate("gui.value.empty")
+				.style(ChatFormatting.RED)
+				.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
+			return;
+		}
+
+		ECLang.translate("gui.oil_level", ECLang.number(oil)
+			.style(lubrication == LubricationState.LOW ? ChatFormatting.GOLD : ChatFormatting.AQUA)
+			.component(),
+			ECLang.number(sump.getCapacity())
+				.style(ChatFormatting.DARK_GRAY)
+				.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
 	}
 
 	/** Sneak-only diagnostics, so the normal overlay stays readable. */
 	private void addDiagnostics(List<Component> tooltip) {
-		ECLang.translate("gui.engineered_combustion.diagnostics")
+		ECLang.translate("gui.diagnostics")
 			.style(ChatFormatting.DARK_GRAY)
 			.forGoggles(tooltip);
 
+		// Resolved from the world rather than read from the synced simulation flag,
+		// so this line answers "is the engine assembled correctly right now" using
+		// the same rule the server uses to decide whether it may run.
+		boolean valid = engineComponents().isMechanicallyValid();
 		diagnostic(tooltip, "structure", ECLang
-			.translate(engine.isStructureValid() ? "gui.engineered_combustion.valid"
-				: "gui.engineered_combustion.invalid")
-			.style(engine.isStructureValid() ? ChatFormatting.GREEN : ChatFormatting.RED));
+			.translate(valid ? "gui.value.valid" : "gui.value.invalid")
+			.style(valid ? ChatFormatting.GREEN : ChatFormatting.RED));
 		diagnostic(tooltip, "rotation_source", ECLang.translate(engine.getRotationSource()
 			.translationKey())
 			.style(ChatFormatting.WHITE));
@@ -472,7 +717,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	}
 
 	private static void diagnostic(List<Component> tooltip, String key, LangBuilder value) {
-		ECLang.translate("gui.engineered_combustion." + key, value.component())
+		ECLang.translate("gui." + key, value.component())
 			.style(ChatFormatting.DARK_GRAY)
 			.forGoggles(tooltip, 1);
 	}
@@ -491,15 +736,70 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		return new ItemStack(ECItems.CRANKSHAFT.get());
 	}
 
-	/** Chat report for the right-click debug path; plain text, works server-side. */
-	public void sendDebugReport(Player player) {
-		player.displayClientMessage(Component.translatable("gui.engineered_combustion.engine_stats")
-			.withStyle(ChatFormatting.GOLD), false);
-		player.displayClientMessage(Component.literal(String.format(
-			"phase=%s  mech=%.1f  sim=%.1f  gen=%.1f  angle=%.1f  redstone=%d  fuel=%s  start=%d/%d",
-			engine.getPhase(), engine.getMechanicalRpm(), engine.getSimulatedRpm(), engine.getPublishedRpm(),
-			engine.getCrankAngleDegrees(), redstoneSignal, engine.isFuelAvailable(), engine.getStartProgress(),
-			engine.getRequiredStartCycles()))
-			.withStyle(ChatFormatting.GRAY), false);
+	// --- hovering overlay, without goggles ----------------------------------
+
+	/**
+	 * What anyone can see by looking at the engine, goggles or not.
+	 *
+	 * <p>Deliberately only what a person could work out by standing next to a
+	 * running engine: whether it is turning, whether it caught, whether it sounds
+	 * healthy, and whether the ignition is switched on. No speeds, no quantities,
+	 * no counters - those are what the Engineer's Goggles are <i>for</i>, and
+	 * handing them out for free would make the goggles pointless.
+	 *
+	 * <p>Returns false while goggles are worn. Create's overlay renderer calls this
+	 * for every player and appends the result <i>after</i> the goggle tooltip, so
+	 * without that check a goggle wearer would read the engine's state twice. The
+	 * renderer also removes the separator it had already inserted when this returns
+	 * false, so declining costs nothing.
+	 *
+	 * <p>Reaching for the client player here follows Create's own precedent -
+	 * {@code KineticBlockEntity#addToTooltip} uses client-only types too. This is
+	 * only ever invoked from the overlay renderer, which is client-side by
+	 * definition.
+	 */
+	@Override
+	public boolean addToTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
+		Player player = Minecraft.getInstance().player;
+		if (player == null || GogglesItem.isWearingGoggles(player))
+			return false;
+
+		ECLang.translate("gui.engine")
+			.style(ChatFormatting.WHITE)
+			.forGoggles(tooltip);
+
+		EnginePhase phase = engine.getPhase();
+		ECLang.translate(observedStateKey(phase))
+			.style(phaseColor(phase))
+			.forGoggles(tooltip, 1);
+
+		boolean ignition = engine.isIgnitionEnabled();
+		ECLang.translate("gui.ignition",
+			ECLang.translate(ignition ? "gui.value.enabled" : "gui.value.disabled")
+				.style(ignition ? ChatFormatting.GREEN : ChatFormatting.RED)
+				.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+		return true;
+	}
+
+	/**
+	 * A plain-language description of what the engine is audibly and visibly doing.
+	 *
+	 * <p>Every branch is derived from real simulation state, never guessed. A
+	 * running engine is described as rough exactly when lubrication is actually
+	 * degraded - which is also when it actually sounds rough - and as stalling
+	 * exactly when it has lost combustion and is coasting down.
+	 */
+	private String observedStateKey(EnginePhase phase) {
+		return switch (phase) {
+			case RUNNING -> engine.getLubrication() == LubricationState.NORMAL
+				? "gui.observed.running_smoothly"
+				: "gui.observed.running_rough";
+			case COASTING -> "gui.observed.stalling";
+			case STARTING -> "gui.observed.starting";
+			case CRANKING -> "gui.observed.cranking";
+			case STOPPED -> "gui.observed.stopped";
+		};
 	}
 }
