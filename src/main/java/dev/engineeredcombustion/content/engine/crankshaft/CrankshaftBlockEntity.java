@@ -105,7 +105,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 	/**
 	 * Components resolved at the top of the current server tick, or null outside
-	 * one. Never survives the tick that set it - see {@link #components()}.
+	 * one. Never survives the tick that set it - see {@link #engineComponents()}.
 	 */
 	@Nullable
 	private EngineComponents tickComponents;
@@ -373,8 +373,12 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	 * <p>It is deliberately side-agnostic. The overlay renders on the client and
 	 * used to consult a server-only field, which is how a running engine could
 	 * report "No Carburetor" while burning fuel from one.
+	 *
+	 * <p>Named {@code engineComponents} rather than {@code components} because
+	 * {@link BlockEntity#components()} already exists and returns a
+	 * {@code DataComponentMap} - the plain name would be an override clash.
 	 */
-	public EngineComponents components() {
+	public EngineComponents engineComponents() {
 		return tickComponents != null ? tickComponents : resolveComponents();
 	}
 
@@ -396,13 +400,13 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 	 */
 	@Nullable
 	public CarburetorBlockEntity getCarburetor() {
-		return components().carburetor();
+		return engineComponents().carburetor();
 	}
 
 	/** The oil sump attached to this engine, or null when it is missing. */
 	@Nullable
 	public OilSumpBlockEntity getOilSump() {
-		return components().oilSump();
+		return engineComponents().oilSump();
 	}
 
 	/**
@@ -548,7 +552,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		// One resolution for the whole overlay, and the same call the simulation
 		// makes. If combustion can draw from a Carburetor, these lines describe that
 		// same Carburetor - they cannot disagree.
-		EngineComponents components = components();
+		EngineComponents components = engineComponents();
 		addFuelLines(tooltip, components.carburetor());
 		addLubricationLines(tooltip, components.oilSump());
 
@@ -667,7 +671,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		// Resolved from the world rather than read from the synced simulation flag,
 		// so this line answers "is the engine assembled correctly right now" using
 		// the same rule the server uses to decide whether it may run.
-		boolean valid = components().isMechanicallyValid();
+		boolean valid = engineComponents().isMechanicallyValid();
 		diagnostic(tooltip, "structure", ECLang
 			.translate(valid ? "gui.value.valid" : "gui.value.invalid")
 			.style(valid ? ChatFormatting.GREEN : ChatFormatting.RED));

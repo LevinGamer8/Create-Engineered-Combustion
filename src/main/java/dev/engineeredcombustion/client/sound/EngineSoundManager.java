@@ -60,6 +60,12 @@ public class EngineSoundManager {
 		EngineLoopKind wanted = EngineLoopKind.forState(phase, mechanicalRpm);
 		EngineLoopSound current = ACTIVE.get(pos);
 
+		// Aged from here, not from the instance's own tick: an instance Minecraft
+		// rejected never ticks, so it could never age out of its grace period and
+		// would hold this engine's only slot forever.
+		if (current != null)
+			current.age();
+
 		if (current != null && (current.isStopped() || !current.wasAccepted(ACCEPTANCE_GRACE_TICKS))) {
 			// Finished, or Minecraft never took it (a muted category, say). Either way
 			// the slot is free, and a later unmute can start a fresh one.

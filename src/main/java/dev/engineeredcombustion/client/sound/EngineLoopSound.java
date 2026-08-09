@@ -73,10 +73,6 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 		return kind;
 	}
 
-	public BlockPos getPos() {
-		return pos;
-	}
-
 	/** Called every client tick by the engine that owns this loop. Final: the constructor calls it. */
 	public final void keepAlive() {
 		keepAlive = EngineTuning.SOUND_KEEP_ALIVE_TICKS;
@@ -107,7 +103,16 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 		return ticked || age <= graceTicks;
 	}
 
-	/** Ages the instance even on ticks Minecraft does not deliver, so the grace period is real time. */
+	/**
+	 * Ages the instance by one tick.
+	 *
+	 * <p>Must be driven from outside, by whoever owns this loop - never from
+	 * {@link #tick()}. {@link #wasAccepted} asks whether Minecraft ever ticked this
+	 * instance, so an instance that was rejected is exactly the one that never gets
+	 * a tick; aging it there would freeze its age at zero and leave it looking
+	 * "still within its grace period" forever, holding the engine's only loop slot
+	 * and keeping it permanently silent.
+	 */
 	public void age() {
 		if (age < Integer.MAX_VALUE)
 			age++;
@@ -116,7 +121,6 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 	@Override
 	public void tick() {
 		ticked = true;
-		age();
 
 		if (!isFadingOut())
 			followEngine();
