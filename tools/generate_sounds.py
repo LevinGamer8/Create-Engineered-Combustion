@@ -127,12 +127,19 @@ def engine_running():
     Recorded at the engine's idle character. The game shifts this by pitch, so
     the firing rate here is the reference point the pitch mapping is tuned around.
     """
-    fire_hz = 12.5
-    dur = 0.64                       # 8 pulses exactly -> loops without a seam
+    # 8 Hz, not the firing rate of a real engine - the point is that individual
+    # combustion pulses stay separately audible ("put... put... put") at the low
+    # end of the pitch range, and only blend together as pitch rises. A faster
+    # base rate turns into an undifferentiated buzz at every speed, which is the
+    # one thing a single-cylinder engine must not sound like.
+    fire_hz = 8.0
+    dur = 1.0                        # 8 pulses exactly -> loops without a seam
     n = int(SR * dur)
     buf = np.zeros(n)
 
-    pulse = combustion_pulse(decay=0.048, thump_hz=62.0, bark_level=0.55)
+    # Short decay relative to the 125 ms gap between pulses, so each one has died
+    # away before the next arrives and the rhythm reads clearly.
+    pulse = combustion_pulse(decay=0.042, thump_hz=62.0, bark_level=0.60)
     period = SR / fire_hz
     for i in range(int(round(dur * fire_hz))):
         # A single cylinder is never perfectly even; a touch of jitter stops the
@@ -140,8 +147,9 @@ def engine_running():
         jitter = 1.0 + 0.035 * np.sin(i * 1.7)
         add_wrapped(buf, i * period, pulse * jitter)
 
-    # Continuous bed: intake/mechanical rumble under the pulses.
-    bed = onepole_lp(noise(n), 220.0) * 0.22
+    # Continuous bed: intake/mechanical rumble under the pulses. Kept well below
+    # them so it fills the gaps without masking the rhythm.
+    bed = onepole_lp(noise(n), 220.0) * 0.16
     t = np.arange(n) / SR
     bed *= 1.0 + 0.30 * np.sin(2.0 * np.pi * fire_hz * t)  # integer cycles -> seamless
     buf += bed

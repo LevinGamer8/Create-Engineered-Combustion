@@ -7,6 +7,7 @@ import org.jetbrains.annotations.Nullable;
 import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
 
 import dev.engineeredcombustion.content.engine.CrankMath;
+import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
@@ -75,7 +76,7 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
 		// Installing or removing the piston changes structural validity without
 		// changing any block state, so the crankshaft has to be told explicitly.
-		if (level.getBlockEntity(worldPosition.below()) instanceof CrankshaftBlockEntity crankshaft)
+		if (level.getBlockEntity(EngineComponents.crankshaftPosFromCylinder(worldPosition)) instanceof CrankshaftBlockEntity crankshaft)
 			crankshaft.onSurroundingsChanged();
 	}
 
@@ -98,7 +99,7 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		if (cachedCrankshaft != null && !cachedCrankshaft.isRemoved())
 			return cachedCrankshaft;
 		cachedCrankshaft = null;
-		if (level != null && level.getBlockEntity(worldPosition.below()) instanceof CrankshaftBlockEntity crankshaft)
+		if (level != null && level.getBlockEntity(EngineComponents.crankshaftPosFromCylinder(worldPosition)) instanceof CrankshaftBlockEntity crankshaft)
 			cachedCrankshaft = crankshaft;
 		return cachedCrankshaft;
 	}

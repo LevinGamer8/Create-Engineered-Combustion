@@ -29,7 +29,7 @@ import net.minecraft.world.phys.BlockHitResult;
  *
  * <p>This block is deliberately <i>not</i> a Create kinetic block. It owns the
  * engine simulation; the adjacent Flywheel is what talks to Create. See
- * {@code EngineStructure} for the supported layout.
+ * {@code EngineComponents} for the supported layout and every component offset.
  *
  * <p>Placement: the crankshaft's axis follows the horizontal direction the
  * player is facing, so walking towards where the engine should run and placing

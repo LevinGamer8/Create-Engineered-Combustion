@@ -2,6 +2,7 @@ package dev.engineeredcombustion.content.engine.sump;
 
 import org.jetbrains.annotations.Nullable;
 
+import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.InteractionHand;
@@ -58,14 +59,15 @@ public class OilSumpBlock extends Block implements EntityBlock {
 	}
 
 	/**
-	 * The sump sits directly below the crankshaft, and adding or removing oil
-	 * changes nothing about any block state, so the crankshaft has to be told
-	 * explicitly that its structure may have changed.
+	 * Adding or removing oil changes nothing about any block state, so the
+	 * crankshaft has to be told explicitly. The offset comes from
+	 * {@link EngineComponents} so this and the engine's own lookup can never
+	 * disagree about which crankshaft owns this sump.
 	 */
 	private static void notifyCrankshaft(Level level, BlockPos sumpPos) {
 		if (level.isClientSide)
 			return;
-		BlockPos crankshaftPos = sumpPos.above();
+		BlockPos crankshaftPos = EngineComponents.crankshaftPosFromOilSump(sumpPos);
 		if (level.isLoaded(crankshaftPos)
 			&& level.getBlockEntity(crankshaftPos) instanceof CrankshaftBlockEntity crankshaft)
 			crankshaft.onSurroundingsChanged();

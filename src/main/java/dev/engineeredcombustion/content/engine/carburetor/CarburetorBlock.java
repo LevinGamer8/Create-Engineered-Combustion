@@ -2,6 +2,7 @@ package dev.engineeredcombustion.content.engine.carburetor;
 
 import org.jetbrains.annotations.Nullable;
 
+import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.InteractionHand;
@@ -60,15 +61,15 @@ public class CarburetorBlock extends Block implements EntityBlock {
 	}
 
 	/**
-	 * The carburetor sits two blocks above the crankshaft (directly on top of the
-	 * cylinder), and adding or removing fuel changes nothing about any block
-	 * state, so the crankshaft has to be told explicitly.
+	 * Adding or removing fuel changes nothing about any block state, so the
+	 * crankshaft has to be told explicitly. The offset comes from
+	 * {@link EngineComponents} so this and the engine's own lookup can never
+	 * disagree about which crankshaft owns this carburetor.
 	 */
 	private static void notifyCrankshaft(Level level, BlockPos carburetorPos) {
 		if (level.isClientSide)
 			return;
-		BlockPos crankshaftPos = carburetorPos.below()
-			.below();
+		BlockPos crankshaftPos = EngineComponents.crankshaftPosFromCarburetor(carburetorPos);
 		if (level.isLoaded(crankshaftPos)
 			&& level.getBlockEntity(crankshaftPos) instanceof CrankshaftBlockEntity crankshaft)
 			crankshaft.onSurroundingsChanged();

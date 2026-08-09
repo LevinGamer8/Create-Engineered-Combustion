@@ -226,8 +226,19 @@ public final class EngineTuning {
 	 */
 	public static final float SOUND_PITCH_EXPONENT = 0.35F;
 
-	public static final float SOUND_MIN_PITCH = 0.75F;
-	public static final float SOUND_MAX_PITCH = 1.45F;
+	public static final float SOUND_MIN_PITCH = 0.80F;
+	public static final float SOUND_MAX_PITCH = 1.30F;
+
+	/**
+	 * Volume a loop is created at, before it fades up to its nominal level.
+	 *
+	 * <p>Must be greater than zero. {@code SoundEngine#play} discards any instance
+	 * whose volume is zero at the moment it is handed over ("Skipped playing sound,
+	 * volume was zero") and a discarded instance is never ticked, so a loop that
+	 * starts silent never becomes audible - it is not a fade-in, it is a deletion.
+	 * Create's own looping instances start at 0.01 and 0.05 for the same reason.
+	 */
+	public static final float SOUND_INITIAL_VOLUME = 0.05F;
 
 	/** Volumes are Minecraft attenuation units; blocks fall off over roughly 16 * volume blocks. */
 	public static final float SOUND_RUNNING_VOLUME = 0.55F;
