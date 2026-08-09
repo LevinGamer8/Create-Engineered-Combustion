@@ -37,3 +37,7 @@ Thumbs.db
 logs/
 crash-reports/
 *.log
+
+# Python bytecode from the tools/ scripts
+__pycache__/
+*.py[cod]

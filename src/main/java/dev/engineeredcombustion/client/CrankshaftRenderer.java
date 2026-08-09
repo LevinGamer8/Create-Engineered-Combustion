@@ -4,7 +4,6 @@ import com.mojang.blaze3d.vertex.PoseStack;
 
 import dev.engine_room.flywheel.lib.model.baked.PartialModel;
 
-import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlock;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import net.createmod.catnip.render.CachedBuffers;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -16,19 +15,19 @@ import net.minecraft.core.Direction.Axis;
 import net.minecraft.core.Direction.AxisDirection;
 
 /**
- * Turns the crank throw inside the open crankcase.
+ * Turns the crankshaft itself inside the crankcase.
  *
- * <p>The angle is {@code getRenderCrankAngleDegrees} - the same authoritative
- * value the piston and the flywheel disc already use, interpolated with the
- * frame's partial ticks. There is no animation timer here and no independent
- * phase: all three moving parts are driven from one number, so they cannot drift
- * apart. Watching the counterweights swing down as the piston rises is therefore
- * showing real simulation state, not a decorative loop.
+ * <p>The block's baked model is only the <i>crankcase</i>: pan, cut-away side
+ * walls, main bearing housings and the machined top deck. Everything that
+ * rotates - main journals, both crank webs, the counterweights and the offset
+ * crank pin - lives in a partial model here, so the player can watch the throw
+ * go round through the crankcase windows.
  *
- * <p>The crank pin is modelled below the block centre, which is bottom dead
- * centre, matching {@code CrankMath.pistonPosition(0) == 0}. Rotating about the
- * same axis with the same value as {@code EngineFlywheelRenderer} keeps the
- * crank and the flywheel visually locked whichever way the engine turns.
+ * <p>The rotation is applied about the block centre, which is where the main
+ * journal axis is modelled, where Create attaches a shaft, and what the adjacent
+ * flywheel rotates about. Using the engine's own crank angle - the same value
+ * the piston and connecting rod use - is what keeps the crank pin underneath the
+ * rod's big end at every frame, in both directions of rotation.
  */
 public class CrankshaftRenderer implements BlockEntityRenderer<CrankshaftBlockEntity> {
 
@@ -38,20 +37,13 @@ public class CrankshaftRenderer implements BlockEntityRenderer<CrankshaftBlockEn
 	@Override
 	public void render(CrankshaftBlockEntity be, float partialTicks, PoseStack ms, MultiBufferSource buffer, int light,
 		int overlay) {
-		Axis axis = be.getBlockState()
-			.getValue(CrankshaftBlock.HORIZONTAL_AXIS);
-
-		float angleRadians = (float) Math.toRadians(be.getEngineState()
+		Axis axis = be.getAxis();
+		float angle = (float) Math.toRadians(be.getEngineState()
 			.getRenderCrankAngleDegrees(partialTicks));
+		PartialModel crank = axis == Axis.X ? ECPartialModels.CRANK_ASSEMBLY_X : ECPartialModels.CRANK_ASSEMBLY_Z;
 
-		// Two baked variants rather than one plus a 90 degree buffer rotation, for
-		// the same reason the flywheel does it: composing rotations on a
-		// SuperByteBuffer is easy to get subtly wrong, and a second small model file
-		// is cheaper than that risk.
-		PartialModel throwModel = axis == Axis.X ? ECPartialModels.CRANK_THROW_X : ECPartialModels.CRANK_THROW_Z;
-
-		CachedBuffers.partial(throwModel, be.getBlockState())
-			.rotateCentered(angleRadians, Direction.get(AxisDirection.POSITIVE, axis))
+		CachedBuffers.partial(crank, be.getBlockState())
+			.rotateCentered(angle, Direction.get(AxisDirection.POSITIVE, axis))
 			.light(light)
 			.renderInto(ms, buffer.getBuffer(RenderType.solid()));
 	}
