@@ -140,6 +140,9 @@ ALU = (176, 181, 187, 255)        # piston
 FLY = (62, 63, 69, 255)           # flywheel cast iron, darkest
 CARB = (88, 91, 97, 255)          # carburetor body
 BRASS = (182, 143, 66, 255)
+CERAMIC = (222, 214, 196, 255)    # spark plug insulator porcelain
+FILTER = (58, 58, 62, 255)        # air cleaner canister, painted dark
+MESH = (96, 88, 74, 255)          # filter element behind the grille
 
 
 def t_cast_iron(seed=11, base=CAST, grain=9):
@@ -399,6 +402,83 @@ def t_brass():
     return px
 
 
+def t_spark_plug_ceramic():
+    """Spark plug insulator: glazed porcelain with the usual corrugations.
+
+    The ribs run across the texture so that, with the world-aligned UVs the
+    model generator emits, they come out perpendicular to the plug's axis on
+    every side face - which is what makes a 1x1 stub read as a spark plug
+    rather than as a white peg.
+    """
+    px = blank()
+    fill(px, CERAMIC)
+    rng = Rng(269)
+    for x in range(0, S, 6):
+        rect(px, x, 0, x + 1, S, shade(CERAMIC, -34))
+        rect(px, x + 1, 0, x + 3, S, shade(CERAMIC, 18))
+        rect(px, x + 3, 0, x + 4, S, shade(CERAMIC, -12))
+    noise(px, rng, 4)
+    # the glaze catches the light along one edge
+    rect(px, 0, 0, S, 2, shade(CERAMIC, 22))
+    rect(px, 0, S - 3, S, S, shade(CERAMIC, -28))
+    return px
+
+
+def t_air_filter():
+    """Oil-bath air cleaner canister: dark painted steel with a rolled seam."""
+    px = blank()
+    fill(px, FILTER)
+    rng = Rng(277)
+    noise(px, rng, 7)
+    specks(px, rng, 20, -10)
+    specks(px, rng, 8, 12)
+    # rolled seams top and bottom, as a pressed-steel canister has
+    for y in (3, 26):
+        rect(px, 0, y, S, y + 1, shade(FILTER, 26))
+        rect(px, 0, y + 1, S, y + 3, shade(FILTER, -22))
+    border(px, 14, -18)
+    return px
+
+
+def t_air_filter_mesh():
+    """The filter element itself: a coarse woven gauze seen through slots."""
+    px = blank()
+    fill(px, MESH)
+    rng = Rng(281)
+    for y in range(S):
+        for x in range(S):
+            if (x // 2 + y // 2) % 2 == 0:
+                px[y][x] = shade(MESH, 16)
+            else:
+                px[y][x] = shade(MESH, -18)
+    noise(px, rng, 6)
+    # the retaining band the gauze is clamped behind
+    for y in (0, 1, S - 2, S - 1):
+        rect(px, 0, y, S, y + 1, shade(FILTER, 10))
+    return px
+
+
+def t_combustion_flash():
+    """The burn itself: a soft, mostly transparent orange-to-white core.
+
+    Alpha rather than colour carries the shape, because the renderer draws this
+    on a translucent quad at full brightness and fades it out over three ticks.
+    """
+    px = blank()
+    core = (255, 246, 214)
+    edge = (255, 138, 32)
+    for y in range(S):
+        for x in range(S):
+            d = (((x + 0.5 - 16) / 16.0) ** 2 + ((y + 0.5 - 16) / 16.0) ** 2) ** 0.5
+            if d >= 1.0:
+                px[y][x] = (edge[0], edge[1], edge[2], 0)
+                continue
+            t = d ** 0.7
+            c = mix(core + (255,), edge + (255,), t)
+            px[y][x] = (c[0], c[1], c[2], clamp(255 * (1.0 - t) ** 1.2))
+    return px
+
+
 TEXTURES = {
     "block/cast_iron": t_cast_iron,
     "block/crankshaft": t_crankcase,
@@ -418,6 +498,10 @@ TEXTURES = {
     "block/oil_sump": t_oil_sump,
     "block/indicator_off": t_indicator_off,
     "block/indicator_on": t_indicator_on,
+    "block/spark_plug_ceramic": t_spark_plug_ceramic,
+    "block/air_filter": t_air_filter,
+    "block/air_filter_mesh": t_air_filter_mesh,
+    "block/combustion_flash": t_combustion_flash,
 }
 
 if __name__ == "__main__":

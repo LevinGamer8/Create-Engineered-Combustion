@@ -22,13 +22,18 @@ import net.minecraft.world.level.block.state.BlockState;
  * controller and defines its axis:
  *
  * <pre>
- *          [Carburetor]     crankshaft.above().above()   (optional)
- *           [Cylinder]      crankshaft.above()
- *               |           connecting rod (implicit)
- *  ... [Crankshaft] [Flywheel] [Create shaft] ...        (either end of the axis)
- *               |
- *           [Oil Sump]      crankshaft.below()           (optional)
+ *                        [Carburetor]     crankshaft.above().above()   (optional)
+ *                         [Cylinder]      crankshaft.above()
+ *                             |           connecting rod (implicit)
+ *  ... [Create shaft] [Crankshaft] [Flywheel] [Create shaft] ...
+ *                             |
+ *                         [Oil Sump]      crankshaft.below()           (optional)
  * </pre>
+ *
+ * The Flywheel may sit at either end of the crank axis; whichever end it takes,
+ * the <i>other</i> end of the crankshaft is a normal Create shaft output on the
+ * same network, because the crankshaft itself is kinetic on both axial faces.
+ * There is still only one kinetic source - see {@code EngineFlywheelBlockEntity}.
  *
  * The Oil Sump hangs directly under the crankcase, as a real sump does, and is
  * deliberately <i>not</i> accepted anywhere beside the cylinder. The Carburetor

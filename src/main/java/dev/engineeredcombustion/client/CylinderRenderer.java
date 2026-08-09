@@ -8,6 +8,7 @@ import dev.engine_room.flywheel.lib.model.baked.PartialModel;
 import dev.engineeredcombustion.content.engine.CrankMath;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import net.createmod.catnip.render.CachedBuffers;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
@@ -72,5 +73,41 @@ public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity
 			.rotateCentered(CrankMath.rodSwing(crankAngle), Direction.get(AxisDirection.POSITIVE, axis))
 			.light(light)
 			.renderInto(ms, vertices);
+
+		renderCombustionFlash(be, state, partialTicks, ms, buffer);
+	}
+
+	/**
+	 * The burn, drawn inside the chamber for the few ticks after a real combustion
+	 * event.
+	 *
+	 * <p>Because the cylinder is a cutaway, the top of the bore is genuinely
+	 * visible from outside, so lighting it is the honest way to show that a charge
+	 * fired - and it is the mechanical feedback the exposed design is <i>for</i>.
+	 *
+	 * <p>Deliberately not a particle. The flash lasts exactly
+	 * {@code COMBUSTION_FLASH_TICKS} because the simulation says so, it cannot
+	 * outlive the event, and its cost is one small model per frame no matter how
+	 * fast the engine is turning - where a particle per firing would scale with
+	 * engine speed and outlive its own event at high RPM.
+	 *
+	 * <p>Full brightness and no diffuse shading, so it reads as light coming from
+	 * inside the cylinder rather than as a lump of orange appearing in it.
+	 */
+	private static void renderCombustionFlash(CylinderBlockEntity be, BlockState state, float partialTicks,
+		PoseStack ms, MultiBufferSource buffer) {
+		float intensity = be.getCombustionFlashIntensity(partialTicks);
+		if (intensity <= 0.0F)
+			return;
+
+		int alpha = Math.round(255.0F * intensity);
+		if (alpha <= 0)
+			return;
+
+		CachedBuffers.partial(ECPartialModels.COMBUSTION_FLASH, state)
+			.color(255, 255, 255, alpha)
+			.disableDiffuse()
+			.light(LightTexture.FULL_BRIGHT)
+			.renderInto(ms, buffer.getBuffer(RenderType.translucent()));
 	}
 }

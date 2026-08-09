@@ -4,22 +4,24 @@ import java.util.List;
 
 import org.jetbrains.annotations.Nullable;
 
-import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
-import com.simibubi.create.api.equipment.goggles.IHaveHoveringInformation;
 import com.simibubi.create.content.equipment.goggles.GogglesItem;
+import com.simibubi.create.content.kinetics.base.IRotate.StressImpact;
+import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
+import com.simibubi.create.infrastructure.config.AllConfigs;
 
+import dev.engineeredcombustion.client.sound.EngineSoundManager;
+import dev.engineeredcombustion.content.engine.EngineComponents;
+import dev.engineeredcombustion.content.engine.EngineInputs;
 import dev.engineeredcombustion.content.engine.EnginePhase;
+import dev.engineeredcombustion.content.engine.EngineState;
 import dev.engineeredcombustion.content.engine.EngineTuning;
 import dev.engineeredcombustion.content.engine.FuelSupply;
 import dev.engineeredcombustion.content.engine.LubricationState;
 import dev.engineeredcombustion.content.engine.OilSupply;
-import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
-import dev.engineeredcombustion.content.engine.EngineState;
-import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
-import dev.engineeredcombustion.client.sound.EngineSoundManager;
+import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECItems;
@@ -31,34 +33,36 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction.Axis;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.game.ClientGamePacketListener;
-import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.fluids.FluidStack;
 
 /**
- * Engine controller and host of the authoritative engine simulation.
+ * Engine controller, host of the authoritative engine simulation, and the
+ * kinetic relay that puts a working shaft output on <i>both</i> ends of the
+ * crankshaft.
  *
  * <p>Per tick, on both sides:
  * <ol>
- * <li>read the flywheel's <i>actual</i> Create kinetic speed;</li>
+ * <li>read the crankshaft's own <i>actual</i> Create kinetic speed;</li>
  * <li>advance the crank angle by exactly that much.</li>
  * </ol>
  * Additionally on the server:
  * <ol start="3">
- * <li>resolve the engine's components and read the redstone ignition signal;</li>
+ * <li>resolve the engine's components, the redstone ignition signal, the
+ * carburetor's throttle setting and the network's load;</li>
  * <li>run combustion, inertia and friction;</li>
  * <li>if - and only if - the speed the engine wants to generate changed, tell
  * the flywheel to push it into Create.</li>
@@ -67,16 +71,34 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * <p>Because step 1 and 2 use a value Create already synchronises, client and
  * server derive the same crank angle from the same input without this mod
  * sending a packet per tick. Everything visible (piston, flywheel disc, attached
- * shafts) therefore agrees by construction.
+ * shafts on either end) therefore agrees by construction.
  *
- * <p>Nothing in this class touches a Create kinetic network directly. That stays
- * in {@link EngineFlywheelBlockEntity}.
+ * <h2>Kinetics: one source, two shaft faces</h2>
+ * This block entity is a plain {@link KineticBlockEntity}. It never generates -
+ * {@code getGeneratedSpeed()} is inherited as 0 - and it carries neither stress
+ * impact nor stress capacity. The engine's single kinetic source is still
+ * {@link EngineFlywheelBlockEntity}, which is the only
+ * {@code GeneratingKineticBlockEntity} in the mod.
+ *
+ * <p>What being kinetic buys is connectivity. The crankshaft sits adjacent to
+ * the flywheel along a shared axis, so {@code RotationPropagator} treats the two
+ * as a 1:1 axis connection and puts them in one network at one speed; and
+ * because {@code CrankshaftBlock} now reports {@code hasShaftTowards} on both
+ * ends of that axis, a Shaft on the far side from the flywheel joins the very
+ * same network. Two faces, one source, one stress budget, no duplicated power.
  */
-public class CrankshaftBlockEntity extends BlockEntity
-	implements IHaveGoggleInformation, IHaveHoveringInformation {
+public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 	/** Crank-angle resync interval while turning, in ticks. */
 	private static final int RESYNC_INTERVAL = 200;
+
+	/**
+	 * The spark plug electrode, in the Cylinder block's own coordinates. Must
+	 * match {@code SPARK_PLUG_ELECTRODE} in {@code tools/generate_engine_models.py}
+	 * - it is the point that model puts the electrode tip at, and a spark that
+	 * misses it would be worse than no spark at all.
+	 */
+	private static final Vec3 SPARK_PLUG_ELECTRODE = new Vec3(13.2D / 16.0D, 13.75D / 16.0D, 8.0D / 16.0D);
 
 	private static final String KEY_CRANK_ANGLE = "CrankAngle";
 	private static final String KEY_PHASE = "Phase";
@@ -176,19 +198,30 @@ public class CrankshaftBlockEntity extends BlockEntity
 		super(ECBlockEntityTypes.CRANKSHAFT.get(), pos, state);
 	}
 
+	@Override
 	public void tick() {
+		// Create's own kinetic bookkeeping first: attaching to the network,
+		// periodic validation, and the stress plumbing. Everything below reads the
+		// speed that leaves behind.
+		super.tick();
 		if (level == null)
 			return;
 
-		EngineFlywheelBlockEntity flywheel = getFlywheel();
-		float mechanicalRpm = flywheel == null ? 0.0F : flywheel.getSpeed();
+		// The crankshaft's *own* kinetic speed, now that it is a real member of the
+		// network. Identical to the flywheel's while the two are coupled - they are
+		// a 1:1 axis connection - but this also stays correct when the engine is
+		// driven from a Shaft on the crankshaft's far side, and when there is no
+		// flywheel at all.
+		float mechanicalRpm = getSpeed();
 		engine.advanceCrankAngle(mechanicalRpm);
 
 		if (level.isClientSide) {
-			engine.updateClientPowerStroke();
-			tickAudio();
+			engine.updateClientVisuals();
+			tickEngineAudio();
 			return;
 		}
+
+		EngineFlywheelBlockEntity flywheel = getFlywheel();
 
 		// Resolved once per server tick and held only for the duration of that tick.
 		// The fuel and oil supplies read it, so combustion, fuel draw and lubrication
@@ -207,13 +240,16 @@ public class CrankshaftBlockEntity extends BlockEntity
 		int startProgressBefore = engine.getStartProgress();
 		boolean fuelBefore = engine.isFuelAvailable();
 		LubricationState lubricationBefore = engine.getLubrication();
-		boolean generatedSpeedChanged = engine.tickSimulation(tickComponents.isMechanicallyValid(),
-			redstoneSignal > 0, flywheel != null && flywheel.hasSource(), fuelSupply, oilSupply, random);
+
+		EngineInputs inputs = new EngineInputs(tickComponents.isMechanicallyValid(), redstoneSignal > 0,
+			flywheel != null && flywheel.hasSource(), readThrottle(), readLoadFactor(), speedLimit());
+		boolean generatedSpeedChanged = engine.tickSimulation(inputs, fuelSupply, oilSupply, random);
 
 		if (generatedSpeedChanged && flywheel != null)
 			// The one and only place engine state crosses into Create's world.
 			flywheel.onEngineOutputChanged();
 
+		emitCombustionEffects();
 		playTransitionSounds(phaseBefore, startProgressBefore);
 		updateIgnitionIndicator();
 
@@ -234,6 +270,15 @@ public class CrankshaftBlockEntity extends BlockEntity
 		// The snapshot is valid only for the tick that took it. Dropping it here is
 		// what guarantees no block entity reference is ever held across ticks.
 		tickComponents = null;
+	}
+
+	/**
+	 * The engine makes its own noise; Create's generic kinetic hum on top of it
+	 * would just muddy the loop this mod already manages.
+	 */
+	@Override
+	protected boolean isNoisy() {
+		return false;
 	}
 
 	/**
@@ -274,6 +319,78 @@ public class CrankshaftBlockEntity extends BlockEntity
 		if (flywheel != null && engine.getPublishedRpm() != 0.0F && !flywheel.hasSource()
 			&& flywheel.getTheoreticalSpeed() == 0.0F)
 			flywheel.onEngineOutputChanged();
+	}
+
+	// --- simulation inputs ---------------------------------------------------
+
+	/**
+	 * Main throttle opening, {@code [0, 1]}, taken from the Carburetor's scroll
+	 * value.
+	 *
+	 * <p>An engine with no Carburetor reads 0. That is not a special case worth
+	 * worrying about: no Carburetor also means no fuel, so such an engine cannot
+	 * run under its own power at any throttle.
+	 */
+	private float readThrottle() {
+		CarburetorBlockEntity carburetor = getCarburetor();
+		return carburetor == null ? 0.0F : carburetor.getThrottle();
+	}
+
+	/**
+	 * How hard the kinetic network is leaning on the engine, as stress over
+	 * capacity in {@code [0, 1]}.
+	 *
+	 * <p>Both figures come from Create's own network bookkeeping, pushed into
+	 * every member by {@code KineticNetwork#updateFromNetwork}. They each scale
+	 * with speed - Create multiplies the registered per-RPM values by the actual
+	 * speed - so the <i>ratio</i> is speed-independent and feeding it back into
+	 * the engine's drag cannot run away.
+	 *
+	 * <p>Zero while Create's stress system is switched off, so a server that
+	 * disables stress gets an engine that ignores load, which is the consistent
+	 * answer.
+	 */
+	private float readLoadFactor() {
+		if (!StressImpact.isEnabled() || !hasNetwork() || capacity <= 0.0F)
+			return 0.0F;
+		return Math.min(1.0F, stress / capacity);
+	}
+
+	/**
+	 * Highest speed this engine may run at or publish.
+	 *
+	 * <p>Read from Create's live server config rather than assumed: exceeding
+	 * {@code maxRotationSpeed} does not merely fail, it makes
+	 * {@code RotationPropagator} <i>destroy the block</i>. The config's default is
+	 * 256 but its minimum is 64, well below this engine's full-throttle target, so
+	 * a server that lowers it has to cap the engine rather than break it.
+	 */
+	private float speedLimit() {
+		return Math.min(EngineTuning.MAX_RPM, AllConfigs.server().kinetics.maxRotationSpeed.get());
+	}
+
+	// --- combustion feedback -------------------------------------------------
+
+	/**
+	 * Emits the visible spark at the plug when the coil actually fired.
+	 *
+	 * <p>Server-driven and event-driven: {@code EngineState} sets the flag on the
+	 * tick the firing angle is crossed with ignition live, and this consumes it,
+	 * so a spark corresponds one-to-one with a real ignition event and never to an
+	 * animation timer. One particle per firing - at full throttle that is 3.2 a
+	 * second, which is the whole cost of the effect.
+	 *
+	 * <p>The combustion <i>flash</i> is not sent from here. It is re-derived on
+	 * the client from the same authoritative crank angle - see
+	 * {@link EngineState#updateClientVisuals()} - so it costs no packets at all.
+	 */
+	private void emitCombustionEffects() {
+		if (!engine.consumeSparkEvent() || !(level instanceof ServerLevel serverLevel))
+			return;
+		BlockPos cylinderPos = EngineComponents.cylinderPos(worldPosition);
+		serverLevel.sendParticles(ParticleTypes.ELECTRIC_SPARK, cylinderPos.getX() + SPARK_PLUG_ELECTRODE.x,
+			cylinderPos.getY() + SPARK_PLUG_ELECTRODE.y, cylinderPos.getZ() + SPARK_PLUG_ELECTRODE.z, 1, 0.0D, 0.0D,
+			0.0D, 0.0D);
 	}
 
 	// --- audio --------------------------------------------------------------
@@ -318,9 +435,12 @@ public class CrankshaftBlockEntity extends BlockEntity
 	 * Keeps the crankcase indicator lamp in step with the ignition signal.
 	 *
 	 * <p>Only writes when the value actually differs, so a running engine is not
-	 * re-meshing its chunk every tick. {@code UPDATE_CLIENTS} alone is used
-	 * deliberately: this is a cosmetic property, and a full neighbour update would
-	 * make every ignition toggle ripple through the redstone graph for nothing.
+	 * re-meshing its chunk every tick. {@code UPDATE_CLIENTS | UPDATE_KNOWN_SHAPE}
+	 * is used deliberately: this is a cosmetic property, so a full neighbour
+	 * update would make every ignition toggle ripple through the redstone graph
+	 * for nothing, and skipping the shape update keeps it away from
+	 * {@code KineticBlock#updateIndirectNeighbourShapes} - which clears kinetic
+	 * information - now that this block is on a kinetic network.
 	 *
 	 * <p>Safe against the block's own teardown - {@code onRemove} only reacts when
 	 * the block itself changes, and this keeps the same block.
@@ -334,7 +454,8 @@ public class CrankshaftBlockEntity extends BlockEntity
 		boolean ignition = engine.isIgnitionEnabled();
 		if (state.getValue(CrankshaftBlock.LIT) == ignition)
 			return;
-		level.setBlock(worldPosition, state.setValue(CrankshaftBlock.LIT, ignition), Block.UPDATE_CLIENTS);
+		level.setBlock(worldPosition, state.setValue(CrankshaftBlock.LIT, ignition),
+			Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE);
 	}
 
 	private void playSound(SoundEvent event, float volume, float pitch) {
@@ -352,12 +473,15 @@ public class CrankshaftBlockEntity extends BlockEntity
 	 * nothing can accidentally load {@code Minecraft}. Create's steam whistle
 	 * handles its audio the same way.
 	 *
+	 * <p>Named apart from {@code KineticBlockEntity#tickAudio}, which is Create's
+	 * own generic kinetic ambience and is suppressed here by {@link #isNoisy()}.
+	 *
 	 * <p>Everything it needs is already synchronised - the phase travels in the
 	 * block entity's update tag, and the speed comes from Create's own kinetic
-	 * sync via the flywheel - so no packet exists purely for sound.
+	 * sync - so no packet exists purely for sound.
 	 */
 	@OnlyIn(Dist.CLIENT)
-	private void tickAudio() {
+	private void tickEngineAudio() {
 		if (level instanceof ClientLevel clientLevel)
 			EngineSoundManager.tick(clientLevel, worldPosition, engine.getPhase(), engine.getMechanicalRpm(),
 				engine.getLubrication());
@@ -403,7 +527,7 @@ public class CrankshaftBlockEntity extends BlockEntity
 	 * report "No Carburetor" while burning fuel from one.
 	 *
 	 * <p>Named {@code engineComponents} rather than {@code components} because
-	 * {@link BlockEntity#components()} already exists and returns a
+	 * {@code BlockEntity#components()} already exists and returns a
 	 * {@code DataComponentMap} - the plain name would be an override clash.
 	 */
 	public EngineComponents engineComponents() {
@@ -474,10 +598,14 @@ public class CrankshaftBlockEntity extends BlockEntity
 	}
 
 	// --- persistence & synchronisation -------------------------------------
+	//
+	// SmartBlockEntity makes saveAdditional/loadAdditional final and routes both
+	// through read/write, so those are the hooks now. The update tag and update
+	// packet come from SyncedBlockEntity for free.
 
 	@Override
-	protected void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {
-		super.loadAdditional(tag, registries);
+	protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
+		super.read(tag, registries, clientPacket);
 		// The crank angle is persisted deliberately: it is one float, and keeping it
 		// means a chunk reload does not visibly snap the piston to a new position.
 		engine.setCrankAngleDegrees(tag.getFloat(KEY_CRANK_ANGLE));
@@ -499,8 +627,8 @@ public class CrankshaftBlockEntity extends BlockEntity
 	}
 
 	@Override
-	public void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
-		super.saveAdditional(tag, registries);
+	protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
+		super.write(tag, registries, clientPacket);
 		tag.putFloat(KEY_CRANK_ANGLE, engine.getCrankAngleDegrees());
 		tag.putString(KEY_PHASE, engine.getPhase()
 			.getId());
@@ -517,21 +645,8 @@ public class CrankshaftBlockEntity extends BlockEntity
 		tag.putInt(KEY_OIL_WEAR, engine.getCombustionEventsSinceOilDraw());
 	}
 
-	@Override
-	public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
-		return saveWithoutMetadata(registries);
-	}
-
-	@Nullable
-	@Override
-	public Packet<ClientGamePacketListener> getUpdatePacket() {
-		return ClientboundBlockEntityDataPacket.create(this);
-	}
-
 	private void sync() {
-		setChanged();
-		if (level != null && !level.isClientSide)
-			level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
+		notifyUpdate();
 	}
 
 	// --- goggle overlay -----------------------------------------------------
@@ -543,6 +658,10 @@ public class CrankshaftBlockEntity extends BlockEntity
 	 *
 	 * <p>Normal goggles show gameplay state. Sneaking adds the diagnostics that
 	 * used to clutter the overlay permanently.
+	 *
+	 * <p>{@code KineticBlockEntity}'s own stress block is deliberately not called:
+	 * the crankshaft is a relay with no impact and no capacity, so it would print
+	 * nothing, and the engine's real generator stats belong to the Flywheel.
 	 */
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
@@ -581,6 +700,7 @@ public class CrankshaftBlockEntity extends BlockEntity
 		// makes. If combustion can draw from a Carburetor, these lines describe that
 		// same Carburetor - they cannot disagree.
 		EngineComponents components = engineComponents();
+		addThrottleLine(tooltip, components.carburetor());
 		addFuelLines(tooltip, components.carburetor());
 		addLubricationLines(tooltip, components.oilSump());
 
@@ -598,6 +718,22 @@ public class CrankshaftBlockEntity extends BlockEntity
 		if (isPlayerSneaking)
 			addDiagnostics(tooltip);
 		return true;
+	}
+
+	/**
+	 * Throttle, read straight off the Carburetor so it is the same number the
+	 * simulation used and the same number the lever on the model is showing.
+	 * Skipped entirely when there is no Carburetor - a throttle reading for a
+	 * control that is not installed would be noise.
+	 */
+	private void addThrottleLine(List<Component> tooltip, @Nullable CarburetorBlockEntity carburetor) {
+		if (carburetor == null)
+			return;
+		ECLang.translate("gui.throttle", ECLang.number(carburetor.getThrottlePercent())
+			.style(ChatFormatting.AQUA)
+			.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
 	}
 
 	/**
@@ -712,8 +848,20 @@ public class CrankshaftBlockEntity extends BlockEntity
 			.style(ChatFormatting.AQUA));
 		diagnostic(tooltip, "simulated_rpm", ECLang.number(engine.getSimulatedRpm())
 			.style(ChatFormatting.AQUA));
+		// Derived from the Carburetor rather than from the simulation's own copy of
+		// the throttle: that copy is only ever written on the server, so reading it
+		// here - the overlay is client-side - would always have printed idle. The
+		// Carburetor's value is synchronised because Create's scroll behaviour
+		// synchronises it, so this is the same number the engine is actually using.
+		CarburetorBlockEntity carburetor = engineComponents().carburetor();
+		float throttle = carburetor == null ? 0.0F : carburetor.getThrottle();
+		diagnostic(tooltip, "target_rpm", ECLang.number(EngineTuning.targetRpmForThrottle(throttle))
+			.style(ChatFormatting.AQUA));
 		diagnostic(tooltip, "generated_rpm", ECLang.number(engine.getPublishedRpm())
 			.style(ChatFormatting.AQUA));
+		// Network load is deliberately absent. Create already reports stress on the
+		// Flywheel, which is this engine's generator, and repeating it here would be
+		// the HUD clutter this overlay keeps out of the way behind sneak.
 	}
 
 	private static void diagnostic(List<Component> tooltip, String key, LangBuilder value) {
@@ -743,9 +891,10 @@ public class CrankshaftBlockEntity extends BlockEntity
 	 *
 	 * <p>Deliberately only what a person could work out by standing next to a
 	 * running engine: whether it is turning, whether it caught, whether it sounds
-	 * healthy, and whether the ignition is switched on. No speeds, no quantities,
-	 * no counters - those are what the Engineer's Goggles are <i>for</i>, and
-	 * handing them out for free would make the goggles pointless.
+	 * healthy, whether the ignition is switched on, and roughly where the throttle
+	 * lever is sitting. No speeds, no quantities, no counters, and no exact
+	 * throttle percentage - those are what the Engineer's Goggles are <i>for</i>,
+	 * and handing them out for free would make the goggles pointless.
 	 *
 	 * <p>Returns false while goggles are worn. Create's overlay renderer calls this
 	 * for every player and appends the result <i>after</i> the goggle tooltip, so
@@ -780,6 +929,15 @@ public class CrankshaftBlockEntity extends BlockEntity
 				.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
+
+		CarburetorBlockEntity carburetor = engineComponents().carburetor();
+		if (carburetor != null)
+			ECLang.translate("gui.throttle_state",
+				ECLang.translate(observedThrottleKey(carburetor.getThrottlePercent()))
+					.style(ChatFormatting.WHITE)
+					.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
 		return true;
 	}
 
@@ -801,5 +959,16 @@ public class CrankshaftBlockEntity extends BlockEntity
 			case CRANKING -> "gui.observed.cranking";
 			case STOPPED -> "gui.observed.stopped";
 		};
+	}
+
+	/**
+	 * Throttle as something you could tell by glancing at the lever: three
+	 * positions, not a number. The exact percentage stays a goggle reading and a
+	 * value-box reading.
+	 */
+	private static String observedThrottleKey(int throttlePercent) {
+		if (throttlePercent <= 15)
+			return "gui.observed.throttle_low";
+		return throttlePercent >= 70 ? "gui.observed.throttle_high" : "gui.observed.throttle_medium";
 	}
 }

@@ -10,11 +10,11 @@ package dev.engineeredcombustion.content.engine;
  * <h2>Two speeds, on purpose</h2>
  * <dl>
  * <dt>{@link #getMechanicalRpm() mechanical RPM}</dt>
- * <dd>What Create says the flywheel is <i>actually</i> doing right now. This is
- * the only input to the crank angle, which is why the crankshaft, the piston,
- * the flywheel disc and every attached Create shaft can never visually
- * disagree - they all ultimately come from this one number, on both client and
- * server.</dd>
+ * <dd>What Create says the crankshaft is <i>actually</i> doing right now. This
+ * is the only input to the crank angle, which is why the crankshaft, the piston,
+ * the flywheel disc and every attached Create shaft - on either end - can never
+ * visually disagree; they all ultimately come from this one number, on both
+ * client and server.</dd>
  * <dt>{@link #getSimulatedRpm() simulated RPM}</dt>
  * <dd>The engine's own angular velocity, integrated from combustion torque,
  * friction and flywheel inertia. It ripples within each revolution, as a
@@ -24,6 +24,12 @@ package dev.engineeredcombustion.content.engine;
  * While something else is turning the engine, simulated RPM simply follows
  * mechanical RPM. Once combustion starts, the simulation takes over and its
  * published output is what makes Create hand the kinetic source to us.
+ *
+ * <h2>Throttle</h2>
+ * The throttle never writes a speed. It scales the torque a combustion event is
+ * worth and moves the governor band with it, so the engine has to accelerate to
+ * its new equilibrium through the same inertia it always had - see
+ * {@code integrate()} and {@link EngineTuning#peakCombustionTorqueFor(float)}.
  *
  * <h2>Crank angle</h2>
  * {@link #getCrankAngleDegrees()} stays in {@code [0, 360)} and is the single
@@ -46,6 +52,20 @@ public final class EngineState {
 	private boolean ignitionEnabled;
 	private boolean externallyDriven;
 
+	/** Main throttle opening, {@code [0, 1]}. Re-read from the carburetor each tick. */
+	private float throttle;
+	/** Network stress over capacity on the last simulated tick, {@code [0, 1]}. */
+	private float loadFactor;
+	/** Highest speed this engine may reach, reconciled with Create's config. */
+	private float speedLimitRpm = EngineTuning.MAX_RPM;
+	/**
+	 * Speed the throttle is asking for, already capped by {@link #speedLimitRpm}.
+	 * Held rather than recomputed so the governor and the clamp cannot disagree on
+	 * a server that has lowered Create's {@code maxRotationSpeed} below the
+	 * engine's full-throttle target.
+	 */
+	private float targetRpm = EngineTuning.IDLE_RPM;
+
 	// --- combustion ---------------------------------------------------------
 	private boolean firedThisRevolution;
 	private boolean powerStrokeActive;
@@ -53,6 +73,19 @@ public final class EngineState {
 	private float powerStrokeStrength;
 	private int ticksSinceCombustion = -1;
 	private boolean fuelAvailable;
+
+	/**
+	 * Set for exactly one server tick when the ignition coil actually fired, and
+	 * consumed by the block entity that emits the spark. Never persisted: a spark
+	 * is an event, not a state.
+	 */
+	private boolean sparkEvent;
+
+	/**
+	 * Ticks left on the visible flash inside the combustion chamber. Maintained
+	 * on both sides - see {@link #updateClientVisuals()}.
+	 */
+	private int combustionFlashTicks;
 
 	// --- lubrication --------------------------------------------------------
 	private LubricationState lubrication = LubricationState.DRY;
@@ -91,12 +124,46 @@ public final class EngineState {
 	}
 
 	/**
-	 * Client-side approximation of the power stroke, derived purely from the
-	 * synced phase and the locally advanced crank angle, so it costs no packets.
+	 * Rebuilds the purely visual side of the engine on the client.
+	 *
+	 * <p>Both the power stroke and the combustion flash are re-derived here from
+	 * the crank angle the client just advanced plus the simulation state the
+	 * server already synchronises (phase, ignition, structure, fuel). That is the
+	 * same rule the server ran, applied to the same authoritative crank angle -
+	 * not a cosmetic timer of its own - so the flash lands on the real firing
+	 * event without this mod sending a packet per revolution. At 192 RPM that
+	 * saves about three block-entity updates a second per engine, which is
+	 * exactly the traffic the rest of this design exists to avoid.
+	 *
+	 * <p>The one thing the client cannot know is whether the server's fuel draw
+	 * <i>succeeded</i>; it only knows fuel was available as of the last sync. The
+	 * two can therefore disagree for a single revolution at the moment a tank
+	 * runs dry, and that is the only divergence by construction.
+	 *
+	 * <p>The spark at the plug is not derived here. It is emitted by the server
+	 * from the real ignition event, because a coil firing while the engine
+	 * refuses to catch is precisely the case a player is trying to diagnose.
 	 */
-	public void updateClientPowerStroke() {
+	public void updateClientVisuals() {
 		powerStrokeActive = (phase == EnginePhase.RUNNING || phase == EnginePhase.STARTING)
 			&& isWithinPowerStroke();
+
+		if (crossedFiringAngle() && combustionConditionsMet(mechanicalRpm))
+			combustionFlashTicks = EngineTuning.COMBUSTION_FLASH_TICKS;
+		else if (combustionFlashTicks > 0)
+			combustionFlashTicks--;
+	}
+
+	/**
+	 * Whether a firing at this instant would produce a real burn.
+	 *
+	 * <p>Written once and used from both sides so the client's flash and the
+	 * server's combustion cannot drift apart through two copies of the rule.
+	 */
+	private boolean combustionConditionsMet(float speed) {
+		float required = phase == EnginePhase.RUNNING ? EngineTuning.STALL_RPM : EngineTuning.START_RPM;
+		return structureValid && ignitionEnabled && fuelAvailable && lastAngleDeltaDegrees > 0.0F
+			&& Math.abs(speed) >= required;
 	}
 
 	// ------------------------------------------------------------------------
@@ -107,17 +174,19 @@ public final class EngineState {
 	 * Runs combustion, inertia and friction for one tick and decides what Create
 	 * should be told.
 	 *
-	 * @param externallyDriven whether Create currently gives the flywheel a source
-	 *                         other than the engine itself
 	 * @return true when {@link #getPublishedRpm()} changed and Create's generated
 	 *         rotation therefore has to be updated
 	 */
-	public boolean tickSimulation(boolean structureValid, boolean ignitionEnabled, boolean externallyDriven,
-		FuelSupply fuel, OilSupply oil, java.util.Random random) {
-		this.structureValid = structureValid;
-		this.ignitionEnabled = ignitionEnabled;
-		this.externallyDriven = externallyDriven;
+	public boolean tickSimulation(EngineInputs inputs, FuelSupply fuel, OilSupply oil, java.util.Random random) {
+		this.structureValid = inputs.structureValid();
+		this.ignitionEnabled = inputs.ignitionEnabled();
+		this.externallyDriven = inputs.externallyDriven();
+		this.throttle = inputs.throttle();
+		this.loadFactor = inputs.loadFactor();
+		this.speedLimitRpm = inputs.speedLimitRpm();
+		this.targetRpm = inputs.targetRpm();
 		this.fuelAvailable = fuel.hasFuel();
+		boolean externallyDriven = this.externallyDriven;
 		// Read every tick: the sump can be filled or drained by a pipe at any time,
 		// and lubrication has to take effect immediately rather than at some
 		// revalidation interval.
@@ -140,8 +209,19 @@ public final class EngineState {
 		// Forward rotation only. Cranking the engine backwards never ignites it.
 		boolean mayIgnite = combustionPossible && lastAngleDeltaDegrees > 0.0F && simulatedRpm >= requiredRpm;
 
+		boolean firingAngleCrossed = crossedFiringAngle();
+
+		// The coil is wired to the crank, not to the fuel system. It fires whenever
+		// the ignition is on and the engine is turning forwards fast enough for a
+		// firing opportunity - whether or not there is any gasoline to light. That
+		// is the mechanically honest model, and it is the useful one: a plug that
+		// visibly sparks while the engine refuses to catch tells the player the
+		// problem is fuel, and a plug that stays dark tells them it is ignition.
+		sparkEvent = firingAngleCrossed && structureValid && ignitionEnabled && lastAngleDeltaDegrees > 0.0F
+			&& simulatedRpm >= requiredRpm;
+
 		boolean ignitedThisTick = false;
-		if (crossedFiringAngle()) {
+		if (firingAngleCrossed) {
 			// Fuel is drawn per firing event, never per tick, and only if the whole
 			// charge is actually available - a partial draw must not produce power.
 			if (mayIgnite && fuel.consume(EngineTuning.FUEL_PER_COMBUSTION_MB)) {
@@ -159,6 +239,14 @@ public final class EngineState {
 				firedThisRevolution = false;
 			}
 		}
+
+		// Only a charge that was actually paid for and burned lights the chamber.
+		// Sparking without fuel therefore gives a spark and no flash, which is
+		// exactly what the player should see.
+		if (ignitedThisTick)
+			combustionFlashTicks = EngineTuning.COMBUSTION_FLASH_TICKS;
+		else if (combustionFlashTicks > 0)
+			combustionFlashTicks--;
 
 		// The crank must actually be turning forwards for a power stroke to push.
 		// firedThisRevolution only changes when the firing angle is crossed, so on a
@@ -239,13 +327,28 @@ public final class EngineState {
 		powerStrokeActive = false;
 	}
 
-	/** netTorque -> angular acceleration -> angular velocity. */
+	/**
+	 * netTorque -&gt; angular acceleration -&gt; angular velocity.
+	 *
+	 * <p>The throttle appears here and nowhere else. It does not set a speed: it
+	 * chooses how much torque a combustion event is worth
+	 * ({@link EngineTuning#peakCombustionTorqueFor}) and where the governor
+	 * starts taking that torque away again. Everything the player sees - spinning
+	 * up over seconds, overshooting slightly, sagging under load, coasting back
+	 * down when the throttle closes - falls out of integrating that torque
+	 * against friction and flywheel inertia, exactly as it did before the
+	 * throttle existed.
+	 */
 	private void integrate() {
-		float netTorque =
-			powerStrokeActive ? EngineTuning.combustionTorqueAt(simulatedRpm) * powerStrokeStrength : 0.0F;
+		float netTorque = powerStrokeActive
+			? EngineTuning.combustionTorqueAt(simulatedRpm, targetRpm) * powerStrokeStrength
+			: 0.0F;
 		// Friction always opposes the current direction of rotation, and is exactly
-		// zero at rest so it can never push a stationary engine into motion.
-		netTorque -= Math.signum(simulatedRpm) * EngineTuning.frictionTorqueAt(simulatedRpm, lubrication);
+		// zero at rest so it can never push a stationary engine into motion. The
+		// kinetic load Create has hung on the engine is drag of the same kind.
+		float drag = EngineTuning.frictionTorqueAt(simulatedRpm, lubrication)
+			+ EngineTuning.loadDragTorque(loadFactor);
+		netTorque -= Math.signum(simulatedRpm) * drag;
 
 		float next = simulatedRpm + netTorque / EngineTuning.FLYWHEEL_INERTIA;
 
@@ -253,7 +356,7 @@ public final class EngineState {
 		if (!powerStrokeActive && simulatedRpm != 0.0F && Math.signum(next) != Math.signum(simulatedRpm))
 			next = 0.0F;
 
-		simulatedRpm = clamp(next, -EngineTuning.MAX_RPM, EngineTuning.MAX_RPM);
+		simulatedRpm = clamp(next, -speedLimitRpm, speedLimitRpm);
 	}
 
 	private void advancePhase(boolean combustionPossible, boolean ignitedThisTick) {
@@ -372,7 +475,10 @@ public final class EngineState {
 		}
 
 		float quantised = Math.round(target / EngineTuning.NETWORK_RPM_QUANTUM) * EngineTuning.NETWORK_RPM_QUANTUM;
-		quantised = clamp(quantised, EngineTuning.NETWORK_RPM_QUANTUM, EngineTuning.MAX_RPM);
+		// The upper bound is the *runtime* limit, not the tuning constant: Create's
+		// maxRotationSpeed is a server config and going past it makes
+		// RotationPropagator destroy the block rather than merely refuse the speed.
+		quantised = clamp(quantised, EngineTuning.NETWORK_RPM_QUANTUM, speedLimitRpm);
 		if (quantised == publishedRpm)
 			return false;
 
@@ -416,6 +522,51 @@ public final class EngineState {
 
 	public boolean isPowerStrokeActive() {
 		return powerStrokeActive;
+	}
+
+	/** Main throttle opening on the last simulated tick, {@code [0, 1]}. */
+	public float getThrottle() {
+		return throttle;
+	}
+
+	/** Speed the current throttle setting is asking the engine to hold. */
+	public float getTargetRpm() {
+		return targetRpm;
+	}
+
+	/** Network stress over capacity on the last simulated tick, {@code [0, 1]}. */
+	public float getLoadFactor() {
+		return loadFactor;
+	}
+
+	/**
+	 * Takes the pending spark, if there is one. Server side only, and consuming
+	 * on read is deliberate: a spark must be emitted exactly once.
+	 */
+	public boolean consumeSparkEvent() {
+		boolean spark = sparkEvent;
+		sparkEvent = false;
+		return spark;
+	}
+
+	/** Whether the combustion chamber should be drawn lit this frame. */
+	public boolean isCombustionFlashActive() {
+		return combustionFlashTicks > 0;
+	}
+
+	/**
+	 * Flash brightness, 1 on the tick it fired and fading to 0.
+	 *
+	 * @param partialTicks interpolation into the current frame, so the fade is
+	 *                     smooth rather than stepping once per tick
+	 */
+	public float getCombustionFlashIntensity(float partialTicks) {
+		if (combustionFlashTicks <= 0)
+			return 0.0F;
+		float remaining = combustionFlashTicks - partialTicks;
+		if (remaining <= 0.0F)
+			return 0.0F;
+		return remaining / EngineTuning.COMBUSTION_FLASH_TICKS;
 	}
 
 	/** Firing opportunities banked so far in the current start attempt. */
