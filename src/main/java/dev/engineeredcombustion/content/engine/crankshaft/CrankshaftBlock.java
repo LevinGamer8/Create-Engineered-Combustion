@@ -21,6 +21,7 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.level.block.state.properties.EnumProperty;
 import net.minecraft.world.phys.BlockHitResult;
 
@@ -39,21 +40,35 @@ public class CrankshaftBlock extends Block implements EntityBlock {
 
 	public static final EnumProperty<Axis> HORIZONTAL_AXIS = BlockStateProperties.HORIZONTAL_AXIS;
 
+	/**
+	 * Whether the ignition indicator lamp on the crankcase is glowing.
+	 *
+	 * <p>Purely cosmetic - nothing reads it back, the simulation still takes
+	 * ignition from the live redstone signal. It exists so that a player without
+	 * Engineer's Goggles can see at a glance that the engine is switched on, which
+	 * is exactly the kind of thing a real machine tells you by looking at it. Kept
+	 * as a block state rather than a renderer so it costs nothing to draw and works
+	 * on any rendering backend.
+	 */
+	public static final BooleanProperty LIT = BlockStateProperties.LIT;
+
 	public CrankshaftBlock(Properties properties) {
 		super(properties);
-		registerDefaultState(defaultBlockState().setValue(HORIZONTAL_AXIS, Axis.X));
+		registerDefaultState(defaultBlockState().setValue(HORIZONTAL_AXIS, Axis.X)
+			.setValue(LIT, false));
 	}
 
 	@Override
 	protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
-		builder.add(HORIZONTAL_AXIS);
+		builder.add(HORIZONTAL_AXIS, LIT);
 		super.createBlockStateDefinition(builder);
 	}
 
 	@Override
 	public BlockState getStateForPlacement(BlockPlaceContext context) {
 		return defaultBlockState().setValue(HORIZONTAL_AXIS, context.getHorizontalDirection()
-			.getAxis());
+			.getAxis())
+			.setValue(LIT, false);
 	}
 
 	@Override
@@ -105,13 +120,9 @@ public class CrankshaftBlock extends Block implements EntityBlock {
 		super.onRemove(state, level, pos, newState, movedByPiston);
 	}
 
-	@Override
-	protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
-		BlockHitResult hitResult) {
-		if (!(level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft))
-			return InteractionResult.PASS;
-		if (!level.isClientSide)
-			crankshaft.sendDebugReport(player);
-		return InteractionResult.sidedSuccess(level.isClientSide);
-	}
+	// Deliberately no useWithoutItem override. Right-clicking the crankshaft used to
+	// print the engine's internal simulation values into chat; that was development
+	// output and is gone. The engine's state is read by looking at it - plain
+	// hovering information for anyone, full instrumentation through Engineer's
+	// Goggles - so bare-handed clicking now correctly does nothing at all.
 }

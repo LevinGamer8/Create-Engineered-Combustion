@@ -21,9 +21,14 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity> {
 
 	/**
-	 * Piston travel inside the cylinder model, in 1/16 block units. The cylinder
-	 * model is an open cage from y=2 to y=14; the piston model is 4 units tall, so
-	 * it can travel between y=2 (bottom dead centre) and y=10 (top dead centre).
+	 * Piston travel inside the cylinder model, in 1/16 block units. The cylinder's
+	 * bore runs between its flanges at y=2 and y=14, so the piston's origin travels
+	 * from y=2 (bottom dead centre) to y=10 (top dead centre).
+	 *
+	 * <p>Unchanged by the model quality pass: the piston model grew downwards to
+	 * add a wrist-pin boss and the top of the connecting rod, which extend to
+	 * y=-2 in model space and therefore stay inside the block at both extremes,
+	 * but the travel itself is exactly as before.
 	 */
 	private static final float BOTTOM_DEAD_CENTRE = 2.0F / 16.0F;
 	private static final float STROKE = 8.0F / 16.0F;

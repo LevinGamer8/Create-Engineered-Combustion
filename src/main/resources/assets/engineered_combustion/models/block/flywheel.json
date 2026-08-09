@@ -2,7 +2,8 @@
   "parent": "block/block",
   "textures": {
     "particle": "engineered_combustion:block/flywheel",
-    "0": "engineered_combustion:block/flywheel"
+    "fly": "engineered_combustion:block/flywheel",
+    "steel": "engineered_combustion:block/crank_steel"
   },
   "elements": [
     {
@@ -18,91 +19,88 @@
       ],
       "faces": {
         "north": {
-          "texture": "#0"
+          "texture": "#steel"
         },
         "east": {
-          "texture": "#0"
+          "texture": "#steel"
         },
         "south": {
-          "texture": "#0"
+          "texture": "#steel"
         },
         "west": {
-          "texture": "#0"
+          "texture": "#steel"
         },
         "up": {
-          "texture": "#0"
+          "texture": "#steel"
         },
         "down": {
-          "texture": "#0"
+          "texture": "#steel"
         }
-      },
-      "shade": true
+      }
     },
     {
       "from": [
-        5,
-        4,
-        4
+        4.5,
+        4.5,
+        4.5
       ],
       "to": [
         6,
-        12,
-        12
+        11.5,
+        11.5
       ],
       "faces": {
         "north": {
-          "texture": "#0"
+          "texture": "#fly"
         },
         "east": {
-          "texture": "#0"
+          "texture": "#fly"
         },
         "south": {
-          "texture": "#0"
+          "texture": "#fly"
         },
         "west": {
-          "texture": "#0"
+          "texture": "#fly"
         },
         "up": {
-          "texture": "#0"
+          "texture": "#fly"
         },
         "down": {
-          "texture": "#0"
+          "texture": "#fly"
         }
-      },
-      "shade": true
+      }
     },
     {
       "from": [
         10,
-        4,
-        4
+        4.5,
+        4.5
       ],
       "to": [
-        11,
-        12,
-        12
+        11.5,
+        11.5,
+        11.5
       ],
       "faces": {
         "north": {
-          "texture": "#0"
+          "texture": "#fly"
         },
         "east": {
-          "texture": "#0"
+          "texture": "#fly"
         },
         "south": {
-          "texture": "#0"
+          "texture": "#fly"
         },
         "west": {
-          "texture": "#0"
+          "texture": "#fly"
         },
         "up": {
-          "texture": "#0"
+          "texture": "#fly"
         },
         "down": {
-          "texture": "#0"
+          "texture": "#fly"
         }
-      },
-      "shade": true
+      }
     }
   ]
 }

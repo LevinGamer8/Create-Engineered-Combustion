@@ -18,6 +18,13 @@ public class ECPartialModels {
 	public static final PartialModel PISTON_HEAD = block("piston_head");
 
 	/**
+	 * The rotating crank throw - counterweights and crank pin - inside the open
+	 * crankcase. Two variants for the two crankshaft axes, as with the flywheel.
+	 */
+	public static final PartialModel CRANK_THROW_X = block("crank_throw_x");
+	public static final PartialModel CRANK_THROW_Z = block("crank_throw_z");
+
+	/**
 	 * The spinning flywheel disc. Two variants instead of one plus a 90 degree
 	 * buffer rotation: composing two rotations on a SuperByteBuffer is easy to get
 	 * subtly wrong, and two tiny model files are not worth the risk.

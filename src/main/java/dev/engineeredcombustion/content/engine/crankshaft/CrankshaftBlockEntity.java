@@ -5,6 +5,8 @@ import java.util.List;
 import org.jetbrains.annotations.Nullable;
 
 import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
+import com.simibubi.create.api.equipment.goggles.IHaveHoveringInformation;
+import com.simibubi.create.content.equipment.goggles.GogglesItem;
 
 import dev.engineeredcombustion.content.engine.EnginePhase;
 import dev.engineeredcombustion.content.engine.EngineTuning;
@@ -24,6 +26,7 @@ import dev.engineeredcombustion.registry.ECItems;
 import dev.engineeredcombustion.registry.ECSounds;
 import net.createmod.catnip.lang.LangBuilder;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction.Axis;
@@ -69,7 +72,8 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * <p>Nothing in this class touches a Create kinetic network directly. That stays
  * in {@link EngineFlywheelBlockEntity}.
  */
-public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInformation {
+public class CrankshaftBlockEntity extends BlockEntity
+	implements IHaveGoggleInformation, IHaveHoveringInformation {
 
 	/** Crank-angle resync interval while turning, in ticks. */
 	private static final int RESYNC_INTERVAL = 200;
@@ -98,7 +102,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 
 	/**
 	 * Strongest redstone signal reaching the crankshaft, 0-15. Server-authoritative,
-	 * synchronised to the client purely so the debug readout can show it - the
+	 * synchronised to the client purely so the sneak diagnostics can show it - the
 	 * goggle overlay runs client-side and has no other way to know.
 	 */
 	private int redstoneSignal;
@@ -211,6 +215,7 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 			flywheel.onEngineOutputChanged();
 
 		playTransitionSounds(phaseBefore, startProgressBefore);
+		updateIgnitionIndicator();
 
 		// Anything the client displays has to trigger a block update, not just the
 		// things that change the engine's rotation. Toggling redstone on a stopped
@@ -307,6 +312,29 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 			playSound(wantedToRun ? ECSounds.ENGINE_STALL.get() : ECSounds.ENGINE_STOP.get(),
 				wantedToRun ? EngineTuning.SOUND_STALL_VOLUME : EngineTuning.SOUND_STOP_VOLUME, 1.0F);
 		}
+	}
+
+	/**
+	 * Keeps the crankcase indicator lamp in step with the ignition signal.
+	 *
+	 * <p>Only writes when the value actually differs, so a running engine is not
+	 * re-meshing its chunk every tick. {@code UPDATE_CLIENTS} alone is used
+	 * deliberately: this is a cosmetic property, and a full neighbour update would
+	 * make every ignition toggle ripple through the redstone graph for nothing.
+	 *
+	 * <p>Safe against the block's own teardown - {@code onRemove} only reacts when
+	 * the block itself changes, and this keeps the same block.
+	 */
+	private void updateIgnitionIndicator() {
+		if (level == null || level.isClientSide)
+			return;
+		BlockState state = getBlockState();
+		if (!state.hasProperty(CrankshaftBlock.LIT))
+			return;
+		boolean ignition = engine.isIgnitionEnabled();
+		if (state.getValue(CrankshaftBlock.LIT) == ignition)
+			return;
+		level.setBlock(worldPosition, state.setValue(CrankshaftBlock.LIT, ignition), Block.UPDATE_CLIENTS);
 	}
 
 	private void playSound(SoundEvent event, float volume, float pitch) {
@@ -708,16 +736,70 @@ public class CrankshaftBlockEntity extends BlockEntity implements IHaveGoggleInf
 		return new ItemStack(ECItems.CRANKSHAFT.get());
 	}
 
-	/** Chat report for the right-click debug path; plain text, works server-side. */
-	public void sendDebugReport(Player player) {
-		player.displayClientMessage(ECLang.translate("gui.engine")
-			.style(ChatFormatting.GOLD)
-			.component(), false);
-		player.displayClientMessage(Component.literal(String.format(
-			"phase=%s  mech=%.1f  sim=%.1f  gen=%.1f  angle=%.1f  redstone=%d  fuel=%s  start=%d/%d",
-			engine.getPhase(), engine.getMechanicalRpm(), engine.getSimulatedRpm(), engine.getPublishedRpm(),
-			engine.getCrankAngleDegrees(), redstoneSignal, engine.isFuelAvailable(), engine.getStartProgress(),
-			engine.getRequiredStartCycles()))
-			.withStyle(ChatFormatting.GRAY), false);
+	// --- hovering overlay, without goggles ----------------------------------
+
+	/**
+	 * What anyone can see by looking at the engine, goggles or not.
+	 *
+	 * <p>Deliberately only what a person could work out by standing next to a
+	 * running engine: whether it is turning, whether it caught, whether it sounds
+	 * healthy, and whether the ignition is switched on. No speeds, no quantities,
+	 * no counters - those are what the Engineer's Goggles are <i>for</i>, and
+	 * handing them out for free would make the goggles pointless.
+	 *
+	 * <p>Returns false while goggles are worn. Create's overlay renderer calls this
+	 * for every player and appends the result <i>after</i> the goggle tooltip, so
+	 * without that check a goggle wearer would read the engine's state twice. The
+	 * renderer also removes the separator it had already inserted when this returns
+	 * false, so declining costs nothing.
+	 *
+	 * <p>Reaching for the client player here follows Create's own precedent -
+	 * {@code KineticBlockEntity#addToTooltip} uses client-only types too. This is
+	 * only ever invoked from the overlay renderer, which is client-side by
+	 * definition.
+	 */
+	@Override
+	public boolean addToTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
+		Player player = Minecraft.getInstance().player;
+		if (player == null || GogglesItem.isWearingGoggles(player))
+			return false;
+
+		ECLang.translate("gui.engine")
+			.style(ChatFormatting.WHITE)
+			.forGoggles(tooltip);
+
+		EnginePhase phase = engine.getPhase();
+		ECLang.translate(observedStateKey(phase))
+			.style(phaseColor(phase))
+			.forGoggles(tooltip, 1);
+
+		boolean ignition = engine.isIgnitionEnabled();
+		ECLang.translate("gui.ignition",
+			ECLang.translate(ignition ? "gui.value.enabled" : "gui.value.disabled")
+				.style(ignition ? ChatFormatting.GREEN : ChatFormatting.RED)
+				.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+		return true;
+	}
+
+	/**
+	 * A plain-language description of what the engine is audibly and visibly doing.
+	 *
+	 * <p>Every branch is derived from real simulation state, never guessed. A
+	 * running engine is described as rough exactly when lubrication is actually
+	 * degraded - which is also when it actually sounds rough - and as stalling
+	 * exactly when it has lost combustion and is coasting down.
+	 */
+	private String observedStateKey(EnginePhase phase) {
+		return switch (phase) {
+			case RUNNING -> engine.getLubrication() == LubricationState.NORMAL
+				? "gui.observed.running_smoothly"
+				: "gui.observed.running_rough";
+			case COASTING -> "gui.observed.stalling";
+			case STARTING -> "gui.observed.starting";
+			case CRANKING -> "gui.observed.cranking";
+			case STOPPED -> "gui.observed.stopped";
+		};
 	}
 }
