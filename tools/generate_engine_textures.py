@@ -1,10 +1,24 @@
 #!/usr/bin/env python3
-"""Generates the 32x32 engine texture set for Create: Engineered Combustion.
+"""Generates every texture for Create: Engineered Combustion.
+
+Three sets live here, at the resolution each one belongs at:
+
+* the 32x32 block set for the engine castings - two texels per model unit, so
+  the world-aligned UVs the model generator emits land on texel boundaries;
+* the 16x16 animated fluid sprites for gasoline and engine oil, plus the
+  ``.mcmeta`` files that drive them. Fluid sprites have to be 16 wide: the
+  fluid renderer, Create's tanks and the carburetor's sight window all sample
+  them at block scale next to vanilla water;
+* the 16x16 bucket items, drawn on vanilla's own bucket silhouette so a
+  Gasoline Bucket sits in the hotbar next to a Water Bucket without looking
+  like it came from a different game.
 
 Pure stdlib (zlib + struct) PNG writer - no Pillow in this environment.
 Every texture is deterministic: the noise uses a fixed-seed LCG so re-running
 the script produces byte-identical output.
 """
+import json
+import math
 import os
 import pathlib
 import struct
@@ -12,7 +26,8 @@ import zlib
 
 OUT = str(pathlib.Path(__file__).resolve().parents[1]
            / "src/main/resources/assets/engineered_combustion/textures")
-S = 32  # texture size; 2 texels per model unit
+S = 32  # block texture size; 2 texels per model unit
+ITEM = 16  # item and fluid sprite size; one texel per vanilla texel
 
 
 # --------------------------------------------------------------------------
@@ -53,8 +68,9 @@ def write_png(path, pixels):
         f.write(png)
 
 
-def blank(color=(0, 0, 0, 0)):
-    return [[color for _ in range(S)] for _ in range(S)]
+def blank(color=(0, 0, 0, 0), size=None, height=None):
+    size = S if size is None else size
+    return [[color for _ in range(size)] for _ in range(height or size)]
 
 
 def clamp(v):
@@ -71,30 +87,93 @@ def mix(a, b, t):
 
 
 def fill(px, color):
-    for y in range(S):
-        for x in range(S):
-            px[y][x] = color
+    for row in px:
+        for x in range(len(row)):
+            row[x] = color
 
 
 def rect(px, x0, y0, x1, y1, color):
-    for y in range(max(0, y0), min(S, y1)):
-        for x in range(max(0, x0), min(S, x1)):
-            px[y][x] = color
+    for y in range(max(0, y0), min(len(px), y1)):
+        row = px[y]
+        for x in range(max(0, x0), min(len(row), x1)):
+            row[x] = color
 
 
 def noise(px, rng, amount, density=1.0):
     """Per-pixel brightness jitter - the grain that makes cast iron read as cast."""
-    for y in range(S):
-        for x in range(S):
+    for row in px:
+        for x in range(len(row)):
             if density < 1.0 and rng.rangef(0, 1) > density:
                 continue
-            px[y][x] = shade(px[y][x], int(rng.rangef(-amount, amount)))
+            row[x] = shade(row[x], int(rng.rangef(-amount, amount)))
+
+
+def _smooth(t):
+    return t * t * (3.0 - 2.0 * t)
+
+
+def value_noise(rng, cells, size=None):
+    """A tileable field of smoothly interpolated values in [-1, 1].
+
+    The lattice wraps, so a texture built from it still meets itself at the
+    sprite edge - which matters here because the models use world-aligned UVs,
+    and two blocks of cylinder barrel stacked on each other sample straight
+    through the seam.
+    """
+    size = S if size is None else size
+    grid = [[rng.rangef(-1.0, 1.0) for _ in range(cells)] for _ in range(cells)]
+    step = size / float(cells)
+    out = []
+    for y in range(size):
+        gy = y / step
+        y0 = int(gy) % cells
+        ty = _smooth(gy - int(gy))
+        row = []
+        for x in range(size):
+            gx = x / step
+            x0 = int(gx) % cells
+            tx = _smooth(gx - int(gx))
+            x1, y1 = (x0 + 1) % cells, (y0 + 1) % cells
+            top = grid[y0][x0] + (grid[y0][x1] - grid[y0][x0]) * tx
+            bottom = grid[y1][x0] + (grid[y1][x1] - grid[y1][x0]) * tx
+            row.append(top + (bottom - top) * ty)
+        out.append(row)
+    return out
+
+
+def mottle(px, rng, layers):
+    """Clustered brightness variation, as `(lattice cells, amplitude)` layers.
+
+    Per-pixel jitter on its own reads as television static, not as metal: a
+    cast surface varies in patches the size of the grains that made it, not
+    texel by texel. Two or three octaves of lattice noise give it that scale,
+    and `noise` then goes on top for the last texel of tooth.
+    """
+    fields = [(value_noise(rng, cells, len(px)), amp) for (cells, amp) in layers]
+    for y in range(len(px)):
+        row = px[y]
+        for x in range(len(row)):
+            row[x] = shade(row[x], int(sum(f[y][x] * amp for (f, amp) in fields)))
+
+
+def brushed(px, rng, amount, axis="x"):
+    """Directional tool marks, the length of the sprite: a machined finish."""
+    n = len(px) if axis == "x" else len(px[0])
+    for i in range(n):
+        d = int(rng.rangef(-amount, amount))
+        if axis == "x":
+            for x in range(len(px[i])):
+                px[i][x] = shade(px[i][x], d)
+        else:
+            for y in range(len(px)):
+                px[y][i] = shade(px[y][i], d)
 
 
 def specks(px, rng, count, delta, size=1):
+    h, w = len(px), len(px[0])
     for _ in range(count):
-        x = rng.rint(0, S - size)
-        y = rng.rint(0, S - size)
+        x = rng.rint(0, w - size)
+        y = rng.rint(0, h - size)
         for dy in range(size):
             for dx in range(size):
                 px[y + dy][x + dx] = shade(px[y + dy][x + dx], delta)
@@ -102,21 +181,24 @@ def specks(px, rng, count, delta, size=1):
 
 def border(px, light, dark):
     """A lit top/left and shadowed bottom/right edge: makes cube edges legible."""
-    for i in range(S):
+    h, w = len(px), len(px[0])
+    for i in range(w):
         px[0][i] = shade(px[0][i], light)
+        px[h - 1][i] = shade(px[h - 1][i], dark)
+    for i in range(h):
         px[i][0] = shade(px[i][0], light)
-        px[S - 1][i] = shade(px[S - 1][i], dark)
-        px[i][S - 1] = shade(px[i][S - 1], dark)
+        px[i][w - 1] = shade(px[i][w - 1], dark)
 
 
 def disc(px, cx, cy, r, color, ring=None):
-    for y in range(S):
-        for x in range(S):
+    for y in range(len(px)):
+        row = px[y]
+        for x in range(len(row)):
             d = ((x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2) ** 0.5
             if d <= r - 0.6:
-                px[y][x] = color
+                row[x] = color
             elif ring is not None and d <= r + 0.4:
-                px[y][x] = ring
+                row[x] = ring
 
 
 def bolt(px, cx, cy, r, base):
@@ -146,12 +228,14 @@ MESH = (96, 88, 74, 255)          # filter element behind the grille
 
 
 def t_cast_iron(seed=11, base=CAST, grain=9):
+    """Sand-cast iron: blotchy at the scale of the mould, gritty at texel scale."""
     px = blank()
     fill(px, base)
     rng = Rng(seed)
-    noise(px, rng, grain)
-    specks(px, rng, 22, -16)
-    specks(px, rng, 10, 13)
+    mottle(px, rng, ((4, grain * 1.7), (8, grain * 1.0), (16, grain * 0.45)))
+    noise(px, rng, max(2, grain // 3))
+    specks(px, rng, 18, -17)          # blowholes left by the sand
+    specks(px, rng, 8, 14)
     border(px, 12, -16)
     return px
 
@@ -175,9 +259,9 @@ def t_crankcase_deck():
     px = blank()
     fill(px, DECK)
     rng = Rng(41)
-    for y in range(S):
-        rect(px, 0, y, S, y + 1, shade(DECK, int(rng.rangef(-7, 7))))
-    noise(px, rng, 4)
+    mottle(px, rng, ((4, 7), (8, 4)))
+    brushed(px, rng, 7)
+    noise(px, rng, 3)
     for (bx, by) in ((4, 4), (27, 4), (4, 27), (27, 27), (15.5, 4), (15.5, 27)):
         disc(px, bx, by, 2.2, shade(DECK, -40), shade(DECK, 22))
     border(px, 14, -18)
@@ -201,13 +285,16 @@ def t_cylinder_fin():
     px = blank()
     fill(px, CAST)
     rng = Rng(67)
-    rect(px, 0, 0, S, 3, shade(CAST, 30))
-    rect(px, 0, 3, S, 7, shade(CAST, 14))
-    rect(px, 0, 7, S, 22, CAST)
-    rect(px, 0, 22, S, 27, shade(CAST, -12))
-    rect(px, 0, 27, S, S, shade(CAST, -26))
-    noise(px, rng, 6)
-    specks(px, rng, 14, -12)
+    rect(px, 0, 0, S, 2, shade(CAST, 36))     # the cast edge catches the light
+    rect(px, 0, 2, S, 4, shade(CAST, 22))
+    rect(px, 0, 4, S, 8, shade(CAST, 10))
+    rect(px, 0, 8, S, 21, CAST)
+    rect(px, 0, 21, S, 26, shade(CAST, -14))
+    rect(px, 0, 26, S, 30, shade(CAST, -26))
+    rect(px, 0, 30, S, S, shade(CAST, -34))   # and the root sits in its shadow
+    mottle(px, rng, ((5, 8), (11, 4)))
+    noise(px, rng, 3)
+    specks(px, rng, 12, -12)
     return px
 
 
@@ -234,10 +321,8 @@ def t_piston():
     px = blank()
     fill(px, ALU)
     rng = Rng(131)
-    for x in range(S):
-        d = int(rng.rangef(-5, 5))
-        for y in range(S):
-            px[y][x] = shade(px[y][x], d)
+    mottle(px, rng, ((6, 5), (12, 3)))
+    brushed(px, rng, 5, axis="y")          # the skirt is turned, not cast
     # compression ring line, on the land between the two modelled grooves
     rect(px, 0, 12, S, 13, shade(ALU, 20))
     rect(px, 0, 13, S, 15, shade(ALU, -50))
@@ -272,12 +357,15 @@ def t_conrod():
     px = blank()
     fill(px, FORGED)
     rng = Rng(151)
-    rect(px, 0, 0, 9, S, shade(FORGED, -34))
-    rect(px, 9, 0, 12, S, shade(FORGED, -12))
-    rect(px, 12, 0, 20, S, shade(FORGED, 30))
-    rect(px, 20, 0, 23, S, shade(FORGED, -12))
-    rect(px, 23, 0, S, S, shade(FORGED, -34))
-    noise(px, rng, 6)
+    rect(px, 0, 0, 8, S, shade(FORGED, -36))
+    rect(px, 8, 0, 11, S, shade(FORGED, -16))
+    rect(px, 11, 0, 13, S, shade(FORGED, 12))
+    rect(px, 13, 0, 19, S, shade(FORGED, 32))
+    rect(px, 19, 0, 21, S, shade(FORGED, 12))
+    rect(px, 21, 0, 24, S, shade(FORGED, -16))
+    rect(px, 24, 0, S, S, shade(FORGED, -36))
+    mottle(px, rng, ((5, 7), (10, 4)))
+    noise(px, rng, 3)
     specks(px, rng, 10, -12)
     return px
 
@@ -291,8 +379,9 @@ def t_crank_web():
     px = blank()
     fill(px, WEB)
     rng = Rng(163)
-    noise(px, rng, 8)
-    specks(px, rng, 18, -14)
+    mottle(px, rng, ((4, 13), (9, 7)))
+    noise(px, rng, 3)
+    specks(px, rng, 16, -14)
     disc(px, 16, 16, 10, shade(WEB, 12), shade(WEB, -22))
     disc(px, 16, 16, 5, shade(WEB, -18), shade(WEB, 16))
     for (bx, by) in ((7, 25), (25, 25)):
@@ -311,8 +400,9 @@ def t_journal():
     fill(px, STEEL)
     rng = Rng(173)
     for y in range(S):
-        d = -14 if y % 4 == 0 else (11 if y % 4 == 2 else 0)
+        d = -15 if y % 4 == 0 else (12 if y % 4 == 2 else (-5 if y % 4 == 3 else 0))
         rect(px, 0, y, S, y + 1, shade(STEEL, d + int(rng.rangef(-4, 4))))
+    mottle(px, rng, ((6, 5),))
     return px
 
 
@@ -345,8 +435,9 @@ def t_carburetor():
     px = blank()
     fill(px, CARB)
     rng = Rng(229)
-    noise(px, rng, 7)
-    specks(px, rng, 26, -12)
+    mottle(px, rng, ((4, 11), (9, 6), (16, 3)))
+    noise(px, rng, 3)
+    specks(px, rng, 22, -12)
     rect(px, 0, 12, S, 13, shade(CARB, -20))
     rect(px, 0, 13, S, 14, shade(CARB, 12))
     bolt(px, 7, 24, 2.0, STEEL)
@@ -391,13 +482,22 @@ def t_indicator_on():
 
 
 def t_brass():
+    """Turned brass fittings: a bright band across the crown of the round, and
+    the tarnish that collects wherever the polishing rag never reaches."""
     px = blank()
     fill(px, BRASS)
     rng = Rng(239)
-    noise(px, rng, 10)
-    specks(px, rng, 14, -18)
-    rect(px, 0, 0, S, 3, shade(BRASS, 26))
-    rect(px, 0, S - 3, S, S, shade(BRASS, -30))
+    # the sheen a round brass fitting has along its lit side
+    for y in range(S):
+        t = abs(y - 9.5) / 16.0
+        rect(px, 0, y, S, y + 1, mix(shade(BRASS, 34), shade(BRASS, -26),
+                                     min(1.0, t)))
+    mottle(px, rng, ((7, 9), (15, 5)))
+    specks(px, rng, 16, -22)              # patina
+    specks(px, rng, 6, 20)
+    noise(px, rng, 3)
+    rect(px, 0, 0, S, 2, shade(BRASS, 30))
+    rect(px, 0, S - 3, S, S, shade(BRASS, -34))
     border(px, 16, -22)
     return px
 
@@ -414,10 +514,13 @@ def t_spark_plug_ceramic():
     fill(px, CERAMIC)
     rng = Rng(269)
     for x in range(0, S, 6):
-        rect(px, x, 0, x + 1, S, shade(CERAMIC, -34))
-        rect(px, x + 1, 0, x + 3, S, shade(CERAMIC, 18))
-        rect(px, x + 3, 0, x + 4, S, shade(CERAMIC, -12))
-    noise(px, rng, 4)
+        rect(px, x, 0, x + 1, S, shade(CERAMIC, -38))     # root of the groove
+        rect(px, x + 1, 0, x + 2, S, shade(CERAMIC, -8))
+        rect(px, x + 2, 0, x + 4, S, shade(CERAMIC, 20))  # crown of the rib
+        rect(px, x + 4, 0, x + 5, S, shade(CERAMIC, -2))
+        rect(px, x + 5, 0, x + 6, S, shade(CERAMIC, -20))
+    mottle(px, rng, ((7, 6),))
+    noise(px, rng, 3)
     # the glaze catches the light along one edge
     rect(px, 0, 0, S, 2, shade(CERAMIC, 22))
     rect(px, 0, S - 3, S, S, shade(CERAMIC, -28))
@@ -429,9 +532,10 @@ def t_air_filter():
     px = blank()
     fill(px, FILTER)
     rng = Rng(277)
-    noise(px, rng, 7)
-    specks(px, rng, 20, -10)
-    specks(px, rng, 8, 12)
+    mottle(px, rng, ((5, 9), (10, 5)))     # unevenly worn paint
+    noise(px, rng, 3)
+    specks(px, rng, 18, -10)
+    specks(px, rng, 7, 13)
     # rolled seams top and bottom, as a pressed-steel canister has
     for y in (3, 26):
         rect(px, 0, y, S, y + 1, shade(FILTER, 26))
@@ -441,17 +545,30 @@ def t_air_filter():
 
 
 def t_air_filter_mesh():
-    """The filter element itself: a coarse woven gauze seen through slots."""
+    """The filter element itself: a coarse woven gauze seen through slots.
+
+    Woven rather than chequered. A plain checkerboard is the obvious way to
+    draw a mesh and the wrong one: it has no over-and-under, so it reads as
+    tiling squares. Giving each strand a lit crown and a shadow where the
+    crossing strand passes over it is what turns the same grid into cloth.
+    """
     px = blank()
     fill(px, MESH)
     rng = Rng(281)
+    pitch = 4
     for y in range(S):
         for x in range(S):
-            if (x // 2 + y // 2) % 2 == 0:
-                px[y][x] = shade(MESH, 16)
-            else:
-                px[y][x] = shade(MESH, -18)
-    noise(px, rng, 6)
+            warp = (x % pitch) < pitch // 2     # vertical strand on top here
+            along = (y if warp else x) % pitch
+            crown = 15 if along in (1, 2) else -8
+            px[y][x] = shade(MESH, crown + (10 if warp else -12))
+    # the shadow each strand throws into the gap it crosses
+    for y in range(S):
+        for x in range(S):
+            if x % pitch == 0 or y % pitch == 0:
+                px[y][x] = shade(px[y][x], -22)
+    mottle(px, rng, ((6, 7),))
+    noise(px, rng, 4)
     # the retaining band the gauze is clamped behind
     for y in (0, 1, S - 2, S - 1):
         rect(px, 0, y, S, y + 1, shade(FILTER, 10))
@@ -476,6 +593,158 @@ def t_combustion_flash():
             t = d ** 0.7
             c = mix(core + (255,), edge + (255,), t)
             px[y][x] = (c[0], c[1], c[2], clamp(255 * (1.0 - t) ** 1.2))
+    return px
+
+
+# --------------------------------------------------------------------------
+# fluids
+# --------------------------------------------------------------------------
+# Both fluids used to be a single flat colour repeated 256 times, with the
+# flowing sprite byte-identical to the still one. That is what made a full
+# float bowl look like a sticker: real fluid sprites move.
+#
+# The surface is a sum of sine waves whose wavelengths divide the sprite and
+# whose periods divide the frame count, so every frame tiles seamlessly with
+# its neighbours in space AND the last frame runs back into the first with no
+# jump. Nothing here is random, so the loop is exact rather than nearly exact.
+FLUID_FRAMES = 16
+
+GASOLINE_FLUID = ((150, 116, 44), (214, 178, 84), (247, 219, 139))
+ENGINE_OIL_FLUID = ((40, 29, 12), (84, 62, 28), (129, 102, 50))
+
+# (waves along x, waves along y, periods per loop, amplitude, phase)
+STILL_WAVES = ((1, 0, 1, 0.50, 0.00), (0, 1, -1, 0.42, 0.31),
+               (1, 1, 1, 0.30, 0.61), (2, -1, -1, 0.22, 0.13),
+               (-1, 2, 1, 0.17, 0.77))
+# Every term drifts the pattern down the sprite (y grows as t grows), which is
+# the direction a flowing sprite is expected to travel, plus one standing wave
+# across x for the vertical streaking a running film of fuel has.
+FLOW_WAVES = ((0, 1, -1, 0.55, 0.00), (0, 2, -2, 0.30, 0.37),
+              (1, 1, -1, 0.28, 0.12), (2, 1, -1, 0.20, 0.68),
+              (1, 3, -3, 0.14, 0.44), (2, 0, 0, 0.22, 0.05))
+
+
+FLUID_BANDS = 4   # shades either side of the base tone
+
+
+def fluid_sprite(palette, waves, frames=FLUID_FRAMES, contrast=1.0):
+    """A looping, seamlessly tiling fluid sprite, frames stacked vertically."""
+    deep, base, high = (c + (255,) for c in palette)
+    px = blank(size=ITEM, height=ITEM * frames)
+    peak = sum(w[3] for w in waves) or 1.0
+    for f in range(frames):
+        for y in range(ITEM):
+            for x in range(ITEM):
+                v = 0.0
+                for (kx, ky, kt, amp, phase) in waves:
+                    v += amp * math.sin(2 * math.pi * (
+                        kx * x / ITEM + ky * y / ITEM + kt * f / frames + phase))
+                v = max(-1.0, min(1.0, v / peak * contrast))
+                # Quantised to a handful of shades. A continuous ramp at 16x16
+                # reads as a blurry photo next to vanilla water, which is banded
+                # - and banding is also what makes the motion legible at all,
+                # because the eye follows the edges between bands.
+                v = round(v * FLUID_BANDS) / FLUID_BANDS
+                px[f * ITEM + y][x] = (mix(base, high, v) if v >= 0
+                                       else mix(base, deep, -v))
+    return px
+
+
+def animation_meta(frametime):
+    return {"animation": {"frametime": frametime}}
+
+
+# --------------------------------------------------------------------------
+# bucket items
+# --------------------------------------------------------------------------
+# Vanilla's bucket, redrawn rather than copied: the same pressed pail and wire
+# bail every vanilla fluid bucket uses, so a Gasoline Bucket in the hotbar next
+# to a Water Bucket reads as the same object holding something else. Only the
+# contents differ between the two, which is the whole idea of a fluid bucket.
+#
+# Rows are (y, x0, x1), both x bounds inclusive, top to bottom.
+PAIL = ([(4, 2, 13)] + [(y, 3, 12) for y in range(5, 10)]
+        + [(y, 4, 11) for y in range(10, 13)]
+        + [(y, 5, 10) for y in range(13, 15)])
+# The bail is one texel thick: a rounded shoulder, then a vertical run down the
+# flanks to the rim. Sloping it all the way to the rim instead turns the gap
+# under it into a clean triangle and the whole item reads as a lantern.
+BAIL = ((0, 6, 9), (1, 4, 5), (1, 10, 11), (2, 3, 3), (2, 12, 12),
+        (3, 3, 3), (3, 12, 12))
+MOUTH = 4                         # the rim row, where the surface is visible
+FLUID_TOP, FLUID_BOTTOM = 5, 12   # rows holding contents; below that is the base
+
+STEEL_HI = (208, 212, 218, 255)
+STEEL_LI = (176, 181, 189, 255)
+STEEL_MI = (143, 148, 156, 255)
+STEEL_SH = (105, 110, 118, 255)
+STEEL_DK = (68, 72, 79, 255)
+
+
+def bucket(palette):
+    """One filled bucket. `palette` is the fluid's (deep, base, high) triple."""
+    deep, base, high = (c + (255,) for c in palette)
+    px = blank(size=ITEM)
+
+    # --- wire bail. Lit on the left limb, shadowed on the right, so the loop
+    # reads as round rather than as two posts.
+    for (y, x0, x1) in BAIL:
+        for x in range(x0, x1 + 1):
+            px[y][x] = STEEL_MI if x < 8 else STEEL_SH
+    for x in range(6, 10):
+        px[0][x] = STEEL_LI                    # the light catches the top bend
+
+    # --- pail. A left-to-right ramp across every row turns a flat trapezoid
+    # into a cylinder: dark rolled edge, highlight, body, shadow, dark edge.
+    for (y, x0, x1) in PAIL:
+        for x in range(x0, x1 + 1):
+            if x in (x0, x1):
+                c = STEEL_DK
+            elif x == x0 + 1:
+                c = STEEL_HI
+            elif x >= x1 - 1:
+                c = STEEL_SH
+            else:
+                c = STEEL_LI if x <= x0 + 3 else STEEL_MI
+            px[y][x] = c
+
+    # --- rolled rim, and the shadowed underside of the base
+    for x in range(3, 13):
+        px[4][x] = STEEL_HI if x < 9 else STEEL_LI
+    px[4][2] = px[4][13] = STEEL_MI
+    for x in range(6, 10):
+        px[13][x] = STEEL_MI
+        px[14][x] = STEEL_SH
+    px[14][5] = px[14][10] = STEEL_DK
+
+    # --- contents.
+    #
+    # The item is seen from slightly above, so the rim row is the mouth: it
+    # shows the surface as a wide band with only the rolled edge either side of
+    # it. Everything below is behind the front wall, which is why the window
+    # there is two texels narrower on each side. Filling the mouth with metal
+    # instead - a bright bar across the full width - is what makes a bucket
+    # sprite read as a lantern.
+    for x in range(4, 12):
+        px[MOUTH][x] = mix(high, base, 0.45) if x in (4, 11) else high
+
+    # The window narrows with the taper on its own, because it is derived from
+    # the silhouette rather than hard-coded.
+    spans = {y: (x0, x1) for (y, x0, x1) in PAIL}
+    for y in range(FLUID_TOP, FLUID_BOTTOM + 1):
+        x0, x1 = spans[y]
+        for x in range(x0 + 2, x1 - 1):
+            if y == FLUID_TOP:
+                c = mix(base, high, 0.55)      # still lit by the open mouth
+            elif y >= FLUID_BOTTOM - 1:
+                c = mix(base, deep, 0.55)      # and darker with depth
+            else:
+                c = base
+            if x == x0 + 2:
+                c = mix(c, high, 0.28)         # sheen down the lit wall
+            elif x == x1 - 2:
+                c = mix(c, deep, 0.42)
+            px[y][x] = c
     return px
 
 
@@ -504,7 +773,38 @@ TEXTURES = {
     "block/combustion_flash": t_combustion_flash,
 }
 
+# Sprite name -> (pixels, animation frametime or None). Still fluids idle;
+# the flowing ones run at vanilla water's pace.
+FLUIDS = {
+    "block/gasoline_still": (GASOLINE_FLUID, STILL_WAVES, 3, 0.85),
+    "block/gasoline_flow": (GASOLINE_FLUID, FLOW_WAVES, 2, 1.0),
+    "block/engine_oil_still": (ENGINE_OIL_FLUID, STILL_WAVES, 4, 0.7),
+    "block/engine_oil_flow": (ENGINE_OIL_FLUID, FLOW_WAVES, 3, 0.85),
+}
+
+BUCKETS = {
+    "item/gasoline_bucket": GASOLINE_FLUID,
+    "item/engine_oil_bucket": ENGINE_OIL_FLUID,
+}
+
+
+def write_meta(path, meta):
+    with open(path, "w") as f:
+        json.dump(meta, f, indent=2)
+        f.write("\n")
+
+
 if __name__ == "__main__":
     for name, fn in TEXTURES.items():
         write_png(os.path.join(OUT, name + ".png"), fn())
+        print("wrote", name + ".png")
+
+    for name, (palette, waves, frametime, contrast) in FLUIDS.items():
+        png = os.path.join(OUT, name + ".png")
+        write_png(png, fluid_sprite(palette, waves, contrast=contrast))
+        write_meta(png + ".mcmeta", animation_meta(frametime))
+        print("wrote", name + ".png", f"({FLUID_FRAMES} frames)")
+
+    for name, palette in BUCKETS.items():
+        write_png(os.path.join(OUT, name + ".png"), bucket(palette))
         print("wrote", name + ".png")

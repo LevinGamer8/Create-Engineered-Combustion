@@ -78,6 +78,13 @@ Dependency resolution needs all of these to be reachable:
 If your network blocks any of them, the build fails during dependency
 resolution before it ever reaches compilation.
 
+## Assets
+
+Every texture and model is generated, not hand-edited, and the generators are
+deterministic. See [`docs/assets.md`](docs/assets.md) for what writes what, why
+the three resolutions differ, and the two model invariants `tools/check_models.py`
+enforces.
+
 ## Milestones
 
 * **Milestone 0** - clean NeoForge 1.21.1 + Create 6.0.10 workspace, mod entry

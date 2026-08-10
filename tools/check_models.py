@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Static checks on the generated block models.
+
+Two classes of problem show up in a hand-authored cuboid model and neither one
+is visible in a JSON diff:
+
+*coplanar overlap* - two elements whose same-facing quads sit in exactly the
+same plane and overlap in area. The depth buffer has no way to order them, so
+the pair shimmers as the camera moves. On the parts drawn by a block entity
+renderer - crankshaft, connecting rod, flywheel - the geometry itself moves, so
+the shimmer turns into a flicker.
+
+*buried quads* - a face completely covered by other elements of the same model.
+It can never be seen, but it is still stitched into the chunk mesh and still
+drawn.
+
+Run this after `generate_engine_models.py`; it exits non-zero if it finds
+anything, which is what makes the two invariants enforceable rather than
+aspirational.
+"""
+import json
+import os
+import pathlib
+import sys
+
+ASSETS = pathlib.Path(__file__).resolve().parents[1] \
+    / "src/main/resources/assets/engineered_combustion"
+ROOT = ASSETS / "models/block"
+NS = "engineered_combustion:"
+
+AXES = {"x": 0, "y": 1, "z": 2}
+FACE_AXIS = {"east": ("x", 1), "west": ("x", 0), "up": ("y", 1),
+             "down": ("y", 0), "south": ("z", 1), "north": ("z", 0)}
+EPS = 1e-6
+
+
+def box(element):
+    return [float(c) for c in element["from"]], [float(c) for c in element["to"]]
+
+
+def overlap_area(a, b, axis):
+    """Area of the overlap of two boxes projected along `axis`."""
+    others = [i for i in range(3) if i != axis]
+    area = 1.0
+    for i in others:
+        lo = max(a[0][i], b[0][i])
+        hi = min(a[1][i], b[1][i])
+        if hi - lo <= EPS:
+            return 0.0
+        area *= hi - lo
+    return area
+
+
+def coplanar_overlaps(elements):
+    """Pairs of same-facing quads sharing a plane and overlapping in area."""
+    hits = []
+    boxes = [box(e) for e in elements]
+    for i in range(len(elements)):
+        for j in range(i + 1, len(elements)):
+            a, b = boxes[i], boxes[j]
+            for face, (axis_name, side) in FACE_AXIS.items():
+                axis = AXES[axis_name]
+                if abs(a[side][axis] - b[side][axis]) > EPS:
+                    continue
+                if face not in elements[i]["faces"] or face not in elements[j]["faces"]:
+                    continue
+                area = overlap_area(a, b, axis)
+                if area > EPS:
+                    hits.append((i, j, face, round(area, 3)))
+    return hits
+
+
+def buried_faces(elements):
+    """Faces whose whole area is covered by other elements standing on them.
+
+    Only exact, axis-aligned coverage counts: a face is buried when a single
+    other element both touches its plane from the far side and spans the face
+    in the two remaining axes. That is deliberately conservative - it never
+    reports a face that is actually visible from some angle.
+    """
+    hits = []
+    boxes = [box(e) for e in elements]
+    for i, e in enumerate(elements):
+        a = boxes[i]
+        for face, (axis_name, side) in FACE_AXIS.items():
+            if face not in e["faces"]:
+                continue
+            axis = AXES[axis_name]
+            plane = a[side][axis]
+            others = [k for k in range(3) if k != axis]
+            for j, b in enumerate(boxes):
+                if i == j:
+                    continue
+                # the neighbour has to reach the plane from the outward side
+                if side == 1:
+                    if b[0][axis] > plane + EPS or b[1][axis] < plane + EPS:
+                        continue
+                else:
+                    if b[1][axis] < plane - EPS or b[0][axis] > plane - EPS:
+                        continue
+                if all(b[0][k] <= a[0][k] + EPS and b[1][k] >= a[1][k] - EPS
+                       for k in others):
+                    hits.append((i, face, j))
+                    break
+    return hits
+
+
+# ---------------------------------------------------------------------------
+# the assembled engine
+# ---------------------------------------------------------------------------
+# Half of this mod's geometry deliberately crosses block boundaries so the
+# stack reads as one machine, which means a contested plane does not have to
+# live inside a single model to flicker. These are the parts whose pose
+# relative to each other never changes, in the Crankshaft block's coordinates.
+#
+# The piston and connecting rod are left out on purpose: they move against the
+# cylinder every tick, so any plane they share with it is momentary rather than
+# a permanent shimmer, and the clearances that keep them apart are asserted by
+# the geometry in the model generator instead.
+ASSEMBLY = [
+    ("oil_sump.json", (0, -16, 0)),
+    ("crankshaft.json", (0, 0, 0)),
+    ("crank_assembly_x.json", (0, 0, 0)),
+    ("cylinder.json", (0, 16, 0)),
+    ("carburetor.json", (0, 32, 0)),
+    ("air_filter.json", (0, 32, 0)),
+    ("flywheel_wheel_x.json", (16, 0, 0)),
+]
+
+
+def placed(name, offset):
+    model = json.loads((ROOT / name).read_text())
+    out = []
+    for e in model.get("elements", []):
+        moved = dict(e)
+        moved["from"] = [c + offset[i] for i, c in enumerate(e["from"])]
+        moved["to"] = [c + offset[i] for i, c in enumerate(e["to"])]
+        out.append(moved)
+    return out
+
+
+def check_assembly():
+    """Coplanar overlaps between two different blocks of the built engine."""
+    parts = [(name, placed(name, offset)) for (name, offset) in ASSEMBLY]
+    hits = []
+    for a in range(len(parts)):
+        for b in range(a + 1, len(parts)):
+            name_a, elements_a = parts[a]
+            name_b, elements_b = parts[b]
+            joined = elements_a + elements_b
+            for (i, j, face, area) in coplanar_overlaps(joined):
+                # only pairs that straddle the two models are new information
+                if i < len(elements_a) <= j:
+                    hits.append((name_a, name_b, i, j - len(elements_a),
+                                 face, area, joined))
+    return hits
+
+
+def check_references():
+    """Every reference an asset makes has to land on something that exists.
+
+    All three of these fail the same way in game - a black and magenta model,
+    or a silently missing one - and all three are a one-character typo away at
+    any time, so they are worth asserting rather than discovering.
+    """
+    problems = []
+    models = set()
+    for path in sorted((ASSETS / "models").rglob("*.json")):
+        models.add(str(path.relative_to(ASSETS / "models")).replace(".json", ""))
+
+    for path in sorted((ASSETS / "models").rglob("*.json")):
+        name = path.relative_to(ASSETS)
+        model = json.loads(path.read_text())
+        textures = model.get("textures", {})
+        for key, ref in textures.items():
+            if not ref.startswith(NS):
+                continue
+            sprite = ASSETS / "textures" / (ref[len(NS):] + ".png")
+            if not sprite.exists():
+                problems.append(f"{name}: texture '{key}' -> missing {ref}")
+        for i, element in enumerate(model.get("elements", [])):
+            for face, data in element["faces"].items():
+                ref = data["texture"].lstrip("#")
+                if ref not in textures:
+                    problems.append(f"{name}: #{i} {face} uses undeclared #{ref}")
+                if min(data["uv"]) < 0 or max(data["uv"]) > 16:
+                    problems.append(f"{name}: #{i} {face} uv {data['uv']} "
+                                    "runs off the sprite")
+
+    for path in sorted((ASSETS / "blockstates").glob("*.json")):
+        name = path.relative_to(ASSETS)
+        for variant in json.loads(path.read_text()).get("variants", {}).values():
+            for entry in (variant if isinstance(variant, list) else [variant]):
+                ref = entry["model"]
+                if ref.startswith(NS) and ref[len(NS):] not in models:
+                    problems.append(f"{name}: variant -> missing model {ref}")
+    return problems
+
+
+def main():
+    bad = 0
+    for path in sorted(ROOT.glob("*.json")):
+        model = json.loads(path.read_text())
+        elements = model.get("elements")
+        if not elements:
+            continue
+        overlaps = coplanar_overlaps(elements)
+        buried = buried_faces(elements)
+        quads = sum(len(e["faces"]) for e in elements)
+        status = "ok " if not overlaps and not buried else "BAD"
+        print(f"{status} {path.name:28s} {len(elements):3d} elements {quads:4d} quads")
+        for (i, j, face, area) in overlaps:
+            print(f"      coplanar {face:5s} area {area:6.2f}"
+                  f"  #{i} {elements[i]['from']}->{elements[i]['to']}"
+                  f"  #{j} {elements[j]['from']}->{elements[j]['to']}")
+        for (i, face, j) in buried:
+            print(f"      buried   {face:5s} of #{i}"
+                  f" {elements[i]['from']}->{elements[i]['to']} behind #{j}")
+        bad += len(overlaps) + len(buried)
+
+    references = check_references()
+    print(f"\n{'ok ' if not references else 'BAD'} asset references")
+    for problem in references:
+        print("      " + problem)
+    bad += len(references)
+
+    seams = check_assembly()
+    print(f"\n{'ok ' if not seams else 'BAD'} assembled engine"
+          f" - {len(ASSEMBLY)} blocks")
+    for (name_a, name_b, i, j, face, area, joined) in seams:
+        print(f"      coplanar {face:5s} area {area:6.2f}"
+              f"  {name_a} #{i}  vs  {name_b} #{j}")
+    bad += len(seams)
+
+    print(f"\n{bad} problem(s)")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
