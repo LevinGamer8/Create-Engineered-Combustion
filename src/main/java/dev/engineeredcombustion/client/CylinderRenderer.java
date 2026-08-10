@@ -85,11 +85,21 @@ public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity
 	 * visible from outside, so lighting it is the honest way to show that a charge
 	 * fired - and it is the mechanical feedback the exposed design is <i>for</i>.
 	 *
+	 * <p>It starts when the server's combustion counter moves and never on a
+	 * client-side guess, so a flash means a charge was paid for and burned. An
+	 * engine sparking on an empty tank stays dark.
+	 *
 	 * <p>Deliberately not a particle. The flash lasts exactly
 	 * {@code COMBUSTION_FLASH_TICKS} because the simulation says so, it cannot
 	 * outlive the event, and its cost is one small model per frame no matter how
 	 * fast the engine is turning - where a particle per firing would scale with
 	 * engine speed and outlive its own event at high RPM.
+	 *
+	 * <p>Drawn <i>after</i> the piston, into the translucent buffer, and that
+	 * ordering is load-bearing rather than incidental: the flash model is taller
+	 * than the clearance volume, and the depth buffer is what clips it to the real
+	 * chamber. At top dead centre the crown hides all but the top half unit of it;
+	 * as the charge drives the piston down the bore, the same flash is uncovered.
 	 *
 	 * <p>Full brightness and no diffuse shading, so it reads as light coming from
 	 * inside the cylinder rather than as a lump of orange appearing in it.

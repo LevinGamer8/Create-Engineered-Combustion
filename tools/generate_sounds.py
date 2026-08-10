@@ -273,6 +273,24 @@ def engine_cranking():
 
 # ------------------------------------------------------------------ one-shots
 
+def engine_spark():
+    """
+    The ignition coil discharging: a tiny electrical tick.
+
+    Deliberately almost nothing. It has to be distinguishable from combustion at
+    a glance, which here means having none of what combustion is made of: there
+    is no cylinder thump, no body resonance and nothing below 1.8 kHz at all -
+    only a few milliseconds of band-limited noise with a very fast decay and one
+    high resonance sitting on top of it, which is what reads as a spark rather
+    than as a small bang.
+    """
+    n = int(SR * 0.06)
+    t = np.arange(n) / SR
+    tick = highpass(noise(n), 1800.0) * np.exp(-t / 0.0022)
+    ring = resonator(tick, 5200.0, 26.0) * 0.6
+    return normalize(declick(tick * 0.7 + ring, ms=1.5), 0.5)
+
+
 def engine_fire_attempt():
     """
     One failed-to-catch cough.
@@ -373,6 +391,9 @@ def engine_stop():
     return normalize(declick(body(buf, 0.58)), 0.66)
 
 
+# Order is load-bearing: every generator draws from the one module-level RNG, so
+# inserting a sound anywhere but at the end shifts the noise every later sound is
+# built from and silently re-rolls assets that were not meant to change.
 SOUNDS = {
     "engine_running": engine_running,
     "engine_cranking": engine_cranking,
@@ -380,6 +401,7 @@ SOUNDS = {
     "engine_start": engine_start,
     "engine_stall": engine_stall,
     "engine_stop": engine_stop,
+    "engine_spark": engine_spark,
 }
 
 

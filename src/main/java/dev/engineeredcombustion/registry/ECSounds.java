@@ -30,7 +30,17 @@ public class ECSounds {
 	/** Looped while the engine is turned over without running under its own power. */
 	public static final DeferredHolder<SoundEvent, SoundEvent> ENGINE_CRANKING = register("engine_cranking");
 
-	/** One cough per pre-start firing opportunity, i.e. per point of start progress. */
+	/**
+	 * The ignition coil discharging: a tiny electrical tick, played once per
+	 * spark event while the engine is not yet running.
+	 *
+	 * <p>Deliberately not a combustion sound. A spark happens whether or not
+	 * there is any fuel to light, so it has to be audibly the wrong thing to
+	 * mistake for a charge burning.
+	 */
+	public static final DeferredHolder<SoundEvent, SoundEvent> ENGINE_SPARK = register("engine_spark");
+
+	/** One cough per charge that actually burned while the engine is not yet running. */
 	public static final DeferredHolder<SoundEvent, SoundEvent> ENGINE_FIRE_ATTEMPT = register("engine_fire_attempt");
 
 	/** Fires once, on the STARTING to RUNNING transition. */

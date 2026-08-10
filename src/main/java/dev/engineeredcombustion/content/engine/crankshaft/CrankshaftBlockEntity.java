@@ -42,7 +42,6 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
@@ -100,12 +99,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private static final int RESYNC_INTERVAL = 200;
 
 	/**
-	 * The spark plug electrode, in the Cylinder block's own coordinates. Must
-	 * match {@code SPARK_PLUG_ELECTRODE} in {@code tools/generate_engine_models.py}
-	 * - it is the point that model puts the electrode tip at, and a spark that
-	 * misses it would be worse than no spark at all.
+	 * The spark gap, in the Cylinder block's own coordinates: between the centre
+	 * electrode's tip and the ground strap under it, inside the combustion
+	 * chamber. Must match {@code SPARK_PLUG_ELECTRODE} in
+	 * {@code tools/generate_engine_models.py} - it is the point that model leaves
+	 * the gap at, and a spark that misses it would be worse than no spark at all.
 	 */
-	private static final Vec3 SPARK_PLUG_ELECTRODE = new Vec3(13.2D / 16.0D, 13.75D / 16.0D, 8.0D / 16.0D);
+	private static final Vec3 SPARK_PLUG_ELECTRODE = new Vec3(11.95D / 16.0D, 13.79D / 16.0D, 8.0D / 16.0D);
 
 	private static final String KEY_CRANK_ANGLE = "CrankAngle";
 	private static final String KEY_PHASE = "Phase";
@@ -121,6 +121,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private static final String KEY_FUEL_AVAILABLE = "FuelAvailable";
 	private static final String KEY_LUBRICATION = "Lubrication";
 	private static final String KEY_OIL_WEAR = "OilWear";
+	private static final String KEY_SPARK_EVENT = "SparkEvent";
+	private static final String KEY_COMBUSTION_EVENT = "CombustionEvent";
 
 	private final EngineState engine = new EngineState();
 
@@ -153,6 +155,19 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 	/** Whether a Redstone Control Module is plugged into the engine's controls. */
 	private boolean controlModuleInstalled;
+
+	/**
+	 * The event counters this client has already played out, and whether it has
+	 * seen any at all yet.
+	 *
+	 * <p>Client-side only, and never written to NBT: they are this client's memory
+	 * of what it has already shown, not part of the engine. The flag is what stops
+	 * a freshly loaded chunk from firing a spark and a flash for events that
+	 * happened while the player was somewhere else.
+	 */
+	private boolean clientEventsAdopted;
+	private int lastSparkEventId;
+	private int lastCombustionEventId;
 
 	/**
 	 * What redstone at this engine is allowed to do. Only consulted while a
@@ -291,7 +306,10 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		engine.advanceCrankAngle(mechanicalRpm);
 
 		if (level.isClientSide) {
+			// Run the flash timer down first, then look for new events: a flash that
+			// starts this tick must not be aged on the tick it started.
 			engine.updateClientVisuals();
+			playSyncedEvents();
 			tickEngineAudio();
 			return;
 		}
@@ -324,6 +342,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		int startProgressBefore = engine.getStartProgress();
 		boolean fuelBefore = engine.isFuelAvailable();
 		LubricationState lubricationBefore = engine.getLubrication();
+		int sparkEventBefore = engine.getSparkEventId();
+		int combustionEventBefore = engine.getCombustionEventId();
 
 		EngineInputs inputs = new EngineInputs(tickComponents.isMechanicallyValid(), control.ignitionEnabled(),
 			flywheel != null && flywheel.hasSource(), control.throttle(), readLoadFactor(), speedLimit());
@@ -333,15 +353,22 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			// The one and only place engine state crosses into Create's world.
 			flywheel.onEngineOutputChanged();
 
-		emitCombustionEffects();
-		playTransitionSounds(phaseBefore, startProgressBefore);
+		playTransitionSounds(phaseBefore);
 		updateIgnitionIndicator();
+
+		// A spark or a combustion this tick has to reach the client on this tick:
+		// the spark, the chamber flash and the firing sound are all triggered there
+		// by the counters moving, so a delayed update would be a delayed effect.
+		// This is at most one update per revolution - about three a second at full
+		// throttle - and it is the only per-event traffic the engine generates.
+		boolean eventFired = sparkEventBefore != engine.getSparkEventId()
+			|| combustionEventBefore != engine.getCombustionEventId();
 
 		// Anything the client displays has to trigger a block update, not just the
 		// things that change the engine's rotation. Toggling redstone on a stopped
 		// engine changes no speed and no phase, so without this the client would
 		// keep showing the ignition state it was last told about.
-		if (generatedSpeedChanged || signalBefore != redstoneSignal
+		if (generatedSpeedChanged || eventFired || signalBefore != redstoneSignal
 			|| phaseBefore != engine.getPhase() || structureValidBefore != engine.isStructureValid()
 			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()
 			|| lubricationBefore != engine.getLubrication()) {
@@ -606,51 +633,111 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	// --- combustion feedback -------------------------------------------------
 
 	/**
-	 * Emits the visible spark at the plug when the coil actually fired.
+	 * Plays out the two events the server counted, on the client that can see
+	 * them.
 	 *
-	 * <p>Server-driven and event-driven: {@code EngineState} sets the flag on the
-	 * tick the firing angle is crossed with ignition live, and this consumes it,
-	 * so a spark corresponds one-to-one with a real ignition event and never to an
-	 * animation timer. One particle per firing - at full throttle that is 3.2 a
-	 * second, which is the whole cost of the effect.
+	 * <p>This is the whole of the ignition feedback, and it hangs off nothing but
+	 * {@link EngineState#getSparkEventId()} and
+	 * {@link EngineState#getCombustionEventId()} moving. A spark is the coil
+	 * firing - it happens with or without fuel. A combustion is a charge that was
+	 * actually paid for and burned, so the chamber flash and the firing sound
+	 * cannot appear for a revolution that produced no torque, and cannot land on a
+	 * different tick from each other: they are two reactions to one number.
 	 *
-	 * <p>The combustion <i>flash</i> is not sent from here. It is re-derived on
-	 * the client from the same authoritative crank angle - see
-	 * {@link EngineState#updateClientVisuals()} - so it costs no packets at all.
+	 * <p>The first update after the block entity appears only <i>adopts</i> the
+	 * counters. Without that, every chunk load would fire a spark and a flash for
+	 * events that happened before the player arrived.
+	 *
+	 * <p>Only a difference is tested, never a magnitude: if two events arrive in
+	 * one client tick - a badly lagging connection, or an engine at full throttle
+	 * on a slow client - the player gets one flash and one puff rather than a
+	 * double bang. Reproducing the missed one would be worse, not better.
 	 */
-	private void emitCombustionEffects() {
-		if (!engine.consumeSparkEvent() || !(level instanceof ServerLevel serverLevel))
+	@OnlyIn(Dist.CLIENT)
+	private void playSyncedEvents() {
+		int spark = engine.getSparkEventId();
+		int combustion = engine.getCombustionEventId();
+
+		if (!clientEventsAdopted) {
+			clientEventsAdopted = true;
+			lastSparkEventId = spark;
+			lastCombustionEventId = combustion;
+			return;
+		}
+
+		if (spark != lastSparkEventId) {
+			lastSparkEventId = spark;
+			emitSpark();
+		}
+
+		if (combustion != lastCombustionEventId) {
+			lastCombustionEventId = combustion;
+			engine.triggerCombustionFlash();
+			playCombustionSound();
+		}
+	}
+
+	/**
+	 * The spark itself: one particle at the electrode gap, and a tiny electrical
+	 * tick.
+	 *
+	 * <p>The tick is deliberately silent while the engine is running. It is the
+	 * sound of a coil discharging, which in a running engine is completely masked
+	 * by the engine; what it is <i>for</i> is the case where nothing else is
+	 * happening - ignition on, no fuel, the engine turning over - where hearing
+	 * and seeing the plug fire while the engine refuses to catch is the whole
+	 * diagnosis.
+	 */
+	@OnlyIn(Dist.CLIENT)
+	private void emitSpark() {
+		if (level == null)
 			return;
 		BlockPos cylinderPos = EngineComponents.cylinderPos(worldPosition);
-		serverLevel.sendParticles(ParticleTypes.ELECTRIC_SPARK, cylinderPos.getX() + SPARK_PLUG_ELECTRODE.x,
-			cylinderPos.getY() + SPARK_PLUG_ELECTRODE.y, cylinderPos.getZ() + SPARK_PLUG_ELECTRODE.z, 1, 0.0D, 0.0D,
-			0.0D, 0.0D);
+		double x = cylinderPos.getX() + SPARK_PLUG_ELECTRODE.x;
+		double y = cylinderPos.getY() + SPARK_PLUG_ELECTRODE.y;
+		double z = cylinderPos.getZ() + SPARK_PLUG_ELECTRODE.z;
+
+		level.addParticle(ParticleTypes.ELECTRIC_SPARK, x, y, z, 0.0D, 0.0D, 0.0D);
+
+		if (engine.getPhase() != EnginePhase.RUNNING)
+			level.playLocalSound(x, y, z, ECSounds.ENGINE_SPARK.get(), SoundSource.BLOCKS,
+				EngineTuning.SOUND_SPARK_VOLUME, 1.0F, false);
+	}
+
+	/**
+	 * The cough of a charge burning while the engine is not yet running.
+	 *
+	 * <p>Silent once the engine is RUNNING, and that includes the charge that
+	 * catches it: a one-shot per revolution on top of the running loop is the
+	 * overlapping mush this deliberately avoids, and the catch has its own sound.
+	 * So a start reads as "puff, puff, BRUMM", with a flash on every one of those
+	 * events including the last.
+	 */
+	@OnlyIn(Dist.CLIENT)
+	private void playCombustionSound() {
+		if (level == null || engine.getPhase() == EnginePhase.RUNNING)
+			return;
+		level.playLocalSound(worldPosition.getX() + 0.5D, worldPosition.getY() + 0.5D, worldPosition.getZ() + 0.5D,
+			ECSounds.ENGINE_FIRE_ATTEMPT.get(), SoundSource.BLOCKS, EngineTuning.SOUND_FIRE_ATTEMPT_VOLUME,
+			EngineTuning.mapMechanicalRpmToCrankingPitch(engine.getMechanicalRpm()), false);
 	}
 
 	// --- audio --------------------------------------------------------------
 
 	/**
-	 * Plays the one-shot sounds, driven by the transitions the simulation just
-	 * made rather than by any timer of their own.
+	 * Plays the one-shot sounds that belong to a state <i>transition</i> rather
+	 * than to a firing event: the catch, the stall and the shutdown.
 	 *
-	 * <p>Server side only, and always through {@code Level#playSound} with a null
-	 * player, which broadcasts to everyone in range. Deriving the sounds from the
-	 * authoritative state means there is nothing to keep in step: a firing attempt
-	 * is audible exactly when start progress advanced, and no extra packet, event
-	 * or client-side guess is involved. It also makes double-playing impossible,
-	 * because the client never independently decides any of this.
+	 * <p>Server side, and always through {@code Level#playSound} with a null
+	 * player, which broadcasts to everyone in range. The firing cough is not here
+	 * - it is an event, not a transition, and it is played from the combustion
+	 * counter on the client so that it cannot land on a different tick from the
+	 * flash that describes the same charge.
 	 */
-	private void playTransitionSounds(EnginePhase phaseBefore, int startProgressBefore) {
+	private void playTransitionSounds(EnginePhase phaseBefore) {
 		if (level == null)
 			return;
 		EnginePhase phase = engine.getPhase();
-
-		// One cough per banked firing opportunity. The final cycle is deliberately
-		// not included: it becomes the catch instead, so starting reads as
-		// "puff, puff, BRUMM" rather than "puff, puff, puff+BRUMM".
-		if (engine.getStartProgress() > startProgressBefore)
-			playSound(ECSounds.ENGINE_FIRE_ATTEMPT.get(), EngineTuning.SOUND_FIRE_ATTEMPT_VOLUME,
-				EngineTuning.mapMechanicalRpmToCrankingPitch(engine.getMechanicalRpm()));
 
 		// The catch. Only on the transition, so it can never repeat while running.
 		if (phaseBefore == EnginePhase.STARTING && phase == EnginePhase.RUNNING)
@@ -874,6 +961,10 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// Persisted so a chunk reload does not hand the player free oil by
 		// discarding the revolutions already banked towards the next draw.
 		engine.setCombustionEventsSinceOilDraw(tag.getInt(KEY_OIL_WEAR));
+		// The event channel. Carried in the same block entity data as everything
+		// else, so a spark or a combustion arrives together with the phase and the
+		// speed that describe it - see playSyncedEvents.
+		engine.setEventIds(tag.getInt(KEY_SPARK_EVENT), tag.getInt(KEY_COMBUSTION_EVENT));
 	}
 
 	@Override
@@ -895,6 +986,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		tag.putString(KEY_LUBRICATION, engine.getLubrication()
 			.getId());
 		tag.putInt(KEY_OIL_WEAR, engine.getCombustionEventsSinceOilDraw());
+		tag.putInt(KEY_SPARK_EVENT, engine.getSparkEventId());
+		tag.putInt(KEY_COMBUSTION_EVENT, engine.getCombustionEventId());
 	}
 
 	private void sync() {
