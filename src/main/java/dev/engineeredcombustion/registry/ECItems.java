@@ -50,6 +50,22 @@ public class ECItems {
 		ITEMS.register("air_filter", () -> new Item(new Item.Properties().stacksTo(16)));
 
 	/**
+	 * Optional redstone automation for an engine, fitted <i>into</i> a placed
+	 * Crankshaft.
+	 *
+	 * <p>The engine is complete without it: the ignition switch on the crankcase
+	 * and the throttle on the Carburetor are the whole of the controls, and an
+	 * engine with no module ignores redstone entirely. Installing one adds the
+	 * choice of letting a signal hold the ignition, the throttle, or both - see
+	 * {@code ControlMode}.
+	 *
+	 * <p>An item rather than a block, and for the same reason the Air Filter is
+	 * one: it is a part that plugs into a machine, not a machine of its own.
+	 */
+	public static final DeferredHolder<Item, Item> REDSTONE_CONTROL_MODULE =
+		ITEMS.register("redstone_control_module", () -> new Item(new Item.Properties().stacksTo(16)));
+
+	/**
 	 * Vanilla's BucketItem needs the Fluid itself, not a supplier. That is safe
 	 * here because the FLUID registry is populated before the ITEM registry, so
 	 * the fluid already exists by the time this supplier runs.

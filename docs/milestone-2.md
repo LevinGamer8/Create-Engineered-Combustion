@@ -1,5 +1,12 @@
 # Milestone 2 - real mechanical rotation and hand-crank starting
 
+> **Superseded in part by [milestone 6](milestone-6.md).** The redstone ignition
+> enable described below is gone: the engine is started and stopped by a
+> mechanical switch on the crankcase, and a default engine ignores redstone
+> entirely. Redstone control is now opt-in, through a Redstone Control Module
+> item. Everything else here - the angular velocity, the inertia, the friction,
+> the firing rule and the hand-crank start - is unchanged.
+
 Milestone 1's engine was a switch: redstone on meant a fixed 32 RPM appeared out
 of nothing. That is gone. The engine now has an angular velocity of its own and
 **cannot start itself** - something has to physically turn it first.

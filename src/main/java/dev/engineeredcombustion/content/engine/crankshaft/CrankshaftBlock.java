@@ -4,8 +4,15 @@ import com.simibubi.create.content.kinetics.base.HorizontalAxisKineticBlock;
 import com.simibubi.create.foundation.block.IBE;
 
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
+import dev.engineeredcombustion.registry.ECItems;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction.Axis;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.ItemInteractionResult;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -14,6 +21,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
+import net.minecraft.world.phys.BlockHitResult;
 
 /**
  * The crankshaft: logical controller of a single-cylinder engine, and a real
@@ -55,22 +63,37 @@ import net.minecraft.world.level.block.state.properties.BooleanProperty;
  * {@code HorizontalAxisKineticBlock}, which prefers the axis of an adjacent
  * shaft and otherwise takes the player's <i>clockwise</i> direction - correct
  * for a cogwheel, wrong for a machine the player is lining up by eye.
+ *
+ * <h2>The engine's controls</h2>
+ * The crankcase carries the ignition switch, and it is the whole of what an
+ * engine needs to be started and stopped:
+ * <ul>
+ * <li>right-click empty-handed - work the switch;</li>
+ * <li>right-click holding a Redstone Control Module - plug it in, which is the
+ * <i>only</i> way this engine ever comes to care about redstone;</li>
+ * <li>sneak + right-click empty-handed - take that module back out;</li>
+ * <li>right-click and hold with a Wrench on the module's value box - Create's
+ * own value UI, for choosing what redstone is allowed to drive.</li>
+ * </ul>
  */
 public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<CrankshaftBlockEntity> {
 
 	/**
-	 * Whether the ignition indicator lamp on the crankcase is glowing.
+	 * Whether the ignition is live: the tell-tale lamp on the crankcase glows and
+	 * the ignition switch beside it stands up.
 	 *
-	 * <p>Purely cosmetic - nothing reads it back, the simulation still takes
-	 * ignition from the live redstone signal. It exists so that a player without
-	 * Engineer's Goggles can see at a glance that the engine is switched on, which
-	 * is exactly the kind of thing a real machine tells you by looking at it. Kept
-	 * as a block state rather than a renderer so it costs nothing to draw and works
-	 * on any rendering backend.
+	 * <p>Purely cosmetic - nothing reads it back. It is written from the engine's
+	 * <i>effective</i> ignition (see
+	 * {@code CrankshaftBlockEntity#updateIgnitionIndicator}), so the switch on the
+	 * model shows the state the engine is actually in, whether that came from a
+	 * player flipping it or from a Redstone Control Module. A player without
+	 * Engineer's Goggles can therefore read the engine's ignition by looking at it,
+	 * which is exactly what a real machine's switch is for.
 	 *
-	 * <p>It is deliberately not part of {@code areStatesKineticallyEquivalent},
-	 * which compares block and rotation axis only, so toggling the lamp can never
-	 * re-propagate the kinetic network.
+	 * <p>Kept as a block state rather than a renderer so it costs nothing to draw
+	 * and works on any rendering backend. It is deliberately not part of
+	 * {@code areStatesKineticallyEquivalent}, which compares block and rotation axis
+	 * only, so toggling it can never re-propagate the kinetic network.
 	 */
 	public static final BooleanProperty LIT = BlockStateProperties.LIT;
 
@@ -114,13 +137,95 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<C
 			crankshaft.onSurroundingsChanged();
 	}
 
+	/**
+	 * Fits a Redstone Control Module.
+	 *
+	 * <p>An item installed into a placed block, exactly like the Piston Assembly
+	 * and the Air Filter: it is a part you plug into an engine's controls, not a
+	 * machine standing beside it, and the engine is already five blocks tall.
+	 */
+	@Override
+	protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
+		Player player, InteractionHand hand, BlockHitResult hitResult) {
+		if (!stack.is(ECItems.REDSTONE_CONTROL_MODULE.get()))
+			return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+		if (!(level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft))
+			return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+		if (crankshaft.hasControlModule())
+			return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+
+		if (!level.isClientSide) {
+			crankshaft.installControlModule();
+			if (!player.isCreative())
+				stack.shrink(1);
+			level.playSound(null, pos, state.getSoundType()
+				.getPlaceSound(), SoundSource.BLOCKS, 0.8F, 1.1F);
+		}
+		return ItemInteractionResult.sidedSuccess(level.isClientSide);
+	}
+
+	/**
+	 * The engine's two bare-handed interactions.
+	 *
+	 * <ul>
+	 * <li>right-click - works the ignition switch. This is the normal way to start
+	 * and stop the engine, and it needs no redstone whatsoever.</li>
+	 * <li>sneak + right-click - takes an installed Redstone Control Module back out
+	 * and hands it over, the same gesture that recovers a Piston Assembly or an Air
+	 * Filter.</li>
+	 * </ul>
+	 *
+	 * <p>Both require an empty hand, and that is load-bearing rather than
+	 * decoration: this method also runs when the player is holding something the
+	 * block did not consume, so claiming the interaction unconditionally would stop
+	 * a Shaft, a Flywheel or any other block from being placed against the
+	 * crankshaft. Passing when the hand is full is what keeps building next to a
+	 * running engine possible.
+	 *
+	 * <p>The value box that selects the control mode cannot swallow either gesture:
+	 * it is wrench-only ({@code requiresWrench}), and Create's value UI ignores a
+	 * sneaking click in any case.
+	 */
+	@Override
+	protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
+		BlockHitResult hitResult) {
+		if (!(level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft))
+			return InteractionResult.PASS;
+		if (!player.getMainHandItem()
+			.isEmpty())
+			return InteractionResult.PASS;
+
+		if (player.isShiftKeyDown()) {
+			if (!crankshaft.hasControlModule())
+				return InteractionResult.PASS;
+			if (!level.isClientSide && crankshaft.removeControlModule()) {
+				ItemStack recovered = new ItemStack(ECItems.REDSTONE_CONTROL_MODULE.get());
+				if (!player.getInventory()
+					.add(recovered))
+					popResource(level, pos, recovered);
+				level.playSound(null, pos, state.getSoundType()
+					.getBreakSound(), SoundSource.BLOCKS, 0.8F, 0.9F);
+			}
+			return InteractionResult.sidedSuccess(level.isClientSide);
+		}
+
+		if (!level.isClientSide)
+			crankshaft.toggleIgnitionFor(player);
+		return InteractionResult.sidedSuccess(level.isClientSide);
+	}
+
 	@Override
 	public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
-		// Clear the engine and stop the flywheel *before* the block entity goes away,
-		// otherwise the flywheel would keep asking a crankshaft that no longer exists
-		// until Create's periodic kinetic validation notices.
-		if (!state.is(newState.getBlock()) && level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft)
+		if (!state.is(newState.getBlock()) && level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft) {
+			// An installed module is a real item the player paid for; it must not
+			// evaporate because the block it was plugged into was mined.
+			if (crankshaft.hasControlModule())
+				popResource(level, pos, new ItemStack(ECItems.REDSTONE_CONTROL_MODULE.get()));
+			// Clear the engine and stop the flywheel *before* the block entity goes
+			// away, otherwise the flywheel would keep asking a crankshaft that no
+			// longer exists until Create's periodic kinetic validation notices.
 			crankshaft.onEngineRemoved();
+		}
 		// KineticBlock#onRemove routes to IBE.onRemove, which destroys the block
 		// entity and lets it detach from the kinetic network. Skipping it would
 		// strand this position in whatever network it belonged to.
@@ -137,9 +242,9 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<C
 		return ECBlockEntityTypes.CRANKSHAFT.get();
 	}
 
-	// Deliberately no useWithoutItem override. Right-clicking the crankshaft used to
-	// print the engine's internal simulation values into chat; that was development
-	// output and is gone. The engine's state is read by looking at it - plain
-	// hovering information for anyone, full instrumentation through Engineer's
-	// Goggles - so bare-handed clicking now correctly does nothing at all.
+	// The bare-handed click used to print the engine's internal simulation values
+	// into chat. That was development output; it is gone, and the gesture now works
+	// the ignition switch instead. The engine's state is still read by looking at
+	// it - plain hovering information for anyone, full instrumentation through
+	// Engineer's Goggles - never by clicking for a chat dump.
 }
