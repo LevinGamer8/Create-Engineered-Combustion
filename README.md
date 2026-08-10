@@ -14,7 +14,7 @@ layouts. Development proceeds in small, individually buildable milestones.
 | | |
 | --- | --- |
 | Minecraft | 1.21.1 |
-| Mod loader | NeoForge 21.1.219 |
+| Mod loader | NeoForge 21.1.238 |
 | Java | 21 |
 | Create | 6.0.10 (**required** dependency) |
 | Mod ID | `engineered_combustion` |
