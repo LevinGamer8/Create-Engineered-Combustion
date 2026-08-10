@@ -113,3 +113,10 @@ enforces.
   gasoline level, an Air Filter item fitted to the Carburetor, and a 0-100 %
   throttle that changes combustion torque rather than dialling in a speed. See
   [`docs/milestone-5.md`](docs/milestone-5.md).
+* **Milestone 6** - control architecture: the Flywheel may sit at *either* end of
+  the crankshaft (and two of them are an explicit, inert error rather than an
+  arbitrary choice), and redstone is no longer the ignition. The engine runs on a
+  mechanical ignition switch on the crankcase with no redstone at all; an optional
+  Redstone Control Module item adds ignition, throttle or both under signal
+  control, resolved centrally so nothing else in the mod reads redstone. See
+  [`docs/milestone-6.md`](docs/milestone-6.md).

@@ -7,6 +7,9 @@ import org.jetbrains.annotations.Nullable;
 import com.simibubi.create.content.equipment.goggles.GogglesItem;
 import com.simibubi.create.content.kinetics.base.IRotate.StressImpact;
 import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
+import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
+import com.simibubi.create.foundation.blockEntity.behaviour.CenteredSideValueBoxTransform;
+import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollOptionBehaviour;
 import com.simibubi.create.infrastructure.config.AllConfigs;
 
 import dev.engineeredcombustion.client.sound.EngineSoundManager;
@@ -19,6 +22,8 @@ import dev.engineeredcombustion.content.engine.FuelSupply;
 import dev.engineeredcombustion.content.engine.LubricationState;
 import dev.engineeredcombustion.content.engine.OilSupply;
 import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
+import dev.engineeredcombustion.content.engine.control.ControlMode;
+import dev.engineeredcombustion.content.engine.control.EngineControlState;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
 import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
@@ -31,6 +36,7 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.Direction.Axis;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.particles.ParticleTypes;
@@ -38,6 +44,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -61,8 +68,8 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * </ol>
  * Additionally on the server:
  * <ol start="3">
- * <li>resolve the engine's components, the redstone ignition signal, the
- * carburetor's throttle setting and the network's load;</li>
+ * <li>resolve the engine's components and, in one place, its control inputs -
+ * see {@link #resolveControlState()} - plus the network's load;</li>
  * <li>run combustion, inertia and friction;</li>
  * <li>if - and only if - the speed the engine wants to generate changed, tell
  * the flywheel to push it into Create.</li>
@@ -105,6 +112,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private static final String KEY_SIMULATED_RPM = "SimulatedRpm";
 	private static final String KEY_PUBLISHED_RPM = "PublishedRpm";
 	private static final String KEY_IGNITION = "Ignition";
+	private static final String KEY_MANUAL_IGNITION = "ManualIgnition";
+	private static final String KEY_CONTROL_MODULE = "ControlModule";
 	private static final String KEY_STRUCTURE_VALID = "StructureValid";
 	private static final String KEY_REDSTONE_SIGNAL = "RedstoneSignal";
 	private static final String KEY_START_PROGRESS = "StartProgress";
@@ -123,11 +132,38 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private final java.util.Random random = new java.util.Random();
 
 	/**
-	 * Strongest redstone signal reaching the crankshaft, 0-15. Server-authoritative,
-	 * synchronised to the client purely so the sneak diagnostics can show it - the
-	 * goggle overlay runs client-side and has no other way to know.
+	 * Strongest redstone signal reaching the crankshaft, 0-15, or <b>0 whenever no
+	 * mode that reads redstone is selected</b>. Server-authoritative, synchronised
+	 * to the client so the overlay can show it - the overlay runs client-side and
+	 * has no other way to know.
+	 *
+	 * <p>Held at 0 rather than merely ignored, so that "is redstone doing anything
+	 * to this engine" is answerable from one field: see
+	 * {@link #readRedstoneSignal()}.
 	 */
 	private int redstoneSignal;
+
+	/**
+	 * Position of the ignition switch on the crankcase. This is the player's
+	 * setting, not the engine's state: in a redstone ignition mode the engine may
+	 * be running with this false, and it survives such a mode unchanged, which is
+	 * what makes pulling the module out predictable.
+	 */
+	private boolean manualIgnition;
+
+	/** Whether a Redstone Control Module is plugged into the engine's controls. */
+	private boolean controlModuleInstalled;
+
+	/**
+	 * What redstone at this engine is allowed to do. Only consulted while a
+	 * Redstone Control Module is installed - see {@link #getControlMode()} - and
+	 * only editable then, because the value box is
+	 * {@code onlyActiveWhen(module installed)}.
+	 *
+	 * <p>Create owns its persistence, its packet and its UI. Package-private and
+	 * assigned in {@link #addBehaviours}, exactly like the Carburetor's throttle.
+	 */
+	ScrollOptionBehaviour<ControlMode> controlMode;
 
 	/**
 	 * Components resolved at the top of the current server tick, or null outside
@@ -145,7 +181,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * the engine is structurally complete: a crankshaft with no piston installed
 	 * cannot run, but must still be turnable by an external Create source.
 	 *
-	 * <p>The position rule itself lives in {@link EngineComponents#findFlywheelPos}
+	 * <p>The position rule itself lives in {@link EngineComponents#findFlywheel}
 	 * - this only caches its answer.
 	 */
 	@Nullable
@@ -198,6 +234,45 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		super(ECBlockEntityTypes.CRANKSHAFT.get(), pos, state);
 	}
 
+	/**
+	 * Registers the control-mode selector as a normal Create value box.
+	 *
+	 * <p>Three deliberate choices, all of them Create's own API rather than a
+	 * bespoke screen:
+	 * <ul>
+	 * <li>{@code onlyActiveWhen} - an engine with no module has no mode to pick, so
+	 * the box does not exist for it: it is neither drawn, nor hit-tested, nor
+	 * editable ({@code ScrollValueRenderer} and {@code ValueSettingsInputHandler}
+	 * both skip inactive behaviours).</li>
+	 * <li>{@code requiresWrench} - the switch is operated bare-handed, so the value
+	 * box must not swallow that click. Gating it on a wrench keeps the two
+	 * interactions apart without either one having to know about the other, and
+	 * keeps a configuration widget off the crankcase during normal play.</li>
+	 * <li>the sides - the two <i>flanks</i> of the crankcase, which is where the
+	 * switch and the tell-tale are. Never the ends of the crank axis: those are
+	 * shaft faces, and a value box floating over one would read as belonging to
+	 * whatever is bolted there.</li>
+	 * </ul>
+	 */
+	@Override
+	public void addBehaviours(List<BlockEntityBehaviour> behaviours) {
+		super.addBehaviours(behaviours);
+		controlMode = new ScrollOptionBehaviour<>(ControlMode.class, ECLang.translate("gui.control_module")
+			.component(), this, new CenteredSideValueBoxTransform(CrankshaftBlockEntity::isControlSide));
+		controlMode.requiresWrench();
+		controlMode.onlyActiveWhen(this::hasControlModule);
+		behaviours.add(controlMode);
+	}
+
+	/** The crankcase flanks: horizontal, and not along the crank axis. */
+	private static boolean isControlSide(BlockState state, Direction direction) {
+		if (!state.hasProperty(CrankshaftBlock.HORIZONTAL_AXIS))
+			return false;
+		return direction.getAxis()
+			.isHorizontal()
+			&& direction.getAxis() != state.getValue(CrankshaftBlock.HORIZONTAL_AXIS);
+	}
+
 	@Override
 	public void tick() {
 		// Create's own kinetic bookkeeping first: attaching to the network,
@@ -230,10 +305,19 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		tickComponents = resolveComponents();
 		reassertKineticSourceIfNeeded(flywheel);
 
-		// Read live every tick. This is cheap (six neighbours) and is the only way
-		// the state can never go stale, whatever order neighbour updates arrive in.
+		// Read live every tick, and only in a mode that uses it. Reading here is the
+		// only way the state can never go stale, whatever order neighbour updates
+		// arrive in.
 		int signalBefore = redstoneSignal;
-		redstoneSignal = level.getBestNeighborSignal(worldPosition);
+		redstoneSignal = readRedstoneSignal();
+
+		// The one place control inputs become simulation inputs. Everything below -
+		// combustion, the tell-tale, the switch model, the overlay - reads this
+		// single resolved answer rather than consulting redstone or the carburetor
+		// again on its own. The overlay runs the very same resolution client-side,
+		// off the same synchronised values, which is why no effective throttle has to
+		// travel on the wire.
+		EngineControlState control = resolveControlState();
 
 		EnginePhase phaseBefore = engine.getPhase();
 		boolean structureValidBefore = engine.isStructureValid();
@@ -241,8 +325,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		boolean fuelBefore = engine.isFuelAvailable();
 		LubricationState lubricationBefore = engine.getLubrication();
 
-		EngineInputs inputs = new EngineInputs(tickComponents.isMechanicallyValid(), redstoneSignal > 0,
-			flywheel != null && flywheel.hasSource(), readThrottle(), readLoadFactor(), speedLimit());
+		EngineInputs inputs = new EngineInputs(tickComponents.isMechanicallyValid(), control.ignitionEnabled(),
+			flywheel != null && flywheel.hasSource(), control.throttle(), readLoadFactor(), speedLimit());
 		boolean generatedSpeedChanged = engine.tickSimulation(inputs, fuelSupply, oilSupply, random);
 
 		if (generatedSpeedChanged && flywheel != null)
@@ -257,8 +341,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// things that change the engine's rotation. Toggling redstone on a stopped
 		// engine changes no speed and no phase, so without this the client would
 		// keep showing the ignition state it was last told about.
-		if (generatedSpeedChanged || signalBefore != redstoneSignal || phaseBefore != engine.getPhase()
-			|| structureValidBefore != engine.isStructureValid()
+		if (generatedSpeedChanged || signalBefore != redstoneSignal
+			|| phaseBefore != engine.getPhase() || structureValidBefore != engine.isStructureValid()
 			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()
 			|| lubricationBefore != engine.getLubrication()) {
 			sync();
@@ -282,8 +366,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	}
 
 	/**
-	 * Drops the cached flywheel coupling. Called from {@code neighborChanged} and
-	 * by the cylinder when its piston assembly is installed or removed.
+	 * Re-derives the flywheel coupling. Called from {@code neighborChanged} and by
+	 * the cylinder when its piston assembly is installed or removed.
 	 *
 	 * <p>Nothing else needs invalidating: components are resolved fresh every tick
 	 * and every time the overlay asks, so placing or removing a Carburetor, an Oil
@@ -291,8 +375,27 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * and no stale block entity to hold.
 	 */
 	public void onSurroundingsChanged() {
+		BlockPos previous = flywheelPos;
 		cachedFlywheel = null;
 		flywheelPos = null;
+		if (previous == null || level == null || level.isClientSide)
+			return;
+
+		// Re-resolve at once, because a coupling that just *moved* leaves the old
+		// flywheel holding a generated speed nobody will ever revise: this block
+		// stops calling it, and Create only asks a source for its speed when
+		// something tells it to. That is what a second flywheel appearing on the far
+		// end would otherwise do - the engine goes structurally invalid and stops
+		// combusting, while the flywheel it used to drive keeps the network turning
+		// on a value that no longer means anything.
+		getFlywheel();
+		if (previous.equals(flywheelPos))
+			return;
+		if (level.isLoaded(previous)
+			&& level.getBlockEntity(previous) instanceof EngineFlywheelBlockEntity stale)
+			// Answers 0 now - getGeneratedRpmFor only pays out to the coupled
+			// flywheel - so this detaches it rather than handing it a new speed.
+			stale.onEngineOutputChanged();
 	}
 
 	/** Called from {@code CrankshaftBlock#onRemove} before the block entity dies. */
@@ -321,20 +424,151 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			flywheel.onEngineOutputChanged();
 	}
 
-	// --- simulation inputs ---------------------------------------------------
+	// --- controls ------------------------------------------------------------
 
 	/**
-	 * Main throttle opening, {@code [0, 1]}, taken from the Carburetor's scroll
-	 * value.
+	 * <b>The</b> authoritative resolution of this engine's control inputs.
+	 *
+	 * <p>Everything that wants to know whether the ignition is live or how far the
+	 * throttle is open calls this, and nothing anywhere else reads redstone or
+	 * decides what a mode means. That is what makes the default - manual - a
+	 * property of one method rather than of every subsystem: with no module
+	 * installed {@link #getControlMode()} is {@link ControlMode#MANUAL}, so
+	 * {@link #readRedstoneSignal()} never even looks at the neighbours and the
+	 * player's own switch and Carburetor are the only inputs that exist.
+	 *
+	 * <p>Safe on both sides. Every value it reads - the module flag, the mode, the
+	 * switch position, the signal, the Carburetor's throttle - is synchronised, so
+	 * the overlay resolves exactly what the simulation resolved.
+	 */
+	public EngineControlState resolveControlState() {
+		ControlMode mode = getControlMode();
+		int signal = mode.usesRedstone() ? redstoneSignal : 0;
+		boolean ignition = mode.controlsIgnition() ? signal > 0 : manualIgnition;
+		int throttlePercent =
+			mode.controlsThrottle() ? mode.commandedThrottlePercent(signal) : manualThrottlePercent();
+		return new EngineControlState(mode, ignition, throttlePercent, signal);
+	}
+
+	/**
+	 * The strongest signal reaching this block, or 0 when nothing is listening.
+	 *
+	 * <p>This is the hard guarantee that a default engine ignores redstone: with no
+	 * module, or in {@link ControlMode#MANUAL}, the neighbours are never sampled at
+	 * all, so a lever slapped onto the crankcase cannot change the ignition, the
+	 * throttle, or even the number the overlay prints.
+	 */
+	private int readRedstoneSignal() {
+		if (level == null || !getControlMode().usesRedstone())
+			return 0;
+		return level.getBestNeighborSignal(worldPosition);
+	}
+
+	/**
+	 * The player's stored throttle setting, as a whole percentage, straight off the
+	 * Carburetor's scroll value.
+	 *
+	 * <p>Automation never writes here. A redstone throttle mode produces its own
+	 * commanded value in {@link #resolveControlState()} and leaves this one alone,
+	 * which is why returning to manual control restores the setting the player last
+	 * dialled in rather than whatever the signal happened to be.
 	 *
 	 * <p>An engine with no Carburetor reads 0. That is not a special case worth
 	 * worrying about: no Carburetor also means no fuel, so such an engine cannot
 	 * run under its own power at any throttle.
 	 */
-	private float readThrottle() {
+	public int manualThrottlePercent() {
 		CarburetorBlockEntity carburetor = getCarburetor();
-		return carburetor == null ? 0.0F : carburetor.getThrottle();
+		return carburetor == null ? EngineTuning.THROTTLE_MIN_PERCENT : carburetor.getThrottlePercent();
 	}
+
+	/**
+	 * The selected control mode, or {@link ControlMode#MANUAL} whenever no module
+	 * is installed - including on an engine that had one configured and lost it, so
+	 * removing the module always reverts to manual control immediately.
+	 */
+	public ControlMode getControlMode() {
+		return controlModuleInstalled && controlMode != null ? ControlMode.byOrdinal(controlMode.getValue())
+			: ControlMode.MANUAL;
+	}
+
+	public boolean hasControlModule() {
+		return controlModuleInstalled;
+	}
+
+	/**
+	 * Flips the ignition switch and reports the new position.
+	 *
+	 * <p>Server side; the block's interaction handles the client. Nothing is
+	 * validated here on purpose - switching the ignition on with no fuel, no piston
+	 * or no flywheel is a perfectly reasonable thing for a player to do, and the
+	 * engine simply will not catch.
+	 */
+	public boolean toggleManualIgnition() {
+		setManualIgnition(!manualIgnition);
+		return manualIgnition;
+	}
+
+	/**
+	 * The player worked the ignition switch: flip it, click, and say what it now
+	 * reads.
+	 *
+	 * <p>Feedback is deliberately not a chat line. The switch itself moves on the
+	 * model, the tell-tale on the crankcase lights, a lever click plays, and the
+	 * new position is written to the action bar - which is where Create puts this
+	 * kind of confirmation and which does not accumulate in the chat log.
+	 */
+	public void toggleIgnitionFor(Player player) {
+		boolean on = toggleManualIgnition();
+		playSound(SoundEvents.LEVER_CLICK, 0.4F, on ? 0.72F : 0.58F);
+		ECLang.translate("gui.ignition", ECLang.translate(on ? "gui.value.enabled" : "gui.value.disabled")
+			.style(on ? ChatFormatting.GREEN : ChatFormatting.RED)
+			.component())
+			.style(ChatFormatting.WHITE)
+			.sendStatus(player);
+	}
+
+	public void setManualIgnition(boolean on) {
+		if (manualIgnition == on)
+			return;
+		manualIgnition = on;
+		setChanged();
+		// The switch model and the tell-tale both follow the *effective* ignition,
+		// which the next tick recomputes; this update is what carries the new switch
+		// position to the client in the meantime.
+		sync();
+	}
+
+	/** @return false when a module is already installed. */
+	public boolean installControlModule() {
+		if (controlModuleInstalled)
+			return false;
+		controlModuleInstalled = true;
+		setChanged();
+		sync();
+		return true;
+	}
+
+	/**
+	 * @return false when there was nothing to remove.
+	 *
+	 *         <p>The selected mode is deliberately kept in NBT: a module put back
+	 *         in is the same module, configured as it was. It has no effect while
+	 *         absent, because {@link #getControlMode()} answers MANUAL.
+	 */
+	public boolean removeControlModule() {
+		if (!controlModuleInstalled)
+			return false;
+		controlModuleInstalled = false;
+		// Whatever redstone was doing stops mattering this instant, and the stored
+		// signal has to go with it or the overlay would keep printing it.
+		redstoneSignal = 0;
+		setChanged();
+		sync();
+		return true;
+	}
+
+	// --- simulation inputs ---------------------------------------------------
 
 	/**
 	 * How hard the kinetic network is leaning on the engine, as stress over
@@ -490,8 +724,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	// --- mechanical coupling ------------------------------------------------
 
 	/**
-	 * The adjacent flywheel along the crankshaft's axis, independent of whether
-	 * the engine is structurally complete.
+	 * The adjacent flywheel along the crankshaft's axis - at either end - and
+	 * independent of whether the engine is structurally complete.
+	 *
+	 * <p>Null when there is a flywheel at <i>both</i> ends. That is what makes the
+	 * unsupported twin-flywheel build inert rather than arbitrary: with no coupling,
+	 * {@link #getGeneratedRpmFor(BlockPos)} answers 0 to both of them, so neither
+	 * becomes a source and no capacity is duplicated.
 	 */
 	@Nullable
 	public EngineFlywheelBlockEntity getFlywheel() {
@@ -502,7 +741,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (level == null)
 			return null;
 
-		BlockPos candidate = EngineComponents.findFlywheelPos(level, worldPosition, getAxis());
+		BlockPos candidate = EngineComponents.findFlywheel(level, worldPosition, getAxis())
+			.pos();
 		if (candidate == null)
 			return null;
 		if (!(level.getBlockEntity(candidate) instanceof EngineFlywheelBlockEntity flywheel))
@@ -541,8 +781,9 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private EngineComponents resolveComponents() {
 		BlockPos pos = worldPosition;
 		return level == null
-			? new EngineComponents(pos, getAxis(), EngineComponents.cylinderPos(pos), null, null, null,
-				EngineComponents.carburetorPos(pos), null, EngineComponents.oilSumpPos(pos), null)
+			? new EngineComponents(pos, getAxis(), EngineComponents.cylinderPos(pos), null,
+				EngineComponents.FlywheelPlacement.NONE, null, null, EngineComponents.carburetorPos(pos), null,
+				EngineComponents.oilSumpPos(pos), null)
 			: EngineComponents.resolve(level, pos, getAxis());
 	}
 
@@ -564,8 +805,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	/**
 	 * Rotational speed this engine generates for the flywheel at the given
 	 * position, in RPM. Returns 0 for any block that is not the flywheel this
-	 * crankshaft is coupled to, which is what makes a second flywheel on the
-	 * opposite end inert.
+	 * crankshaft is coupled to - and for <i>both</i> of them when a flywheel is
+	 * bolted to each end, because then there is no coupling at all.
 	 *
 	 * <p>The value is <i>latched</i>: it only changes when the simulation decides
 	 * to publish a new one. Create calls this from validation and propagation at
@@ -611,12 +852,21 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		engine.setCrankAngleDegrees(tag.getFloat(KEY_CRANK_ANGLE));
 		// A running engine should survive a chunk reload rather than silently dying,
 		// so the phase and both speeds are restored too. Structure validity and the
-		// ignition signal are re-derived from the world on the next server tick.
+		// effective ignition are re-derived from the world on the next server tick.
 		engine.setPhase(EnginePhase.byId(tag.getString(KEY_PHASE)));
 		engine.setSimulatedRpm(tag.getFloat(KEY_SIMULATED_RPM));
 		engine.setPublishedRpm(tag.getFloat(KEY_PUBLISHED_RPM));
 		engine.setIgnitionEnabled(tag.getBoolean(KEY_IGNITION));
 		engine.setStructureValid(tag.getBoolean(KEY_STRUCTURE_VALID));
+		// The ignition switch is a physical switch on the crankcase: it stays where
+		// the player left it across a save, a chunk unload and a server restart,
+		// exactly as the throttle lever and the fuel in the float bowl do. Nothing
+		// is *started* by that - loading restores the engine's phase too, and the
+		// start sounds are emitted from phase transitions computed inside a tick, so
+		// an engine that was already running resumes running rather than announcing
+		// a fresh start, and one that was stopped stays stopped until it is cranked.
+		manualIgnition = tag.getBoolean(KEY_MANUAL_IGNITION);
+		controlModuleInstalled = tag.getBoolean(KEY_CONTROL_MODULE);
 		redstoneSignal = tag.getInt(KEY_REDSTONE_SIGNAL);
 		engine.setStartAttempt(tag.getInt(KEY_START_PROGRESS), tag.getInt(KEY_START_REQUIRED));
 		engine.setFuelAvailable(tag.getBoolean(KEY_FUEL_AVAILABLE));
@@ -636,6 +886,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		tag.putFloat(KEY_PUBLISHED_RPM, engine.getPublishedRpm());
 		tag.putBoolean(KEY_IGNITION, engine.isIgnitionEnabled());
 		tag.putBoolean(KEY_STRUCTURE_VALID, engine.isStructureValid());
+		tag.putBoolean(KEY_MANUAL_IGNITION, manualIgnition);
+		tag.putBoolean(KEY_CONTROL_MODULE, controlModuleInstalled);
 		tag.putInt(KEY_REDSTONE_SIGNAL, redstoneSignal);
 		tag.putInt(KEY_START_PROGRESS, engine.getStartProgress());
 		tag.putInt(KEY_START_REQUIRED, engine.getRequiredStartCycles());
@@ -696,11 +948,15 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
-		// One resolution for the whole overlay, and the same call the simulation
-		// makes. If combustion can draw from a Carburetor, these lines describe that
-		// same Carburetor - they cannot disagree.
+		// One resolution of each for the whole overlay, and the same two calls the
+		// simulation makes. If combustion can draw from a Carburetor, these lines
+		// describe that same Carburetor; if the engine is running on a commanded
+		// throttle, they print that same number - they cannot disagree.
 		EngineComponents components = engineComponents();
-		addThrottleLine(tooltip, components.carburetor());
+		EngineControlState control = resolveControlState();
+		addThrottleLine(tooltip, components.carburetor(), control);
+		addControlLines(tooltip, control);
+		addFlywheelWarning(tooltip, components);
 		addFuelLines(tooltip, components.carburetor());
 		addLubricationLines(tooltip, components.oilSump());
 
@@ -715,24 +971,105 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 				.style(ChatFormatting.GRAY)
 				.forGoggles(tooltip, 1);
 
+		addControlModuleBlock(tooltip);
+
 		if (isPlayerSneaking)
 			addDiagnostics(tooltip);
 		return true;
 	}
 
 	/**
-	 * Throttle, read straight off the Carburetor so it is the same number the
-	 * simulation used and the same number the lever on the model is showing.
-	 * Skipped entirely when there is no Carburetor - a throttle reading for a
-	 * control that is not installed would be noise.
+	 * The installed module, as its own little block at the end of the overlay -
+	 * the same shape Create gives a part that has settings of its own.
+	 *
+	 * <p>Absent entirely on an engine without one, which is the common case and the
+	 * one the HUD should stay quiet about.
 	 */
-	private void addThrottleLine(List<Component> tooltip, @Nullable CarburetorBlockEntity carburetor) {
+	private void addControlModuleBlock(List<Component> tooltip) {
+		if (!controlModuleInstalled)
+			return;
+
+		ECLang.translate("gui.control_module")
+			.style(ChatFormatting.WHITE)
+			.forGoggles(tooltip);
+
+		ECLang.translate("gui.mode", Component.translatable(getControlMode().getTranslationKey()))
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+	}
+
+	/**
+	 * Throttle the engine is <i>actually</i> running on, which is the Carburetor's
+	 * lever unless redstone automation is commanding one instead. Skipped entirely
+	 * when there is no Carburetor - a throttle reading for a control that is not
+	 * installed would be noise.
+	 */
+	private void addThrottleLine(List<Component> tooltip, @Nullable CarburetorBlockEntity carburetor,
+		EngineControlState control) {
 		if (carburetor == null)
 			return;
-		ECLang.translate("gui.throttle", ECLang.number(carburetor.getThrottlePercent())
+		ECLang.translate("gui.throttle", ECLang.number(control.throttlePercent())
 			.style(ChatFormatting.AQUA)
 			.component())
 			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
+		// The player's own setting, shown only while something else is overriding it
+		// - otherwise it is the same number twice. This is the line that says the
+		// manual throttle is being borrowed, not overwritten.
+		if (control.mode()
+			.controlsThrottle() && control.throttlePercent() != manualThrottlePercent())
+			ECLang.translate("gui.manual_throttle", ECLang.number(manualThrottlePercent())
+				.style(ChatFormatting.DARK_GRAY)
+				.component())
+				.style(ChatFormatting.DARK_GRAY)
+				.forGoggles(tooltip, 1);
+	}
+
+	/**
+	 * Who is holding the controls, and - only when redstone actually is - what it
+	 * is being told.
+	 *
+	 * <p>The signal line is deliberately absent in every manual configuration. An
+	 * engine that ignores redstone must not print a redstone reading, or the HUD
+	 * would suggest an input that has no effect.
+	 */
+	private void addControlLines(List<Component> tooltip, EngineControlState control) {
+		ControlMode mode = control.mode();
+
+		ECLang.translate("gui.control", (mode.usesRedstone()
+			? ECLang.translate("gui.control.redstone_mode", Component.translatable(mode.getTranslationKey()))
+				.style(ChatFormatting.RED)
+			: ECLang.translate("gui.control.manual")
+				.style(ChatFormatting.WHITE)).component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
+		if (!mode.usesRedstone())
+			return;
+
+		ECLang.translate("gui.signal", ECLang.number(control.redstoneSignal())
+			.style(control.redstoneSignal() > 0 ? ChatFormatting.RED : ChatFormatting.DARK_GRAY)
+			.component(),
+			ECLang.number(ControlMode.MAX_SIGNAL)
+				.style(ChatFormatting.DARK_GRAY)
+				.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+	}
+
+	/**
+	 * The one structural fault worth explaining rather than merely reporting.
+	 *
+	 * <p>"Invalid" is unhelpful for a build that looks finished, and a flywheel at
+	 * each end looks extremely finished. Everything else that can be missing - the
+	 * piston, the flywheel, the carburetor - already has its own line.
+	 */
+	private void addFlywheelWarning(List<Component> tooltip, EngineComponents components) {
+		if (!components.hasFlywheelConflict())
+			return;
+		ECLang.translate("gui.flywheel_conflict")
+			.style(ChatFormatting.RED)
 			.forGoggles(tooltip, 1);
 	}
 
@@ -833,29 +1170,41 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.forGoggles(tooltip);
 
 		// Resolved from the world rather than read from the synced simulation flag,
-		// so this line answers "is the engine assembled correctly right now" using
+		// so these lines answer "is the engine assembled correctly right now" using
 		// the same rule the server uses to decide whether it may run.
-		boolean valid = engineComponents().isMechanicallyValid();
+		EngineComponents components = engineComponents();
+		boolean valid = components.isMechanicallyValid();
 		diagnostic(tooltip, "structure", ECLang
 			.translate(valid ? "gui.value.valid" : "gui.value.invalid")
 			.style(valid ? ChatFormatting.GREEN : ChatFormatting.RED));
 		diagnostic(tooltip, "rotation_source", ECLang.translate(engine.getRotationSource()
 			.translationKey())
 			.style(ChatFormatting.WHITE));
-		diagnostic(tooltip, "redstone_signal", ECLang.number(redstoneSignal)
-			.style(redstoneSignal > 0 ? ChatFormatting.GREEN : ChatFormatting.RED));
+		// Which end of the crank axis the flywheel is on. Purely informational - both
+		// ends are equally valid - but it is the fastest way to confirm that the
+		// resolver found the one the player actually built.
+		diagnostic(tooltip, "flywheel_side", ECLang.translate(flywheelSideKey(components.flywheelPlacement()))
+			.style(components.hasFlywheelConflict() ? ChatFormatting.RED : ChatFormatting.WHITE));
+		diagnostic(tooltip, "control_module", ECLang
+			.translate(controlModuleInstalled ? "gui.value.installed" : "gui.value.missing")
+			.style(controlModuleInstalled ? ChatFormatting.GREEN : ChatFormatting.DARK_GRAY));
+		// The switch position, which is not the same thing as the live ignition while
+		// a redstone ignition mode is driving the engine.
+		diagnostic(tooltip, "ignition_switch", ECLang
+			.translate(manualIgnition ? "gui.value.enabled" : "gui.value.disabled")
+			.style(manualIgnition ? ChatFormatting.GREEN : ChatFormatting.RED));
 		diagnostic(tooltip, "crank_angle", ECLang.number(engine.getCrankAngleDegrees())
 			.style(ChatFormatting.AQUA));
 		diagnostic(tooltip, "simulated_rpm", ECLang.number(engine.getSimulatedRpm())
 			.style(ChatFormatting.AQUA));
-		// Derived from the Carburetor rather than from the simulation's own copy of
-		// the throttle: that copy is only ever written on the server, so reading it
-		// here - the overlay is client-side - would always have printed idle. The
-		// Carburetor's value is synchronised because Create's scroll behaviour
-		// synchronises it, so this is the same number the engine is actually using.
-		CarburetorBlockEntity carburetor = engineComponents().carburetor();
-		float throttle = carburetor == null ? 0.0F : carburetor.getThrottle();
-		diagnostic(tooltip, "target_rpm", ECLang.number(EngineTuning.targetRpmForThrottle(throttle))
+		// Derived from the resolved control state rather than from the simulation's
+		// own copy of the throttle: that copy is only ever written on the server, so
+		// reading it here - the overlay is client-side - would always have printed
+		// idle. Everything the resolution needs is synchronised, so this is the same
+		// number the engine is actually using, whether it came from the Carburetor's
+		// lever or from a redstone signal.
+		diagnostic(tooltip, "target_rpm", ECLang.number(EngineTuning.targetRpmForThrottle(resolveControlState()
+			.throttle()))
 			.style(ChatFormatting.AQUA));
 		diagnostic(tooltip, "generated_rpm", ECLang.number(engine.getPublishedRpm())
 			.style(ChatFormatting.AQUA));
@@ -868,6 +1217,16 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		ECLang.translate("gui." + key, value.component())
 			.style(ChatFormatting.DARK_GRAY)
 			.forGoggles(tooltip, 1);
+	}
+
+	/** Which end of the crank axis carries the flywheel, in words. */
+	private static String flywheelSideKey(EngineComponents.FlywheelPlacement placement) {
+		return switch (placement) {
+			case POSITIVE -> "gui.side.positive";
+			case NEGATIVE -> "gui.side.negative";
+			case AMBIGUOUS -> "gui.side.both";
+			case NONE -> "gui.side.none";
+		};
 	}
 
 	private static ChatFormatting phaseColor(EnginePhase phase) {
@@ -930,10 +1289,22 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
+		// Only when automation is actually holding the controls, and only that much:
+		// which mode it is and how strong the signal is are goggle readings. Without
+		// this line a player would have no way to tell why a switch they can see is
+		// not the thing deciding whether the engine runs.
+		EngineControlState control = resolveControlState();
+		if (control.isRedstoneControlled())
+			ECLang.translate("gui.control", ECLang.translate("gui.control.redstone")
+				.style(ChatFormatting.RED)
+				.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
+
 		CarburetorBlockEntity carburetor = engineComponents().carburetor();
 		if (carburetor != null)
 			ECLang.translate("gui.throttle_state",
-				ECLang.translate(observedThrottleKey(carburetor.getThrottlePercent()))
+				ECLang.translate(observedThrottleKey(control.throttlePercent()))
 					.style(ChatFormatting.WHITE)
 					.component())
 				.style(ChatFormatting.GRAY)

@@ -225,6 +225,8 @@ BRASS = (182, 143, 66, 255)
 CERAMIC = (222, 214, 196, 255)    # spark plug insulator porcelain
 FILTER = (58, 58, 62, 255)        # air cleaner canister, painted dark
 MESH = (96, 88, 74, 255)          # filter element behind the grille
+MODULE = (52, 47, 49, 255)        # control module housing, moulded phenolic
+REDSTONE = (168, 42, 36, 255)     # the redstone inlay that names the part
 
 
 def t_cast_iron(seed=11, base=CAST, grain=9):
@@ -575,6 +577,32 @@ def t_air_filter_mesh():
     return px
 
 
+def t_control_module():
+    """Redstone Control Module: moulded phenolic with a recessed red inlay.
+
+    The inlay runs straight across the sprite, so with the world-aligned UVs the
+    model generator emits it comes out as one continuous band around the module
+    on every side face - which is what makes a 3x8x6 lump read as a part with a
+    front rather than as a dark brick.
+    """
+    px = blank()
+    fill(px, MODULE)
+    rng = Rng(293)
+    mottle(px, rng, ((6, 7), (12, 4)))     # unevenly moulded resin
+    noise(px, rng, 3)
+    # the inlay, sunk into the housing: dark shoulder, lit face, shadow below
+    rect(px, 0, 12, S, 13, shade(MODULE, -30))
+    for y in range(13, 19):
+        rect(px, 0, y, S, y + 1, shade(REDSTONE, 14 - 5 * (y - 13)))
+    rect(px, 0, 19, S, 20, shade(MODULE, -26))
+    specks(px, rng, 10, -12)
+    # moulding pips, one per corner, so the plain faces are not featureless
+    for cx, cy in ((6, 6), (26, 6), (6, 26), (26, 26)):
+        bolt(px, cx, cy, 2.4, STEEL)
+    border(px, 14, -20)
+    return px
+
+
 def t_combustion_flash():
     """The burn itself: a soft, mostly transparent orange-to-white core.
 
@@ -770,6 +798,7 @@ TEXTURES = {
     "block/spark_plug_ceramic": t_spark_plug_ceramic,
     "block/air_filter": t_air_filter,
     "block/air_filter_mesh": t_air_filter_mesh,
+    "block/control_module": t_control_module,
     "block/combustion_flash": t_combustion_flash,
 }
 

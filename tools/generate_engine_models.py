@@ -357,10 +357,49 @@ def gui_scale(scale):
 # sized to stay inside it (max swept radius 4.87 against a 5.0 limit).
 CASE_TEX = {"particle": "crankshaft", "case": "crankshaft",
             "cast": "cast_iron", "deck": "crankcase_deck", "steel": "journal",
-            "ind": "indicator_off"}
+            "brass": "brass", "ind": "indicator_off"}
 
 
-def crankcase_elements():
+# The ignition switch. It is the engine's primary control now that redstone is
+# optional, so it is modelled rather than implied - a player has to be able to
+# see whether the engine is switched on without wearing goggles.
+#
+# It lives on the solid lower rail beside the tell-tale, for the same reason the
+# tell-tale does: over a window it would float in the opening with the crank
+# visible behind it. That rail is only three units tall, so the switch is small
+# and its travel is short; what makes the two positions readable at a glance is
+# that the knob moves from below the pivot to above it.
+SWITCH_X0, SWITCH_X1 = 10.6, 12.8
+
+
+def ignition_switch_elements(ignition_on, near_flank):
+    """One ignition switch, on one flank of the crankcase.
+
+    `near_flank` selects the flank at low z; the other one is the same switch
+    mirrored through the middle of the block, so the engine reads the same from
+    whichever side the player walks up to.
+
+    Nothing reaches z = 0 exactly: a face in the block's own boundary plane
+    would z-fight with whatever solid block is placed against the crankcase.
+    """
+    def part(x0, y0, x1, y1, za, zb, tex):
+        z0, z1 = (za, zb) if near_flank else (16.0 - zb, 16.0 - za)
+        return el((x0, y0, z0), (x1, y1, z1), tex)
+
+    e = [
+        part(SWITCH_X0, 2.2, SWITCH_X1, 4.9, 0.1, 0.7, "cast"),      # mounting plate
+        part(11.25, 3.1, 12.15, 4.0, 0.05, 0.9, "steel"),            # pivot boss
+    ]
+    if ignition_on:
+        e.append(part(11.45, 3.55, 11.95, 4.65, 0.2, 0.78, "steel"))   # arm, raised
+        e.append(part(11.15, 4.05, 12.25, 4.75, 0.06, 0.98, "brass"))  # knob
+    else:
+        e.append(part(11.45, 2.45, 11.95, 3.55, 0.2, 0.78, "steel"))   # arm, dropped
+        e.append(part(11.15, 2.35, 12.25, 3.05, 0.06, 0.98, "brass"))
+    return e
+
+
+def crankcase_elements(ignition_on=False):
     e = []
     # --- crankcase floor and the machined joint face the Oil Sump bolts to.
     # The pan itself is NOT here: an Oil Sump block lives at crankshaft.below()
@@ -394,6 +433,9 @@ def crankcase_elements():
     lens = {"north": [0, 0, 16, 16], "south": [0, 0, 16, 16]}
     e.append(el((6.5, 2.4, 0.1), (9.5, 4.8, 1.1), "ind", uvs=lens))
     e.append(el((6.5, 2.4, 14.9), (9.5, 4.8, 15.9), "ind", uvs=lens))
+    # --- the ignition switch, on both flanks beside the tell-tale.
+    for near in (True, False):
+        e += ignition_switch_elements(ignition_on, near)
     # --- head studs standing proud of the deck, so the joint the Cylinder
     # lands on plainly bolts down rather than just meeting.
     for x0, x1 in ((2.2, 3.8), (12.2, 13.8)):
@@ -719,6 +761,28 @@ def air_filter_elements():
 
 
 # ===========================================================================
+# REDSTONE CONTROL MODULE - an item, plugged into a placed Crankshaft
+# ===========================================================================
+# Never drawn in the world: the module lives inside the crankcase's control
+# area, and what the player sees of it there is the value box Create draws for
+# its mode. This geometry exists only so the item has an icon that reads as a
+# plug-in module rather than as a flat card.
+MODULE_TEX = {"particle": "control_module", "case": "control_module",
+              "brass": "brass", "steel": "journal"}
+
+
+def control_module_elements():
+    return [
+        el((5.2, 4.6, 6.5), (10.8, 12.4, 9.5), "case"),      # moulded housing
+        el((4.6, 5.8, 6.9), (11.4, 11.2, 9.1), "case"),      # side flanges
+        el((6.3, 12.4, 7.1), (9.7, 13.3, 8.9), "steel"),     # cable gland
+        el((6.6, 3.2, 6.9), (9.4, 4.6, 9.1), "brass"),       # edge connector
+        el((5.3, 2.6, 7.1), (6.5, 4.8, 8.9), "brass"),       # locating pins
+        el((9.5, 2.6, 7.1), (10.7, 4.8, 8.9), "brass"),
+    ]
+
+
+# ===========================================================================
 # FLYWHEEL - large diameter, narrow, heavy rim, four spokes
 # ===========================================================================
 FLY_TEX = {"particle": "flywheel", "rim": "flywheel", "face": "flywheel_face",
@@ -752,7 +816,8 @@ def flywheel_elements():
 
 # ===========================================================================
 def main():
-    case = crankcase_elements()
+    case = crankcase_elements(ignition_on=False)
+    case_lit = crankcase_elements(ignition_on=True)
     crank = crank_elements()
     rod = rod_elements()
     piston = piston_elements()
@@ -765,10 +830,12 @@ def main():
     sump = oil_sump_elements()
 
     write("block/crankshaft.json", model(CASE_TEX, case))
-    # Identical geometry, lit lens. The blockstate picks between the two, so the
-    # two files must never drift apart - hence one element list, two writes.
+    # The same crankcase with the ignition live: lit lens, and the switch beside
+    # it standing up. The blockstate picks between the two from the engine's
+    # effective ignition, so they must never drift apart in anything else - hence
+    # one builder, called twice, rather than two element lists.
     write("block/crankshaft_lit.json",
-          model({**CASE_TEX, "ind": "indicator_on"}, case))
+          model({**CASE_TEX, "ind": "indicator_on"}, case_lit))
     write("block/oil_sump.json", model(SUMP_TEX, sump))
     write("block/crank_assembly_x.json", model(CRANK_TEX, crank))
     write("block/crank_assembly_z.json",
@@ -819,6 +886,11 @@ def main():
     write("item/air_filter.json",
           model(FILTER_TEX, [shift(x, 0, -4.2, 8 - HORN_CZ) for x in air_filter],
                 display=gui_scale(0.9)))
+
+    # Small and centred in its slot, so the icon fills the frame the way the
+    # other bolt-on parts do.
+    write("item/redstone_control_module.json",
+          model(MODULE_TEX, control_module_elements(), display=gui_scale(1.15)))
 
     # Piston Assembly is piston *and* rod, so the item says so. The rod is
     # shortened to fit the icon; the in-world rod keeps its true length.
