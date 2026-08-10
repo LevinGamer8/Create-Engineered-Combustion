@@ -100,3 +100,9 @@ resolution before it ever reaches compilation.
   cutaway cylinder with an integrated head, and models that cross block
   boundaries so the assembly reads as one machine. No gameplay change. See
   [`docs/milestone-4.md`](docs/milestone-4.md).
+* **Milestone 5** - a working shaft output on *both* ends of the crankshaft
+  (one source, one stress budget), a spark plug that sparks on real ignition
+  events and a brief flash on real combustion, a float bowl showing the actual
+  gasoline level, an Air Filter item fitted to the Carburetor, and a 0-100 %
+  throttle that changes combustion torque rather than dialling in a speed. See
+  [`docs/milestone-5.md`](docs/milestone-5.md).

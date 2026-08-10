@@ -110,20 +110,23 @@ def shift(element, dx, dy, dz):
     return moved
 
 
-def octagon(y0, y1, half, flat, corner, tex, top_tex=None):
-    """Three boxes approximating a round section - the piston and the hubs.
+def octagon_at(cx, cz, y0, y1, half, flat, corner, tex, top_tex=None):
+    """Three boxes approximating a round section, centred anywhere in the block.
 
     `half` is the outer radius across the flats, `flat` the half width of the
     flat itself, `corner` the radius of the chamfer box.
     """
-    a, b, c = 8 - half, 8 + half, 8 - flat
-    d, e, g = 8 + flat, 8 - corner, 8 + corner
     faces_top = {"up": top_tex} if top_tex else None
     return [
-        el((a, y0, c), (b, y1, d), tex, faces_top),
-        el((c, y0, a), (d, y1, b), tex, faces_top),
-        el((e, y0, e), (g, y1, g), tex, faces_top),
+        el((cx - half, y0, cz - flat), (cx + half, y1, cz + flat), tex, faces_top),
+        el((cx - flat, y0, cz - half), (cx + flat, y1, cz + half), tex, faces_top),
+        el((cx - corner, y0, cz - corner), (cx + corner, y1, cz + corner), tex, faces_top),
     ]
+
+
+def octagon(y0, y1, half, flat, corner, tex, top_tex=None):
+    """The same round section, centred on the block - the piston and the hubs."""
+    return octagon_at(8, 8, y0, y1, half, flat, corner, tex, top_tex)
 
 
 def write(path, model):
@@ -234,8 +237,15 @@ CRANK_TEX = {"particle": "journal", "steel": "journal", "web": "crank_web"}
 
 def crank_elements():
     e = [
-        el((-1.0, 5.5, 5.5), (4.8, 10.5, 10.5), "steel"),   # main journal
-        el((11.2, 5.5, 5.5), (17.0, 10.5, 10.5), "steel"),  # main journal
+        el((0.0, 5.5, 5.5), (4.8, 10.5, 10.5), "steel"),    # main journal
+        el((11.2, 5.5, 5.5), (16.0, 10.5, 10.5), "steel"),  # main journal
+        # Both journals step down to a 4x4 stub as they leave the block. That
+        # is exactly a Create Shaft's cross-section (6..10), so a shaft bolted
+        # to either end continues the journal instead of swallowing a wider
+        # boss - and both ends really are kinetic outputs now, so both have to
+        # look like it.
+        el((-1.0, 6.0, 6.0), (0.0, 10.0, 10.0), "steel"),
+        el((16.0, 6.0, 6.0), (17.0, 10.0, 10.0), "steel"),
         el((5.0, 3.6, 6.6), (11.0, 6.4, 9.4), "steel"),     # offset crank pin
     ]
     for x0, x1 in ((4.0, 6.4), (9.6, 12.0)):
@@ -285,7 +295,27 @@ def piston_elements():
 # ===========================================================================
 CYL_TEX = {"particle": "cylinder", "barrel": "cylinder", "fin": "cylinder_fin",
            "head": "cylinder_head", "deck": "crankcase_deck",
-           "steel": "journal", "case": "crankshaft"}
+           "steel": "journal", "case": "crankshaft",
+           "ceramic": "spark_plug_ceramic", "brass": "brass"}
+
+# Spark plug: screwed into the +X flank of the head, which is the one face the
+# intake (-Z) and exhaust (+Z) bosses leave free on both engine axes. The
+# electrode deliberately breaks through the head's underside into the
+# combustion chamber, so the ignition spark has a real place to happen and the
+# player can see where it happens. Visual only for this milestone - no block
+# entity, no item, no gameplay requirement.
+SPARK_PLUG_ELECTRODE = (13.2, 13.75, 8.0)   # where the renderer/particles aim
+
+
+def spark_plug_elements():
+    return [
+        el((12.6, 13.2, 7.5), (13.7, 14.3, 8.5), "steel"),    # electrode + earth strap
+        el((13.7, 13.9, 7.3), (15.1, 15.3, 8.7), "steel"),    # threaded shell
+        el((14.9, 13.8, 7.1), (16.2, 15.4, 8.9), "steel"),    # spanner hex
+        el((16.2, 14.0, 7.4), (17.3, 15.2, 8.6), "ceramic"),  # insulator
+        el((17.3, 14.2, 7.6), (18.0, 15.0, 8.4), "ceramic"),  # insulator, ribbed
+        el((18.0, 14.4, 7.8), (18.5, 14.8, 8.2), "brass"),    # terminal
+    ]
 
 
 def cylinder_elements():
@@ -328,7 +358,21 @@ def cylinder_elements():
     e.append(el((4.6, 16.6, 0.2), (11.4, 17.8, 4.2), "deck"))       # intake flange
     e.append(el((6.0, 13.8, 11.6), (10.0, 16.4, 16.0), "head"))     # exhaust boss
     e.append(el((5.2, 12.9, 15.0), (10.8, 16.9, 16.0), "deck"))     # exhaust flange
+    e += spark_plug_elements()
     return e
+
+
+# ===========================================================================
+# COMBUSTION FLASH - the burn, drawn inside the chamber for a few ticks
+# ===========================================================================
+# A thin disc filling the top of the bore, just under the head's underside at
+# y 14. Rendered translucent, at full brightness and fading out, so it reads as
+# light inside the cylinder rather than as a solid object appearing in it.
+FLASH_TEX = {"particle": "combustion_flash", "flash": "combustion_flash"}
+
+
+def combustion_flash_elements():
+    return octagon(13.0, 13.95, 4.3, 2.5, 3.45, "flash")
 
 
 # ===========================================================================
@@ -338,21 +382,90 @@ def cylinder_elements():
 CARB_TEX = {"particle": "carburetor", "body": "carburetor",
             "brass": "brass", "steel": "journal"}
 
+# --- float bowl -----------------------------------------------------------
+# The bowl is built as a floor plus three walls, deliberately open on +Z. That
+# opening is the sight window: the renderer draws the real tank contents inside
+# it, so the fuel level a player sees is the amount the engine will actually
+# burn, not a decoration. An open front rather than a modelled glass pane keeps
+# it in the same cutaway idiom as the crankcase and the cylinder.
+BOWL_X0, BOWL_X1 = 5.2, 10.8
+BOWL_Z0, BOWL_Z1 = 4.0, 7.8
+BOWL_WALL = 1.0
+BOWL_FLOOR_TOP = 1.8          # inner floor - fuel sits on this
+BOWL_RIM = 4.4                # underside of the clamp ring - fuel stops here
+
+# The air cleaner and the throttle lever both hang off the intake side, so the
+# carburetor's own centreline in Z is worth having in one place.
+HORN_CZ = 2.65
+THROTTLE_PIVOT = (12.0, 5.6, 2.6)
+
 
 def carburetor_elements():
-    return [
+    e = [
         el((4.6, 1.4, 0.2), (11.4, 2.8, 4.6), "body"),      # mounting flange
         el((5.6, 2.6, 0.9), (10.4, 4.6, 4.4), "body"),      # throat
         el((6.3, 4.4, 1.5), (9.7, 6.4, 3.9), "body"),       # venturi waist
         el((5.6, 6.2, 0.9), (10.4, 8.4, 4.4), "body"),
         el((4.9, 8.2, 0.3), (11.1, 9.8, 5.0), "body"),      # air horn
-        el((5.2, 1.0, 4.0), (10.8, 4.8, 7.8), "body"),      # float bowl
-        el((4.9, 4.4, 4.1), (11.1, 5.3, 8.1), "brass"),     # bowl clamp ring
-        el((7.2, 5.0, 7.4), (8.8, 6.5, 9.6), "brass"),      # fuel inlet
-        el((10.2, 5.0, 1.6), (12.4, 5.8, 3.2), "brass"),    # throttle arm
-        el((11.4, 5.6, 2.0), (12.2, 9.2, 2.8), "brass"),    # throttle rod
-        el((3.6, 3.0, 1.8), (5.8, 4.0, 3.0), "brass"),      # idle screw
     ]
+    # --- float bowl, open on +Z so the fuel level reads from outside -------
+    e.append(el((BOWL_X0, 1.0, BOWL_Z0),
+                (BOWL_X1, BOWL_FLOOR_TOP, BOWL_Z1), "body"))          # floor
+    e.append(el((BOWL_X0, BOWL_FLOOR_TOP, BOWL_Z0),
+                (BOWL_X0 + BOWL_WALL, BOWL_RIM + 0.1, BOWL_Z1), "body"))
+    e.append(el((BOWL_X1 - BOWL_WALL, BOWL_FLOOR_TOP, BOWL_Z0),
+                (BOWL_X1, BOWL_RIM + 0.1, BOWL_Z1), "body"))
+    e.append(el((BOWL_X0 + BOWL_WALL, BOWL_FLOOR_TOP, BOWL_Z0),
+                (BOWL_X1 - BOWL_WALL, BOWL_RIM + 0.1, BOWL_Z0 + 1.0), "body"))
+    e.append(el((4.9, BOWL_RIM, 4.1), (11.1, 5.3, 8.1), "brass"))     # clamp ring / lid
+    # --- fuel inlet and the line feeding the bowl --------------------------
+    # Sits above the clamp ring on purpose: anything at bowl height would hang
+    # in front of the sight window and hide the very thing it is next to.
+    e.append(el((7.2, 5.3, 7.4), (8.8, 6.8, 9.6), "brass"))    # inlet banjo
+    e.append(el((6.9, 6.5, 9.0), (9.1, 7.7, 10.3), "brass"))   # union nut
+    e.append(el((7.5, 7.5, 9.3), (8.5, 9.8, 10.0), "brass"))   # supply line
+    # --- fuel/mixture pipe running down onto the head's intake flange ------
+    e.append(el((3.0, 1.0, 1.8), (4.4, 2.4, 3.2), "brass"))    # union on the head
+    e.append(el((4.2, 1.5, 2.2), (5.6, 2.3, 2.8), "brass"))    # pipe into the body
+    # --- throttle. Only the shaft is static; the lever is a partial model so
+    # its angle can follow the authoritative throttle setting.
+    e.append(el((9.8, 5.2, 2.2), (12.4, 6.0, 3.0), "brass"))   # throttle shaft
+    e.append(el((3.6, 3.0, 1.8), (5.8, 4.0, 3.0), "brass"))    # idle screw
+    return e
+
+
+# ===========================================================================
+# THROTTLE LEVER - authored with its pivot on the block centre, so the
+# renderer can rotateCentered() and then translate it onto the real shaft.
+# ===========================================================================
+THROTTLE_TEX = {"particle": "brass", "brass": "brass", "steel": "journal"}
+
+
+def throttle_lever_elements():
+    return [
+        el((7.1, 7.1, 7.1), (8.9, 8.9, 8.9), "steel"),      # shaft end / pivot boss
+        el((7.5, 7.4, 8.6), (8.5, 8.6, 11.6), "brass"),     # lever arm
+        el((7.3, 7.1, 11.2), (8.7, 8.9, 12.2), "brass"),    # cable pin
+    ]
+
+
+# ===========================================================================
+# AIR FILTER - an old oil-bath style cleaner clamped onto the air horn
+# ===========================================================================
+# Authored directly in Carburetor block space, so the renderer draws it with no
+# transform at all when one is installed.
+FILTER_TEX = {"particle": "air_filter", "case": "air_filter",
+              "mesh": "air_filter_mesh", "steel": "journal", "brass": "brass"}
+
+
+def air_filter_elements():
+    e = [el((6.6, 9.4, HORN_CZ - 1.4), (9.4, 10.6, HORN_CZ + 1.4), "steel")]
+    e += octagon_at(8, HORN_CZ, 10.4, 11.6, 2.65, 1.55, 2.1, "case")   # canister
+    e += octagon_at(8, HORN_CZ, 11.6, 13.2, 2.45, 1.45, 1.95, "mesh")  # element
+    e += octagon_at(8, HORN_CZ, 13.2, 14.6, 2.65, 1.55, 2.1, "case")
+    e += octagon_at(8, HORN_CZ, 14.6, 15.3, 2.85, 1.65, 2.25, "case")  # lid
+    e.append(el((7.3, 15.3, HORN_CZ - 0.7), (8.7, 16.1, HORN_CZ + 0.7), "brass"))
+    return e
 
 
 # ===========================================================================
@@ -391,6 +504,8 @@ def main():
     cyl = cylinder_elements()
     carb = carburetor_elements()
     fly = flywheel_elements()
+    lever = throttle_lever_elements()
+    air_filter = air_filter_elements()
 
     sump = oil_sump_elements()
 
@@ -408,7 +523,11 @@ def main():
           model(ROD_TEX, [transpose(x) for x in rod]))
     write("block/piston_head.json", model(PISTON_TEX, piston))
     write("block/cylinder.json", model(CYL_TEX, cyl))
+    write("block/combustion_flash.json",
+          model(FLASH_TEX, combustion_flash_elements()))
     write("block/carburetor.json", model(CARB_TEX, carb))
+    write("block/throttle_lever.json", model(THROTTLE_TEX, lever))
+    write("block/air_filter.json", model(FILTER_TEX, air_filter))
     write("block/flywheel_wheel_x.json", model(FLY_TEX, fly))
     write("block/flywheel_wheel_z.json",
           model(FLY_TEX, [transpose(x) for x in fly]))
@@ -430,9 +549,21 @@ def main():
     write("item/flywheel.json", model(FLY_TEX, [transpose(x) for x in fly]))
     write("item/oil_sump.json", model(SUMP_TEX, sump))
     write("item/cylinder.json", model(CYL_TEX, cyl))
+    # The throttle lever is drawn by the block entity renderer in world, so the
+    # item has to carry a static copy of it or the icon shows a carburetor with
+    # a bare throttle shaft. It is placed at the lever's fully closed angle of
+    # 0 degrees - the icon only has to be recognisable, not animated.
+    px, py, pz = THROTTLE_PIVOT
+    item_lever = [shift(x, px - 8, py - 8, pz - 8) for x in lever]
     write("item/carburetor.json",
-          model(CARB_TEX, [shift(x, 0, 2.6, 3.4) for x in carb],
+          model({**CARB_TEX, **THROTTLE_TEX, "particle": "carburetor"},
+                [shift(x, 0, 2.6, 3.4) for x in carb + item_lever],
                 display=gui_scale(0.95)))
+    # Centred in its slot: the in-world model deliberately sits high and to the
+    # intake side of the Carburetor block, which looks lost as an icon.
+    write("item/air_filter.json",
+          model(FILTER_TEX, [shift(x, 0, -4.2, 8 - HORN_CZ) for x in air_filter],
+                display=gui_scale(0.9)))
 
     # Piston Assembly is piston *and* rod, so the item says so. The rod is
     # shortened to fit the icon; the in-world rod keeps its true length.

@@ -24,5 +24,6 @@ public class EngineeredCombustionClient {
 		event.registerBlockEntityRenderer(ECBlockEntityTypes.CRANKSHAFT.get(), CrankshaftRenderer::new);
 		event.registerBlockEntityRenderer(ECBlockEntityTypes.CYLINDER.get(), CylinderRenderer::new);
 		event.registerBlockEntityRenderer(ECBlockEntityTypes.FLYWHEEL.get(), EngineFlywheelRenderer::new);
+		event.registerBlockEntityRenderer(ECBlockEntityTypes.CARBURETOR.get(), CarburetorRenderer::new);
 	}
 }

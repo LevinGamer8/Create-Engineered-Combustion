@@ -48,6 +48,27 @@ public class ECPartialModels {
 	public static final PartialModel FLYWHEEL_WHEEL_X = block("flywheel_wheel_x");
 	public static final PartialModel FLYWHEEL_WHEEL_Z = block("flywheel_wheel_z");
 
+	/**
+	 * The burn inside the combustion chamber: a thin disc filling the top of the
+	 * bore, drawn translucent and at full brightness for a few ticks. A partial
+	 * model rather than a particle so its lifetime is exactly the simulation's and
+	 * its cost does not grow with engine speed.
+	 */
+	public static final PartialModel COMBUSTION_FLASH = block("combustion_flash");
+
+	/**
+	 * The carburetor's throttle lever. Authored with its pivot on the block
+	 * centre so {@code rotateCentered} turns it about the throttle shaft; the
+	 * renderer then translates it onto the shaft's real position.
+	 */
+	public static final PartialModel THROTTLE_LEVER = block("throttle_lever");
+
+	/**
+	 * The air cleaner, drawn only when one is installed. Authored directly in
+	 * Carburetor block space, so it needs no transform at all.
+	 */
+	public static final PartialModel AIR_FILTER = block("air_filter");
+
 	private static PartialModel block(String path) {
 		return PartialModel.of(EngineeredCombustion.asResource("block/" + path));
 	}

@@ -69,5 +69,16 @@
   "subtitles.engineered_combustion.engine_start": "Engine catches",
   "subtitles.engineered_combustion.engine_running": "Engine runs",
   "subtitles.engineered_combustion.engine_stall": "Engine stalls",
-  "subtitles.engineered_combustion.engine_stop": "Engine shuts down"
+  "subtitles.engineered_combustion.engine_stop": "Engine shuts down",
+  "item.engineered_combustion.air_filter": "Air Filter",
+  "engineered_combustion.gui.throttle": "Throttle: %s%%",
+  "engineered_combustion.gui.throttle_label": "Throttle",
+  "engineered_combustion.gui.throttle_state": "Throttle: %s",
+  "engineered_combustion.gui.air_intake": "Air Intake: %s",
+  "engineered_combustion.gui.value.filtered": "Filtered",
+  "engineered_combustion.gui.value.unfiltered": "Unfiltered",
+  "engineered_combustion.gui.observed.throttle_low": "Low",
+  "engineered_combustion.gui.observed.throttle_medium": "Medium",
+  "engineered_combustion.gui.observed.throttle_high": "High",
+  "engineered_combustion.gui.target_rpm": "Target RPM: %s"
 }

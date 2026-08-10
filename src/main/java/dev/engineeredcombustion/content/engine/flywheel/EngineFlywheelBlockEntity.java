@@ -25,20 +25,22 @@ import net.minecraft.world.level.block.state.BlockState;
  * {@link CrankshaftBlockEntity}.
  *
  * <h2>Why the generator lives here and not in the crankshaft</h2>
- * Create decides everything about a kinetic source from the block itself:
- * {@code IRotate#getRotationAxis} and {@code IRotate#hasShaftTowards} determine
- * where rotation may leave the block, and {@code RotationPropagator} only walks
- * between {@code KineticBlockEntity} instances. Putting
- * {@code GeneratingKineticBlockEntity} on the crankshaft would therefore have
- * forced the crankshaft to expose shafts on its own faces, which contradicts the
- * intended layout (crankshaft - flywheel - shaft) and would have welded engine
- * simulation to Create internals. Keeping it on the flywheel means the
- * crankshaft stays a plain block entity with zero Create kinetic coupling, and
- * milestone 2 can replace the whole simulation without touching this file.
+ * The crankshaft is a kinetic block too - it has to be, or the journal its model
+ * shows on the far side from this flywheel would have nothing to connect to. But
+ * it is a plain {@code KineticBlockEntity}: a relay that never generates.
  *
- * <p>The reverse also holds: everything Create needs is reachable through
+ * <p>The <i>generator</i> stays here, and there is exactly one of it. Create
+ * decides a source's capacity and speed from the block that generates, so a
+ * second {@code GeneratingKineticBlockEntity} on the crankshaft would mean two
+ * sources, two stress capacities and two speeds to reconcile for one engine.
+ * Instead the crankshaft and this flywheel sit adjacent along a shared axis,
+ * which {@code RotationPropagator} resolves as a 1:1 axis connection, so both
+ * ends of the engine are one network at one speed fed by this one source.
+ *
+ * <p>Everything Create needs is reachable through
  * {@link CrankshaftBlockEntity#getGeneratedRpmFor(BlockPos)}, so if Create's
- * kinetic API changes, only this class has to follow.
+ * kinetic API changes, this class and {@code CrankshaftBlock}'s connectivity are
+ * the only places that have to follow.
  */
 public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 

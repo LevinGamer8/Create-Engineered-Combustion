@@ -69,5 +69,16 @@
   "subtitles.engineered_combustion.engine_start": "Motor springt an",
   "subtitles.engineered_combustion.engine_stall": "Motor wird abgewürgt",
   "subtitles.engineered_combustion.engine_running": "Motor läuft",
-  "subtitles.engineered_combustion.engine_stop": "Motor wird abgestellt"
+  "subtitles.engineered_combustion.engine_stop": "Motor wird abgestellt",
+  "item.engineered_combustion.air_filter": "Luftfilter",
+  "engineered_combustion.gui.throttle": "Gas: %s%%",
+  "engineered_combustion.gui.throttle_label": "Gas",
+  "engineered_combustion.gui.throttle_state": "Gas: %s",
+  "engineered_combustion.gui.air_intake": "Luftansaugung: %s",
+  "engineered_combustion.gui.value.filtered": "Gefiltert",
+  "engineered_combustion.gui.value.unfiltered": "Ungefiltert",
+  "engineered_combustion.gui.observed.throttle_low": "Niedrig",
+  "engineered_combustion.gui.observed.throttle_medium": "Mittel",
+  "engineered_combustion.gui.observed.throttle_high": "Hoch",
+  "engineered_combustion.gui.target_rpm": "Soll-Drehzahl: %s"
 }

@@ -96,6 +96,21 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	}
 
 	/**
+	 * How brightly the combustion chamber should be drawn this frame, 0 when
+	 * nothing is burning.
+	 *
+	 * <p>Read from the crankshaft rather than tracked here, because the crank
+	 * angle and the simulation state that decide it both live there - a second
+	 * copy in the cylinder could only ever drift from the first.
+	 */
+	public float getCombustionFlashIntensity(float partialTicks) {
+		CrankshaftBlockEntity crankshaft = getCrankshaft();
+		return crankshaft == null ? 0.0F
+			: crankshaft.getEngineState()
+				.getCombustionFlashIntensity(partialTicks);
+	}
+
+	/**
 	 * Which way the crankshaft below runs, so the renderer knows which plane the
 	 * connecting rod swings in. Falls back to the axis the models are authored
 	 * for when there is no crankshaft; with nothing to drive it the rod is
