@@ -75,15 +75,30 @@ public final class EngineState {
 	private boolean fuelAvailable;
 
 	/**
-	 * Set for exactly one server tick when the ignition coil actually fired, and
-	 * consumed by the block entity that emits the spark. Never persisted: a spark
-	 * is an event, not a state.
+	 * Counts ignition coil firings, and counts charges that actually burned.
+	 *
+	 * <p><b>These two are the engine's event channel.</b> Both are incremented on
+	 * the server, at exactly the point the thing they name happens, and both are
+	 * synchronised as plain numbers. The client does not decide when a spark or a
+	 * combustion occurred - it notices that a counter moved and reacts.
+	 *
+	 * <p>That replaces re-deriving the events on the client from the crank angle,
+	 * which was cheap but only <i>approximately</i> right: the client cannot know
+	 * whether the server's fuel draw succeeded, so a dry engine still flashed for
+	 * a revolution, and the flash and the firing sound came from two different
+	 * mechanisms and could land a tick or two apart. A counter cannot disagree
+	 * with the event it counts.
+	 *
+	 * <p>Wrapping is fine and overflow is irrelevant: only inequality is ever
+	 * tested, so any change means "one or more happened since you last looked".
 	 */
-	private boolean sparkEvent;
+	private int sparkEventId;
+	private int combustionEventId;
 
 	/**
-	 * Ticks left on the visible flash inside the combustion chamber. Maintained
-	 * on both sides - see {@link #updateClientVisuals()}.
+	 * Ticks left on the visible flash inside the combustion chamber. Client-side
+	 * bookkeeping, started by {@link #triggerCombustionFlash()} when the
+	 * combustion counter moves and run down by {@link #updateClientVisuals()}.
 	 */
 	private int combustionFlashTicks;
 
@@ -124,46 +139,34 @@ public final class EngineState {
 	}
 
 	/**
-	 * Rebuilds the purely visual side of the engine on the client.
+	 * Runs the purely visual side of the engine on the client.
 	 *
-	 * <p>Both the power stroke and the combustion flash are re-derived here from
-	 * the crank angle the client just advanced plus the simulation state the
-	 * server already synchronises (phase, ignition, structure, fuel). That is the
-	 * same rule the server ran, applied to the same authoritative crank angle -
-	 * not a cosmetic timer of its own - so the flash lands on the real firing
-	 * event without this mod sending a packet per revolution. At 192 RPM that
-	 * saves about three block-entity updates a second per engine, which is
-	 * exactly the traffic the rest of this design exists to avoid.
-	 *
-	 * <p>The one thing the client cannot know is whether the server's fuel draw
-	 * <i>succeeded</i>; it only knows fuel was available as of the last sync. The
-	 * two can therefore disagree for a single revolution at the moment a tank
-	 * runs dry, and that is the only divergence by construction.
-	 *
-	 * <p>The spark at the plug is not derived here. It is emitted by the server
-	 * from the real ignition event, because a coil firing while the engine
-	 * refuses to catch is precisely the case a player is trying to diagnose.
+	 * <p>The power stroke is re-derived from the crank angle, which is exact on
+	 * both sides. The combustion flash is <i>not</i> derived here: it is started
+	 * by {@link #triggerCombustionFlash()} when the server's combustion counter
+	 * moves, and this only counts it down. Predicting it was the bug - the client
+	 * cannot know whether the server's fuel draw succeeded, so an engine whose
+	 * tank had just run dry went on flashing for a revolution, and the flash and
+	 * the firing sound were produced by two different mechanisms that could land a
+	 * tick or two apart.
 	 */
 	public void updateClientVisuals() {
 		powerStrokeActive = (phase == EnginePhase.RUNNING || phase == EnginePhase.STARTING)
 			&& isWithinPowerStroke();
 
-		if (crossedFiringAngle() && combustionConditionsMet(mechanicalRpm))
-			combustionFlashTicks = EngineTuning.COMBUSTION_FLASH_TICKS;
-		else if (combustionFlashTicks > 0)
+		if (combustionFlashTicks > 0)
 			combustionFlashTicks--;
 	}
 
 	/**
-	 * Whether a firing at this instant would produce a real burn.
+	 * Lights the chamber for {@link EngineTuning#COMBUSTION_FLASH_TICKS} ticks.
 	 *
-	 * <p>Written once and used from both sides so the client's flash and the
-	 * server's combustion cannot drift apart through two copies of the rule.
+	 * <p>Called on the client when {@link #getCombustionEventId()} changes, i.e.
+	 * exactly once per charge that really burned - the same event that consumed
+	 * the fuel, delivered the torque and advanced the start attempt.
 	 */
-	private boolean combustionConditionsMet(float speed) {
-		float required = phase == EnginePhase.RUNNING ? EngineTuning.STALL_RPM : EngineTuning.START_RPM;
-		return structureValid && ignitionEnabled && fuelAvailable && lastAngleDeltaDegrees > 0.0F
-			&& Math.abs(speed) >= required;
+	public void triggerCombustionFlash() {
+		combustionFlashTicks = EngineTuning.COMBUSTION_FLASH_TICKS;
 	}
 
 	// ------------------------------------------------------------------------
@@ -217,8 +220,9 @@ public final class EngineState {
 		// is the mechanically honest model, and it is the useful one: a plug that
 		// visibly sparks while the engine refuses to catch tells the player the
 		// problem is fuel, and a plug that stays dark tells them it is ignition.
-		sparkEvent = firingAngleCrossed && structureValid && ignitionEnabled && lastAngleDeltaDegrees > 0.0F
-			&& simulatedRpm >= requiredRpm;
+		if (firingAngleCrossed && structureValid && ignitionEnabled && lastAngleDeltaDegrees > 0.0F
+			&& simulatedRpm >= requiredRpm)
+			sparkEventId++;
 
 		boolean ignitedThisTick = false;
 		if (firingAngleCrossed) {
@@ -229,6 +233,11 @@ public final class EngineState {
 				ignitedThisTick = true;
 				ticksSinceCombustion = 0;
 				ticksSinceStartActivity = 0;
+				// One increment, here, at the single point where a charge is paid for
+				// and burns. Everything downstream of a combustion - the torque, the
+				// start cycle, the oil wear, and on the client the chamber flash and
+				// the firing sound - is therefore describing this same event.
+				combustionEventId++;
 				if (phase != EnginePhase.RUNNING)
 					registerStartCycle(random);
 				else
@@ -239,14 +248,6 @@ public final class EngineState {
 				firedThisRevolution = false;
 			}
 		}
-
-		// Only a charge that was actually paid for and burned lights the chamber.
-		// Sparking without fuel therefore gives a spark and no flash, which is
-		// exactly what the player should see.
-		if (ignitedThisTick)
-			combustionFlashTicks = EngineTuning.COMBUSTION_FLASH_TICKS;
-		else if (combustionFlashTicks > 0)
-			combustionFlashTicks--;
 
 		// The crank must actually be turning forwards for a power stroke to push.
 		// firedThisRevolution only changes when the firing angle is crossed, so on a
@@ -540,13 +541,16 @@ public final class EngineState {
 	}
 
 	/**
-	 * Takes the pending spark, if there is one. Server side only, and consuming
-	 * on read is deliberate: a spark must be emitted exactly once.
+	 * Ignition firings so far. Compare against a remembered value to detect that
+	 * the coil fired; never interpret the number itself.
 	 */
-	public boolean consumeSparkEvent() {
-		boolean spark = sparkEvent;
-		sparkEvent = false;
-		return spark;
+	public int getSparkEventId() {
+		return sparkEventId;
+	}
+
+	/** Charges burned so far. Same contract as {@link #getSparkEventId()}. */
+	public int getCombustionEventId() {
+		return combustionEventId;
 	}
 
 	/** Whether the combustion chamber should be drawn lit this frame. */
@@ -646,6 +650,15 @@ public final class EngineState {
 
 	public void setFuelAvailable(boolean fuelAvailable) {
 		this.fuelAvailable = fuelAvailable;
+	}
+
+	/**
+	 * Adopts the server's event counters. Client side, from the synchronised
+	 * block entity data; the values are never interpreted, only compared.
+	 */
+	public void setEventIds(int sparkEventId, int combustionEventId) {
+		this.sparkEventId = sparkEventId;
+		this.combustionEventId = combustionEventId;
 	}
 
 	public void setLubrication(LubricationState lubrication) {

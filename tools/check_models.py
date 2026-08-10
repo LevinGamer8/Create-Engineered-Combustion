@@ -19,6 +19,7 @@ anything, which is what makes the two invariants enforceable rather than
 aspirational.
 """
 import json
+import math
 import os
 import pathlib
 import sys
@@ -156,6 +157,78 @@ def check_assembly():
     return hits
 
 
+# ---------------------------------------------------------------------------
+# Combustion chamber clearances. See check_chamber.
+#
+# These four have to match CrankMath and the model generator; the piston's own
+# travel is re-derived from them rather than written down.
+BORE_MIN, BORE_MAX = 3.4, 12.6      # cylinder bore footprint, x and z
+CHAMBER_ROOF = 14.0                 # underside of the head
+CRANK_AXIS_HEIGHT, CRANK_RADIUS, ROD_LENGTH = 8.0, 3.0, 14.5   # = CrankMath
+WRIST_PIN_MODEL_HEIGHT = 8.0
+
+
+def wrist_pin_height(degrees):
+    """CrankMath.wristPinHeight, in the Cylinder block's own space."""
+    theta = math.radians(degrees)
+    along = math.sqrt(ROD_LENGTH ** 2 - (CRANK_RADIUS * math.sin(theta)) ** 2)
+    return CRANK_AXIS_HEIGHT - CRANK_RADIUS * math.cos(theta) + along - 16.0
+
+
+def piston_boxes(degrees):
+    """The piston's own elements, lifted to where this crank angle puts them."""
+    lift = wrist_pin_height(degrees) - WRIST_PIN_MODEL_HEIGHT
+    out = []
+    for element in json.loads((ROOT / "piston_head.json").read_text())["elements"]:
+        lo, hi = box(element)
+        out.append(([lo[0], lo[1] + lift, lo[2]], [hi[0], hi[1] + lift, hi[2]]))
+    return out
+
+
+def intersects(a, b):
+    return all(a[1][i] > b[0][i] + EPS and b[1][i] > a[0][i] + EPS for i in range(3))
+
+
+def check_chamber():
+    """Nothing on the Cylinder may stand in the volume the piston sweeps.
+
+    The clearance volume of this engine is half a unit tall, so "is the spark
+    plug clear of the piston" is not something to eyeball in a render - a tenth
+    of a unit either way is the difference between a plug and a bent plug. This
+    swings the real piston model through a whole revolution using CrankMath's
+    own relation and intersects it with every fixed element, so moving the crank
+    throw, the rod, the piston or the head fails here rather than in a world.
+
+    The combustion flash is checked the other way round: it is *meant* to be
+    inside the bore, where the piston will happily cover part of it, and only
+    has to stay under the head and inside the walls.
+    """
+    problems = []
+    tdc_crown = max(hi[1] for _, hi in piston_boxes(180.0))
+
+    fixed = json.loads((ROOT / "cylinder.json").read_text())["elements"]
+    for degrees in range(0, 360, 5):
+        for piston in piston_boxes(float(degrees)):
+            for element in fixed:
+                lo, hi = box(element)
+                if not intersects((lo, hi), piston):
+                    continue
+                problems.append(
+                    f"cylinder.json: {lo}->{hi} is inside the piston at crank "
+                    f"angle {degrees} deg (crown reaches y {tdc_crown:.2f} at TDC)")
+    # One report per offending element, however many angles hit it.
+    problems = sorted(set(problems))
+
+    for element in json.loads((ROOT / "combustion_flash.json").read_text())["elements"]:
+        lo, hi = box(element)
+        if hi[1] > CHAMBER_ROOF + EPS:
+            problems.append(f"combustion_flash.json: {lo}->{hi} pokes through the head")
+        if lo[0] < BORE_MIN - EPS or hi[0] > BORE_MAX + EPS \
+                or lo[2] < BORE_MIN - EPS or hi[2] > BORE_MAX + EPS:
+            problems.append(f"combustion_flash.json: {lo}->{hi} reaches outside the bore")
+    return problems, tdc_crown
+
+
 def check_references():
     """Every reference an asset makes has to land on something that exists.
 
@@ -223,6 +296,13 @@ def main():
     for problem in references:
         print("      " + problem)
     bad += len(references)
+
+    chamber, tdc = check_chamber()
+    print(f"\n{'ok ' if not chamber else 'BAD'} combustion chamber"
+          f" - piston crown at TDC y {tdc:.2f}, head at y {CHAMBER_ROOF:.2f}")
+    for problem in chamber:
+        print("      " + problem)
+    bad += len(chamber)
 
     seams = check_assembly()
     print(f"\n{'ok ' if not seams else 'BAD'} assembled engine"

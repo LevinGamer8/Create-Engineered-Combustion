@@ -64,6 +64,7 @@
   "engineered_combustion.gui.value.no_carburetor": "No Carburetor",
   "engineered_combustion.gui.value.no_oil_sump": "No Oil Sump",
   "subtitles.engineered_combustion.engine_cranking": "Engine turns over",
+  "subtitles.engineered_combustion.engine_spark": "Spark plug ticks",
   "subtitles.engineered_combustion.engine_fire_attempt": "Engine coughs",
   "subtitles.engineered_combustion.engine_start": "Engine catches",
   "subtitles.engineered_combustion.engine_running": "Engine runs",

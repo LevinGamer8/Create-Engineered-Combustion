@@ -571,23 +571,54 @@ CYL_TEX = {"particle": "cylinder", "barrel": "cylinder", "fin": "cylinder_fin",
            "steel": "journal", "case": "crankshaft",
            "ceramic": "spark_plug_ceramic", "brass": "brass"}
 
-# Spark plug: screwed into the +X flank of the head, which is the one face the
-# intake (-Z) and exhaust (+Z) bosses leave free on both engine axes. The
-# electrode deliberately breaks through the head's underside into the
-# combustion chamber, so the ignition spark has a real place to happen and the
-# player can see where it happens. Visual only for this milestone - no block
-# entity, no item, no gameplay requirement.
-SPARK_PLUG_ELECTRODE = (13.2, 13.75, 8.0)   # where the renderer/particles aim
+# ---------------------------------------------------------------------------
+# Spark plug
+# ---------------------------------------------------------------------------
+# Screwed through the head from its +X flank, which is the one face the intake
+# (-Z) and exhaust (+Z) bosses leave free on both engine axes.
+#
+# The plug is drilled through the *casting*, exactly as a real head is: the
+# threaded shell runs horizontally inside the head slab (y 14.0 .. 15.6) and is
+# invisible, because it is buried in metal. Everything a player can see is
+# either outside the head - hex, insulator, terminal - or inside the chamber -
+# electrode and ground strap - and nothing else.
+#
+# CHAMBER GEOMETRY, which decides every number below:
+#
+#   head underside (chamber roof)                    y = 14.00
+#   piston crown at top dead centre                  y = 13.50
+#     = piston model crown (12.0) + wristPinHeight(180) - WRIST_PIN_MODEL_HEIGHT
+#     = 12.0 + (8 + 3 + 14.5 - 16) - 8
+#   clearance volume                                 0.50 units tall
+#   bore                                             x/z 3.4 .. 12.6
+#
+# So the whole of the plug's business end has to live in half a unit, and
+# nothing may reach below 13.50 or the piston would drive through it at TDC.
+# The lowest part of this plug is the ground strap at 13.60.
+CHAMBER_ROOF = 14.0
+PISTON_TDC_CROWN = 13.5
+
+# Where the spark actually happens: the gap between the electrode tip and the
+# strap, on the bore side of the roof. CrankshaftBlockEntity aims its particle
+# here, so the two must not drift apart.
+SPARK_PLUG_ELECTRODE = (11.95, 13.79, 8.0)
 
 
 def spark_plug_elements():
     return [
-        el((12.6, 13.2, 7.5), (13.7, 14.3, 8.5), "steel"),    # electrode + earth strap
-        el((13.7, 13.9, 7.3), (15.1, 15.3, 8.7), "steel"),    # threaded shell
-        el((14.9, 13.8, 7.1), (16.2, 15.4, 8.9), "steel"),    # spanner hex
-        el((16.2, 14.0, 7.4), (17.3, 15.2, 8.6), "ceramic"),  # insulator
-        el((17.3, 14.2, 7.6), (18.0, 15.0, 8.4), "ceramic"),  # insulator, ribbed
-        el((18.0, 14.4, 7.8), (18.5, 14.8, 8.2), "brass"),    # terminal
+        # --- in the chamber: electrode and strap, and nothing else ---------
+        # The electrode passes through the roof; only its last 0.2 is in the
+        # chamber, which is all that fits and all a real plug shows.
+        el((11.80, 13.84, 7.85), (12.15, 14.60, 8.15), "steel"),   # centre electrode
+        el((11.45, 13.60, 7.80), (11.70, 14.30, 8.20), "steel"),   # ground strap, leg
+        el((11.45, 13.60, 7.80), (12.25, 13.74, 8.20), "steel"),   # ground strap, tip
+        # --- through the head: buried in the casting, never in the bore ----
+        el((12.15, 14.05, 7.60), (14.90, 15.15, 8.40), "steel"),   # threaded shell
+        # --- outside the head ---------------------------------------------
+        el((14.90, 13.85, 7.25), (16.20, 15.25, 8.75), "steel"),   # spanner hex
+        el((16.20, 14.05, 7.45), (17.50, 15.05, 8.55), "ceramic"),  # insulator
+        el((17.50, 14.20, 7.60), (18.10, 14.90, 8.40), "ceramic"),  # insulator, ribbed
+        el((18.10, 14.35, 7.75), (18.60, 14.75, 8.25), "brass"),   # terminal
     ]
 
 
@@ -643,17 +674,52 @@ def cylinder_elements():
 # ===========================================================================
 # COMBUSTION FLASH - the burn, drawn inside the chamber for a few ticks
 # ===========================================================================
-# A thin disc filling the top of the bore, just under the head's underside at
-# y 14. Rendered translucent, at full brightness and fading out, so it reads as
-# light inside the cylinder rather than as a solid object appearing in it.
+# Rendered translucent, at full brightness and fading out, so it reads as light
+# inside the cylinder rather than as a solid object appearing in it.
+#
+# THE SPRITE IS THE EFFECT. combustion_flash.png is one soft radial blob -
+# white-hot core, orange rim, transparent edge - and every face here takes the
+# *whole* sprite rather than the world-aligned slice the rest of this generator
+# emits. That is the difference between a fireball and what this used to be: a
+# 0.95-tall disc whose side faces sampled a thin, almost fully transparent strip
+# from the top of the blob, which is why the old flash read as a dim smear.
+#
+# SHAPE. Two crossed slabs plus a core, not one disc. A single disc has a
+# silhouette that collapses to a line from some angles and the engine is meant
+# to be looked at from all of them; crossed slabs always present one face
+# roughly square-on, and their translucent overlap in the middle is what makes
+# the centre the brightest part of the burn.
+#
+# PLACEMENT. The top sits just under the chamber roof and the bottom reaches
+# down to the top of the cutaway window, so the burn fills the space the player
+# can actually see into. It is *not* clipped to the clearance volume: at TDC the
+# piston crown covers all but the top half unit of it, and the depth buffer
+# does that for free because the piston is opaque and drawn first. As the crank
+# turns the charge down the bore, more of the same flash is uncovered - which is
+# precisely what a burning charge pushing a piston looks like.
 FLASH_TEX = {"particle": "combustion_flash", "flash": "combustion_flash"}
+
+# Whole sprite on every face. See above - this is load-bearing, not decoration.
+FULL_SPRITE = {face: [0.0, 0.0, 16.0, 16.0] for face in FACE_ORDER}
+
+FLASH_TOP = 13.96          # a hair under the chamber roof at 14.0
+FLASH_BOTTOM = 12.10       # the top of the cutaway window between fin and head
+FLASH_HALF = 2.6           # 5.2 across: 57 % of the 9.2 bore
+FLASH_HALF_THICK = 0.45
 
 
 def combustion_flash_elements():
-    # Strips matter more here than anywhere else: two translucent boxes that
-    # cross blend against each other, so an overlapping section would draw its
-    # own chamfers as bright seams across the burn.
-    return round_section(13.0, 13.95, steps(4.3, 2.5, 3.45), "flash")
+    c = 8.0
+    return [
+        # crossed slabs, one along each horizontal axis
+        el((c - FLASH_HALF, FLASH_BOTTOM, c - FLASH_HALF_THICK),
+           (c + FLASH_HALF, FLASH_TOP, c + FLASH_HALF_THICK), "flash", uvs=FULL_SPRITE),
+        el((c - FLASH_HALF_THICK, FLASH_BOTTOM, c - FLASH_HALF),
+           (c + FLASH_HALF_THICK, FLASH_TOP, c + FLASH_HALF), "flash", uvs=FULL_SPRITE),
+        # the core, drawn on top of both so the middle blows out to white
+        el((c - 1.3, FLASH_BOTTOM + 0.35, c - 1.3),
+           (c + 1.3, FLASH_TOP - 0.1, c + 1.3), "flash", uvs=FULL_SPRITE),
+    ]
 
 
 # ===========================================================================

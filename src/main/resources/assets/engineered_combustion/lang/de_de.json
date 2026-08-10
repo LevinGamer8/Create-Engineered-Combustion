@@ -64,6 +64,7 @@
   "engineered_combustion.gui.value.no_carburetor": "Kein Vergaser",
   "engineered_combustion.gui.value.no_oil_sump": "Keine Ölwanne",
   "subtitles.engineered_combustion.engine_cranking": "Motor wird durchgedreht",
+  "subtitles.engineered_combustion.engine_spark": "Zündkerze zündet",
   "subtitles.engineered_combustion.engine_fire_attempt": "Motor stottert",
   "subtitles.engineered_combustion.engine_start": "Motor springt an",
   "subtitles.engineered_combustion.engine_stall": "Motor wird abgewürgt",

@@ -120,3 +120,9 @@ enforces.
   Redstone Control Module item adds ignition, throttle or both under signal
   control, resolved centrally so nothing else in the mod reads redstone. See
   [`docs/milestone-6.md`](docs/milestone-6.md).
+* **Milestone 7** - ignition presentation: the Spark Plug is drilled through the
+  head with only its electrode and strap in the chamber, the combustion flash is
+  a fireball that the descending piston uncovers rather than a dim disc, and both
+  the flash and the firing sound are driven by server-authoritative spark and
+  combustion counters, so what the player sees and hears is the charge that
+  actually burned. See [`docs/milestone-7.md`](docs/milestone-7.md).

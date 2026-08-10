@@ -8,6 +8,15 @@
       }
     ]
   },
+  "engine_spark": {
+    "subtitle": "subtitles.engineered_combustion.engine_spark",
+    "sounds": [
+      {
+        "name": "engineered_combustion:engine_spark",
+        "stream": false
+      }
+    ]
+  },
   "engine_fire_attempt": {
     "subtitle": "subtitles.engineered_combustion.engine_fire_attempt",
     "sounds": [

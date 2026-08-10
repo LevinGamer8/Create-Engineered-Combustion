@@ -135,6 +135,11 @@ public final class EngineTuning {
 	 * <p>Three ticks - 0.15 s. Short enough that even at 192 RPM (3.2 firings a
 	 * second, so one every ~6 ticks) two flashes never overlap, which is what
 	 * keeps the effect reading as discrete bangs instead of a permanent glow.
+	 *
+	 * <p>This is the knob to reach for if a fast engine ever looks like it is
+	 * simply lit rather than firing: shortening it changes nothing about when a
+	 * combustion happens, because the flash is started by the authoritative
+	 * combustion counter and this only says how long it lingers.
 	 */
 	public static final int COMBUSTION_FLASH_TICKS = 3;
 
@@ -335,6 +340,12 @@ public final class EngineTuning {
 	public static final float SOUND_RUNNING_VOLUME = 0.55F;
 	public static final float SOUND_CRANKING_VOLUME = 0.40F;
 	public static final float SOUND_FIRE_ATTEMPT_VOLUME = 0.45F;
+	/**
+	 * The ignition tick. Quiet on purpose - it is a coil discharging, not an
+	 * event, and it has to stay well under the cough that may follow it or the
+	 * two stop being distinguishable.
+	 */
+	public static final float SOUND_SPARK_VOLUME = 0.16F;
 	public static final float SOUND_START_VOLUME = 0.70F;
 	public static final float SOUND_STALL_VOLUME = 0.60F;
 	public static final float SOUND_STOP_VOLUME = 0.50F;
