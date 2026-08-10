@@ -16,8 +16,27 @@ crank angle 0, so a transpose places it correctly).
 UVs are written explicitly and clamped to [0,16]. Several elements deliberately
 poke out of their block to knit neighbouring blocks together, and Minecraft's
 default UVs would run off the edge of the sprite for those.
+
+<h2>Why elements are specs and not model JSON</h2>
+Geometry is authored as plain cuboid specs and only turned into model JSON by
+{@link bake}, which runs two passes first:
+
+*face culling* drops quads that other elements of the same model bury. Nothing
+can ever see them, but the chunk mesh still carries them.
+
+*separation* pulls apart quads that face the same way, sit in exactly the same
+plane and overlap in area. The depth buffer cannot order such a pair, so it
+shimmers as the camera moves - and on the parts a block entity renderer turns
+(crankshaft, connecting rod, flywheel) the geometry itself moves, so the
+shimmer becomes a flicker that follows the engine's speed.
+
+Both passes need to see a whole model at once, which is why they cannot happen
+in the helpers that build the parts. `tools/check_models.py` re-derives both
+invariants from the written JSON, so they stay enforced rather than assumed.
 """
+import copy
 import json
+import math
 import os
 import pathlib
 
@@ -62,71 +81,242 @@ def uv(a0, b0, a1, b1):
     return [r2(a0), r2(b0), r2(a1), r2(b1)]
 
 
+FACE_ORDER = ("north", "east", "south", "west", "up", "down")
+# face -> (axis index, which end of the box the face sits on)
+FACE_AXIS = {"east": (0, 1), "west": (0, 0), "up": (1, 1),
+             "down": (1, 0), "south": (2, 1), "north": (2, 0)}
+# X <-> Z renames the horizontal faces.
+FACE_SWAP = {"north": "west", "west": "north", "south": "east", "east": "south",
+             "up": "up", "down": "down"}
+
+# How far a losing quad steps out of a contested plane, in model units. Small
+# enough to be a fortieth of a texel at the 32px the block textures are drawn
+# at - invisible - and still far enough apart for the depth buffer to order the
+# pair at any distance the model is more than a few pixels tall at.
+SEPARATION = 0.02
+
+
 def el(frm, to, tex, faces=None, uvs=None):
-    """One cuboid. `tex` is the default texture ref for all six faces;
-    `faces` overrides individual ones, `uvs` overrides individual face UVs."""
-    faces = faces or {}
-    uvs = uvs or {}
-    x0, y0, z0 = frm
-    x1, y1, z1 = to
-    # world-aligned UVs: horizontal axes map straight through, vertical is
-    # flipped so v grows downwards like every other Minecraft texture.
-    default_uv = {
-        "down": uv(x0, z0, x1, z1),
-        "up": uv(x0, z0, x1, z1),
-        "north": uv(x0, 16 - y1, x1, 16 - y0),
-        "south": uv(x0, 16 - y1, x1, 16 - y0),
-        "west": uv(z0, 16 - y1, z1, 16 - y0),
-        "east": uv(z0, 16 - y1, z1, 16 - y0),
-    }
-    out = {}
-    for face in ("north", "east", "south", "west", "up", "down"):
-        out[face] = {"uv": uvs.get(face, default_uv[face]),
-                     "texture": "#" + faces.get(face, tex)}
-    return {"from": [r2(c) for c in frm], "to": [r2(c) for c in to],
-            "faces": out, "shade": True}
+    """One cuboid, as a spec. `tex` is the default texture ref for all six
+    faces; `faces` overrides individual ones, `uvs` overrides individual face
+    UVs. `bake` turns a list of these into model JSON."""
+    return {"from": [float(c) for c in frm], "to": [float(c) for c in to],
+            "tex": tex, "faces": dict(faces or {}), "uvs": dict(uvs or {})}
 
 
-def transpose(element):
+def transpose(spec):
     """X <-> Z. Swaps the horizontal faces to match."""
-    f, t = element["from"], element["to"]
-    swapped = dict(element)
-    swapped["from"] = [f[2], f[1], f[0]]
-    swapped["to"] = [t[2], t[1], t[0]]
-    src = element["faces"]
-    swapped["faces"] = {
-        "north": src["west"], "west": src["north"],
-        "south": src["east"], "east": src["south"],
-        "up": src["up"], "down": src["down"],
-    }
-    return swapped
+    f, t = spec["from"], spec["to"]
+    out = dict(spec)
+    out["from"] = [f[2], f[1], f[0]]
+    out["to"] = [t[2], t[1], t[0]]
+    out["faces"] = {FACE_SWAP[k]: v for k, v in spec["faces"].items()}
+    out["uvs"] = {FACE_SWAP[k]: v for k, v in spec["uvs"].items()}
+    return out
 
 
-def shift(element, dx, dy, dz):
-    f, t = element["from"], element["to"]
-    moved = dict(element)
-    moved["from"] = [r2(f[0] + dx), r2(f[1] + dy), r2(f[2] + dz)]
-    moved["to"] = [r2(t[0] + dx), r2(t[1] + dy), r2(t[2] + dz)]
+def shift(spec, dx, dy, dz):
+    f, t = spec["from"], spec["to"]
+    moved = dict(spec)
+    moved["from"] = [f[0] + dx, f[1] + dy, f[2] + dz]
+    moved["to"] = [t[0] + dx, t[1] + dy, t[2] + dz]
     return moved
 
 
-def octagon_at(cx, cz, y0, y1, half, flat, corner, tex, top_tex=None):
-    """Three boxes approximating a round section, centred anywhere in the block.
+def steps(half, flat, corner):
+    """The three-step section the engine was authored with.
 
+    Returned widest-first as (half extent along x, half extent along z) pairs:
     `half` is the outer radius across the flats, `flat` the half width of the
     flat itself, `corner` the radius of the chamfer box.
     """
+    return [(half, flat), (corner, corner), (flat, half)]
+
+
+def fine_steps(half, flat, corner):
+    """The same section with the two chamfers split in half again.
+
+    Twenty sides instead of twelve. Worth it on the parts a player watches move
+    - the piston travelling in an open bore is the whole point of the cutaway
+    cylinder - and not worth the elements anywhere else.
+    """
+    return [(half, flat), ((half + corner) / 2, (flat + corner) / 2),
+            (corner, corner), ((flat + corner) / 2, (half + corner) / 2),
+            (flat, half)]
+
+
+def round_section_at(cx, cz, y0, y1, section, tex, top_tex=None):
+    """A round section, centred anywhere in the block, built as strips.
+
+    The obvious construction - one box per step, all sharing the section's full
+    height - makes every step's top and bottom face land in the same plane as
+    every other step's, so a piston crown is a stack of quads the depth buffer
+    has to guess between. Cutting the same silhouette into vertical strips
+    instead partitions it: the boxes touch but never overlap, so there is no
+    contested plane to begin with, and the shared side walls are buried and get
+    culled. It also keeps the translucent combustion flash from blending
+    against itself where two steps would otherwise cross.
+
+    `section` is a widest-first list of (x half extent, z half extent) pairs.
+    """
     faces_top = {"up": top_tex} if top_tex else None
-    return [
-        el((cx - half, y0, cz - flat), (cx + half, y1, cz + flat), tex, faces_top),
-        el((cx - flat, y0, cz - half), (cx + flat, y1, cz + half), tex, faces_top),
-        el((cx - corner, y0, cz - corner), (cx + corner, y1, cz + corner), tex, faces_top),
-    ]
+    out = []
+    for k in range(len(section) - 1):
+        (a, b), (inner, _) = section[k], section[k + 1]
+        for sign in (-1, 1):
+            x0, x1 = sorted((cx + sign * inner, cx + sign * a))
+            out.append(el((x0, y0, cz - b), (x1, y1, cz + b), tex, faces_top))
+    a, b = section[-1]
+    out.append(el((cx - a, y0, cz - b), (cx + a, y1, cz + b), tex, faces_top))
+    return out
 
 
-def octagon(y0, y1, half, flat, corner, tex, top_tex=None):
+def round_section(y0, y1, section, tex, top_tex=None):
     """The same round section, centred on the block - the piston and the hubs."""
-    return octagon_at(8, 8, y0, y1, half, flat, corner, tex, top_tex)
+    return round_section_at(8, 8, y0, y1, section, tex, top_tex)
+
+
+# ---------------------------------------------------------------------------
+# baking: cull what cannot be seen, separate what cannot be ordered
+# ---------------------------------------------------------------------------
+def _face_rect(box, axis):
+    """The two extents of a box other than `axis`, as ((lo, hi), (lo, hi))."""
+    return tuple((box[0][i], box[1][i]) for i in range(3) if i != axis)
+
+
+def _face_area(box, axis):
+    return math.prod(box[1][i] - box[0][i] for i in range(3) if i != axis)
+
+
+def _overlap_area(a, b, axis):
+    """Area shared by two boxes projected along `axis`; 0 if they miss."""
+    area = 1.0
+    for i in range(3):
+        if i == axis:
+            continue
+        span = min(a[1][i], b[1][i]) - max(a[0][i], b[0][i])
+        if span <= 1e-9:
+            return 0.0
+        area *= span
+    return area
+
+
+def cull(specs):
+    """Drop every face that another element of the same model buries.
+
+    Conservative on purpose: a face only goes when one single element both
+    stands on its outward side and spans it on both other axes. A face covered
+    by two elements between them stays, because proving that case needs real
+    area subtraction and getting it wrong punches a hole in a model.
+
+    Runs after separation, on final coordinates, so "spans it" can be exact:
+    nothing is going to move afterwards and open a gap behind a culled quad.
+    """
+    boxes = [(s["from"], s["to"]) for s in specs]
+    for i, spec in enumerate(specs):
+        a = boxes[i]
+        for face in list(spec["live"]):
+            axis, side = FACE_AXIS[face]
+            plane = a[side][axis]
+            others = [k for k in range(3) if k != axis]
+            rect = _face_rect(a, axis)
+            for j, b in enumerate(boxes):
+                if i == j:
+                    continue
+                # the neighbour has to stand on the side the face looks at
+                if side == 1:
+                    if not (b[0][axis] <= plane + 1e-9
+                            and b[1][axis] > plane + 1e-9):
+                        continue
+                elif not (b[1][axis] >= plane - 1e-9
+                          and b[0][axis] < plane - 1e-9):
+                    continue
+                if all(b[0][k] <= lo + 1e-9 and b[1][k] >= hi - 1e-9
+                       for k, (lo, hi) in zip(others, rect)):
+                    spec["live"].discard(face)
+                    break
+
+
+def separate(specs):
+    """Step co-planar, same-facing, overlapping quads out of each other's plane.
+
+    Every quad sharing a plane is a node; two are joined when they overlap in
+    area, because only then can the depth buffer see both at one pixel. Greedy
+    colouring on that graph gives each node the lowest step that none of its
+    neighbours took, so the widest face in a contested plane never moves at all
+    and the rest give way by the smallest amount that separates them.
+    """
+    boxes = [(s["from"], s["to"]) for s in specs]
+    planes = {}
+    for i, spec in enumerate(specs):
+        for face in spec["live"]:
+            axis, side = FACE_AXIS[face]
+            planes.setdefault((axis, side, round(boxes[i][side][axis], 4)),
+                              []).append(i)
+
+    moves = []
+    for (axis, side, _plane), members in sorted(planes.items()):
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda i: -_face_area(boxes[i], axis))
+        taken = {}
+        for i in members:
+            used = {taken[j] for j in taken
+                    if _overlap_area(boxes[i], boxes[j], axis) > 0.0}
+            step = 0
+            while step in used:
+                step += 1
+            taken[i] = step
+            if step:
+                moves.append((i, axis, side, step))
+
+    for (i, axis, side, step) in moves:
+        spec = specs[i]
+        end = "to" if side == 1 else "from"
+        spec[end][axis] += -SEPARATION * step if side == 1 else SEPARATION * step
+        thickness = spec["to"][axis] - spec["from"][axis]
+        if thickness < 0.1:
+            raise AssertionError(
+                f"separation collapsed an element to {thickness:.3f} units "
+                f"thick: {spec['from']} -> {spec['to']}")
+
+
+def bake(specs):
+    """Specs -> model JSON elements, culled and separated."""
+    live = []
+    for spec in specs:
+        spec = copy.deepcopy(spec)
+        spec["live"] = set(FACE_ORDER)
+        live.append(spec)
+    separate(live)
+    cull(live)
+
+    out = []
+    for spec in live:
+        if not spec["live"]:
+            continue      # wholly enclosed by other elements - it draws nothing
+        x0, y0, z0 = spec["from"]
+        x1, y1, z1 = spec["to"]
+        # world-aligned UVs: horizontal axes map straight through, vertical is
+        # flipped so v grows downwards like every other Minecraft texture.
+        default_uv = {
+            "down": uv(x0, z0, x1, z1),
+            "up": uv(x0, z0, x1, z1),
+            "north": uv(x0, 16 - y1, x1, 16 - y0),
+            "south": uv(x0, 16 - y1, x1, 16 - y0),
+            "west": uv(z0, 16 - y1, z1, 16 - y0),
+            "east": uv(z0, 16 - y1, z1, 16 - y0),
+        }
+        faces = {}
+        for face in FACE_ORDER:
+            if face not in spec["live"]:
+                continue
+            faces[face] = {"uv": spec["uvs"].get(face, default_uv[face]),
+                           "texture": "#" + spec["faces"].get(face, spec["tex"])}
+        out.append({"from": [r2(c) for c in spec["from"]],
+                    "to": [r2(c) for c in spec["to"]],
+                    "faces": faces, "shade": True})
+    return out
 
 
 def write(path, model):
@@ -135,10 +325,12 @@ def write(path, model):
     with open(full, "w") as f:
         json.dump(model, f, indent=2)
         f.write("\n")
-    print("wrote", path, "-", len(model.get("elements", [])), "elements")
+    elements = model.get("elements", [])
+    quads = sum(len(e["faces"]) for e in elements)
+    print(f"wrote {path:34s} {len(elements):3d} elements {quads:4d} quads")
 
 
-def model(textures, elements, parent="minecraft:block/block", display=None):
+def model(textures, specs, parent="minecraft:block/block", display=None):
     out = {"parent": parent,
            "textures": {k: (v if ":" in v else NS + "block/" + v)
                         for k, v in textures.items()}}
@@ -147,7 +339,7 @@ def model(textures, elements, parent="minecraft:block/block", display=None):
         # block/block, so held/framed poses stay consistent with every other
         # block item.
         out["display"] = display
-    out["elements"] = elements
+    out["elements"] = bake(specs)
     return out
 
 
@@ -202,6 +394,11 @@ def crankcase_elements():
     lens = {"north": [0, 0, 16, 16], "south": [0, 0, 16, 16]}
     e.append(el((6.5, 2.4, 0.1), (9.5, 4.8, 1.1), "ind", uvs=lens))
     e.append(el((6.5, 2.4, 14.9), (9.5, 4.8, 15.9), "ind", uvs=lens))
+    # --- head studs standing proud of the deck, so the joint the Cylinder
+    # lands on plainly bolts down rather than just meeting.
+    for x0, x1 in ((2.2, 3.8), (12.2, 13.8)):
+        e.append(el((x0, 13.6, 0.1), (x1, 15.2, 0.5), "steel"))
+        e.append(el((x0, 13.6, 15.5), (x1, 15.2, 15.9), "steel"))
     return e
 
 
@@ -212,7 +409,7 @@ def crankcase_elements():
 # crankcase's own joint face, so the two swallow each other at the seam and the
 # pair reads as one crankcase assembly with a removable pan.
 SUMP_TEX = {"particle": "oil_sump", "sump": "oil_sump",
-            "deck": "crankcase_deck", "steel": "journal"}
+            "deck": "crankcase_deck", "steel": "journal", "brass": "brass"}
 
 
 def oil_sump_elements():
@@ -226,6 +423,19 @@ def oil_sump_elements():
     for x0, x1 in ((2.2, 3.8), (12.2, 13.8)):                 # flange bolts
         e.append(el((x0, 13.8, 0.1), (x1, 15.4, 1.1), "steel"))
         e.append(el((x0, 13.8, 14.9), (x1, 15.4, 15.9), "steel"))
+    # Ribs cast down the pan's flanks. A pressed or thinly cast oil pan is the
+    # one panel on an engine that is always ribbed, because otherwise it drums,
+    # and they give the largest blank face on the whole assembly something to
+    # catch the light with.
+    for x0, x1 in ((4.4, 5.8), (10.2, 11.6)):
+        e.append(el((x0, 9.0, 1.2), (x1, 13.6, 1.65), "sump"))
+        e.append(el((x0, 9.0, 14.35), (x1, 13.6, 14.8), "sump"))
+    # Dipstick, up the +Z flank. It has to stand proud of the top flange in Z
+    # rather than run up through it: the flange is one solid box across the
+    # whole top of the pan, so a tube inside its footprint would simply be
+    # swallowed and the handle would never appear.
+    e.append(el((6.9, 9.0, 15.45), (7.9, 15.2, 15.95), "steel"))
+    e.append(el((6.6, 15.2, 15.4), (8.2, 16.0, 16.0), "brass"))
     return e
 
 
@@ -237,20 +447,38 @@ CRANK_TEX = {"particle": "journal", "steel": "journal", "web": "crank_web"}
 
 def crank_elements():
     e = [
-        el((0.0, 5.5, 5.5), (4.8, 10.5, 10.5), "steel"),    # main journal
-        el((11.2, 5.5, 5.5), (16.0, 10.5, 10.5), "steel"),  # main journal
-        # Both journals step down to a 4x4 stub as they leave the block. That
-        # is exactly a Create Shaft's cross-section (6..10), so a shaft bolted
-        # to either end continues the journal instead of swallowing a wider
-        # boss - and both ends really are kinetic outputs now, so both have to
-        # look like it.
-        el((-1.0, 6.0, 6.0), (0.0, 10.0, 10.0), "steel"),
-        el((16.0, 6.0, 6.0), (17.0, 10.0, 10.0), "steel"),
+        # The main journals run out through the crankcase's end walls, which
+        # means their end faces land on the block boundary - the exact plane
+        # those walls' own outer faces are in. One of the two is turning, so
+        # that is a 5x5 patch of shimmer on both ends of every engine. A twenty
+        # thousandth of a block proud of the wall is enough to order them and
+        # far too little to see.
+        el((-0.05, 5.5, 5.5), (4.8, 10.5, 10.5), "steel"),    # main journal
+        el((11.2, 5.5, 5.5), (16.05, 10.5, 10.5), "steel"),   # main journal
+        # Both journals step down to a stub as they leave the block, on a
+        # Create Shaft's cross-section (6..10) so a shaft bolted to either end
+        # continues the journal instead of swallowing a wider boss - and both
+        # ends really are kinetic outputs now, so both have to look like it.
+        #
+        # Held a hair inside 6..10 rather than exactly on it. The stub reaches
+        # a unit into whatever is next door, and the Flywheel's own shaft is
+        # modelled at exactly 6..10 through its whole block: matching it would
+        # put four pairs of identical faces in identical planes, on two parts
+        # that turn together, which is a shimmer that never stops. Slightly
+        # under, the stub simply disappears inside the shaft it feeds.
+        el((-1.0, 6.15, 6.15), (0.0, 9.85, 9.85), "steel"),
+        el((16.0, 6.15, 6.15), (17.0, 9.85, 9.85), "steel"),
         el((5.0, 3.6, 6.6), (11.0, 6.4, 9.4), "steel"),     # offset crank pin
     ]
     for x0, x1 in ((4.0, 6.4), (9.6, 12.0)):
+        # The disc is a full octagon rather than a cross: it is the largest
+        # thing turning behind the crankcase windows, and a cross reads as two
+        # bars flipping past each other rather than as a wheel going round. The
+        # chamfer corner sits 4.67 from the axis, inside the 4.87 the cavity
+        # allows, so the swept envelope is unchanged.
         e.append(el((x0, 4.2, 5.4), (x1, 11.8, 10.6), "web"))   # web disc
         e.append(el((x0, 5.4, 4.2), (x1, 10.6, 11.8), "web"))
+        e.append(el((x0, 4.7, 4.7), (x1, 11.3, 11.3), "web"))
         e.append(el((x0, 3.4, 6.4), (x1, 8.0, 9.6), "web"))     # throw arm
         e.append(el((x0, 10.0, 5.2), (x1, 11.9, 10.8), "web"))  # counterweight
         e.append(el((x0, 10.0, 6.6), (x1, 12.6, 9.4), "web"))
@@ -282,11 +510,14 @@ PISTON_TEX = {"particle": "piston", "side": "piston", "crown": "piston_crown"}
 
 
 def piston_elements():
+    # The one part of the engine that is both round and in constant motion in
+    # plain sight, so it is the one part that gets the twenty-sided section.
     e = []
-    e += octagon(10.2, 12.0, 4.25, 2.5, 3.4, "side", top_tex="crown")  # crown
-    e += octagon(9.3, 10.3, 3.75, 2.2, 2.95, "side")                   # groove
-    e += octagon(8.6, 9.4, 4.25, 2.5, 3.4, "side")                     # land
-    e += octagon(5.5, 8.7, 4.0, 2.35, 3.18, "side")                    # skirt
+    e += round_section(10.2, 12.0, fine_steps(4.25, 2.5, 3.4), "side",
+                       top_tex="crown")                                # crown
+    e += round_section(9.3, 10.3, fine_steps(3.75, 2.2, 2.95), "side")  # groove
+    e += round_section(8.6, 9.4, fine_steps(4.25, 2.5, 3.4), "side")    # land
+    e += round_section(5.5, 8.7, fine_steps(4.0, 2.35, 3.18), "side")   # skirt
     return e
 
 
@@ -335,13 +566,16 @@ def cylinder_elements():
         for z0, z1 in ((1.5, 4.25), (11.75, 14.5)):
             e.append(el((x0, 1.4, z0), (x1, 14.2, z1), "barrel"))
     # --- cooling fins. Full rings, so the silhouette reads as air-cooled;
-    # bored out to the cylinder bore so the piston is never touched.
+    # bored out to the cylinder bore so the piston is never touched. Four of
+    # them on a 2.8 pitch rather than three on 3.2: closer-packed fins are what
+    # an air-cooled barrel actually looks like, and the extra ring fills the
+    # bare stretch that used to sit between the top fin and the head.
     # Side faces take the whole fin texture height on purpose - that is what
     # gives every fin its lit top edge and shadowed root.
     fin_uv = {"north": [0, 0, 16, 16], "south": [0, 0, 16, 16],
               "east": [0, 0, 16, 16], "west": [0, 0, 16, 16]}
     flat = {"up": "barrel", "down": "barrel"}
-    for y0 in (3.2, 6.4, 9.6):
+    for y0 in (2.9, 5.7, 8.5, 11.3):
         y1 = y0 + 0.9
         e.append(el((1.6, y0, 0.6), (14.4, y1, BORE_MIN), "fin", flat, fin_uv))
         e.append(el((1.6, y0, BORE_MAX), (14.4, y1, 15.4), "fin", flat, fin_uv))
@@ -355,7 +589,9 @@ def cylinder_elements():
         for z0, z1 in ((1.6, 3.2), (12.8, 14.4)):
             e.append(el((x0, 14.8, z0), (x1, 17.8, z1), "steel"))
     e.append(el((5.4, 13.8, 0.0), (10.6, 17.6, 4.6), "head"))       # intake port
-    e.append(el((4.6, 16.6, 0.2), (11.4, 17.8, 4.2), "deck"))       # intake flange
+    # The flange stops just under 17.8 so its top face misses the plane the
+    # Carburetor's float bowl floor sits in, one block up.
+    e.append(el((4.6, 16.6, 0.2), (11.4, 17.75, 4.2), "deck"))      # intake flange
     e.append(el((6.0, 13.8, 11.6), (10.0, 16.4, 16.0), "head"))     # exhaust boss
     e.append(el((5.2, 12.9, 15.0), (10.8, 16.9, 16.0), "deck"))     # exhaust flange
     e += spark_plug_elements()
@@ -372,7 +608,10 @@ FLASH_TEX = {"particle": "combustion_flash", "flash": "combustion_flash"}
 
 
 def combustion_flash_elements():
-    return octagon(13.0, 13.95, 4.3, 2.5, 3.45, "flash")
+    # Strips matter more here than anywhere else: two translucent boxes that
+    # cross blend against each other, so an overlapping section would draw its
+    # own chamfers as bright seams across the burn.
+    return round_section(13.0, 13.95, steps(4.3, 2.5, 3.45), "flash")
 
 
 # ===========================================================================
@@ -402,7 +641,13 @@ THROTTLE_PIVOT = (12.0, 5.6, 2.6)
 
 def carburetor_elements():
     e = [
-        el((4.6, 1.4, 0.2), (11.4, 2.8, 4.6), "body"),      # mounting flange
+        # Deliberately a touch wider and deeper than the Cylinder's intake
+        # flange, which reaches 1.8 up into this block. Matching it exactly -
+        # which it used to - shares three planes with it across two different
+        # blocks, and the pair flickers wherever the seam is visible. Larger,
+        # the carburetor's flange simply swallows the head's, the same way the
+        # Oil Sump's flange swallows the crankcase's joint face.
+        el((4.5, 1.4, 0.1), (11.5, 2.8, 4.7), "body"),      # mounting flange
         el((5.6, 2.6, 0.9), (10.4, 4.6, 4.4), "body"),      # throat
         el((6.3, 4.4, 1.5), (9.7, 6.4, 3.9), "body"),       # venturi waist
         el((5.6, 6.2, 0.9), (10.4, 8.4, 4.4), "body"),
@@ -425,7 +670,9 @@ def carburetor_elements():
     e.append(el((6.9, 6.5, 9.0), (9.1, 7.7, 10.3), "brass"))   # union nut
     e.append(el((7.5, 7.5, 9.3), (8.5, 9.8, 10.0), "brass"))   # supply line
     # --- fuel/mixture pipe running down onto the head's intake flange ------
-    e.append(el((3.0, 1.0, 1.8), (4.4, 2.4, 3.2), "brass"))    # union on the head
+    # Straddles z 3.2 rather than ending on it: that is where the head's corner
+    # stud boss, in the block below, has its own outward face.
+    e.append(el((3.0, 1.0, 1.75), (4.4, 2.4, 3.25), "brass"))  # union on the head
     e.append(el((4.2, 1.5, 2.2), (5.6, 2.3, 2.8), "brass"))    # pipe into the body
     # --- throttle. Only the shaft is static; the lever is a partial model so
     # its angle can follow the authoritative throttle setting.
@@ -460,10 +707,13 @@ FILTER_TEX = {"particle": "air_filter", "case": "air_filter",
 
 def air_filter_elements():
     e = [el((6.6, 9.4, HORN_CZ - 1.4), (9.4, 10.6, HORN_CZ + 1.4), "steel")]
-    e += octagon_at(8, HORN_CZ, 10.4, 11.6, 2.65, 1.55, 2.1, "case")   # canister
-    e += octagon_at(8, HORN_CZ, 11.6, 13.2, 2.45, 1.45, 1.95, "mesh")  # element
-    e += octagon_at(8, HORN_CZ, 13.2, 14.6, 2.65, 1.55, 2.1, "case")
-    e += octagon_at(8, HORN_CZ, 14.6, 15.3, 2.85, 1.65, 2.25, "case")  # lid
+    e += round_section_at(8, HORN_CZ, 10.4, 11.6,
+                          steps(2.65, 1.55, 2.1), "case")     # canister
+    e += round_section_at(8, HORN_CZ, 11.6, 13.2,
+                          steps(2.45, 1.45, 1.95), "mesh")    # element
+    e += round_section_at(8, HORN_CZ, 13.2, 14.6, steps(2.65, 1.55, 2.1), "case")
+    e += round_section_at(8, HORN_CZ, 14.6, 15.3,
+                          steps(2.85, 1.65, 2.25), "case")    # lid
     e.append(el((7.3, 15.3, HORN_CZ - 0.7), (8.7, 16.1, HORN_CZ + 0.7), "brass"))
     return e
 
@@ -478,6 +728,11 @@ FLY_TEX = {"particle": "flywheel", "rim": "flywheel", "face": "flywheel_face",
 def flywheel_elements():
     side = {"east": "face", "west": "face"}
     e = [el((0, 6, 6), (16, 10, 10), "steel")]              # through shaft
+    # Retaining collars either side of the hub. They are what makes the wheel
+    # look keyed to the shaft rather than threaded onto it, and being off the
+    # axis they are the part of a spinning flywheel the eye actually tracks.
+    e.append(el((3.0, 5.7, 5.7), (4.0, 10.3, 10.3), "steel"))
+    e.append(el((12.0, 5.7, 5.7), (13.0, 10.3, 10.3), "steel"))
     e.append(el((5.0, 5.2, 6.4), (11.0, 10.8, 9.6), "hub", side))
     e.append(el((5.0, 6.4, 5.2), (11.0, 9.6, 10.8), "hub", side))
     e.append(el((5.0, 5.7, 5.7), (11.0, 10.3, 10.3), "hub", side))
