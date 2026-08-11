@@ -147,3 +147,26 @@ for what writes what, why the resolutions differ, and the two model invariants
   pulse per charge that actually burned, so the engine's rhythm is its real firing
   rhythm and a fuel-starved engine audibly stops combusting while it is still
   spinning. See [`docs/milestone-9.md`](docs/milestone-9.md).
+* **Milestone 10** - save/reload RPM reconciliation: an engine that survives a
+  world save no longer comes back running at a speed Create simply happened to be
+  holding. The engine's signed angular velocity is the one persisted rotational
+  state and the generated speed is reconstructed from it; an explicit post-load
+  reconciliation step re-derives generation from the world on the first tick the
+  engine's blocks are actually loaded and force-publishes the result - including
+  zero, and including Create's cached Stress Capacity, so a save cannot resurrect
+  a dead engine's power. The generated-speed update rule is now a low-pass filter
+  plus a rate limit rather than a deadband, so combustion ripple still never
+  reaches the kinetic network but a small error can no longer persist for ever.
+  See [`docs/milestone-10.md`](docs/milestone-10.md).
+* **Milestone 11** - modular inline engines: extending the crankshaft along its
+  own axis builds an Inline-1, -2, -3 or -4, and it is **one** engine - one
+  simulation, one master crank angle, one throttle, one Flywheel, one kinetic
+  source - with each cylinder taking its turn at `i * 360 / n` degrees. Every
+  cylinder gets its own combustion, its own charge of gasoline, its own spark and
+  flash and bang at its own bore, and its own phase-shifted compression, so an
+  inline-4 burns four times the fuel, supplies four times the Stress Capacity and
+  runs visibly and audibly smoother than a single - and an inline-4 with one dead
+  Spark Plug runs on three cylinders, down on power. Capacity is scaled by the
+  cylinders that are actually burning fuel, never by how many exist, so a motored
+  dry inline-4 still supplies exactly nothing. See
+  [`docs/milestone-11.md`](docs/milestone-11.md).

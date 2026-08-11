@@ -108,11 +108,24 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	 */
 	@Override
 	public float calculateAddedStressCapacity() {
-		if (!isEngineGenerating()) {
+		// Scaled by the number of cylinders that are GENUINELY FIRING, which is the
+		// whole of how a bigger engine is a more powerful one. An inline-4 supplies
+		// four times what a single does because four charges burn per revolution
+		// instead of one; an inline-4 with a dead Spark Plug supplies three quarters
+		// of that; and a dry engine being spun by a neighbour supplies nothing at
+		// all, however many cylinders it has, because none of them are burning.
+		//
+		// Cylinder count alone is deliberately never the multiplier. That would make
+		// a wall of unfuelled crankcases free power - the exploit this mod already
+		// closed once, at four times the scale.
+		int firing = firingCylinders();
+		if (firing <= 0) {
 			lastCapacityProvided = 0.0F;
 			return 0.0F;
 		}
-		return super.calculateAddedStressCapacity();
+		float capacity = super.calculateAddedStressCapacity() * firing;
+		lastCapacityProvided = capacity;
+		return capacity;
 	}
 
 	/**
@@ -154,9 +167,51 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 		return crankshaft != null && crankshaft.isGeneratingFor(worldPosition);
 	}
 
+	/**
+	 * How many cylinders of the engine on the other side of this flywheel are
+	 * actually burning fuel. Zero for a flywheel with no engine of its own.
+	 *
+	 * <p>The crankshaft this flywheel touches may be a follower of a four-cylinder
+	 * engine; it answers for the whole engine, not for its own bore.
+	 */
+	private int firingCylinders() {
+		if (!isEngineGenerating())
+			return 0;
+		CrankshaftBlockEntity crankshaft = getAdjacentCrankshaft();
+		return crankshaft == null ? 0 : crankshaft.getFiringCylinderCountFor(worldPosition);
+	}
+
 	/** Called by the crankshaft when the engine's rotational output changed. */
 	public void onEngineOutputChanged() {
 		updateGeneratedRotation();
+	}
+
+	/**
+	 * Called once by the crankshaft on the first server tick after a world load,
+	 * with the engine's state freshly derived from the world.
+	 *
+	 * <p>Does everything {@link #onEngineOutputChanged()} does, and then refreshes
+	 * the Stress figures unconditionally.
+	 *
+	 * <p>That last part is the point. Create persists a source's capacity per
+	 * network and restores it in {@code KineticNetwork#addSilently}, and
+	 * {@code updateGeneratedRotation} only refreshes it while the block is turning
+	 * ({@code hasNetwork() && speed != 0}). An engine that stopped generating while
+	 * the chunk was unloaded - it lost its fuel, its Spark Plug or its Cylinder -
+	 * would therefore come back holding the capacity it had when the world was
+	 * saved, on a network nobody had asked to recompute. Refreshing here means the
+	 * numbers Create is running on after a reload are the ones this engine can
+	 * actually justify, which for a dead engine is zero of both.
+	 */
+	public void reconcileEngineOutput() {
+		if (level == null || level.isClientSide)
+			return;
+		updateGeneratedRotation();
+		if (!hasNetwork())
+			return;
+		notifyStressCapacityChange(calculateAddedStressCapacity());
+		getOrCreateNetwork().updateStressFor(this, calculateStressApplied());
+		getOrCreateNetwork().updateStress();
 	}
 
 	/**

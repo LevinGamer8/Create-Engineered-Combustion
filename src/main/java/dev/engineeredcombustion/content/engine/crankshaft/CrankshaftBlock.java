@@ -6,7 +6,9 @@ import com.simibubi.create.foundation.block.IBE;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECItems;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.Direction.Axis;
+import net.minecraft.core.Direction.AxisDirection;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -15,6 +17,8 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
@@ -97,15 +101,33 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<C
 	 */
 	public static final BooleanProperty LIT = BlockStateProperties.LIT;
 
+	/**
+	 * Whether another crankshaft section sits against this one's <b>negative</b>
+	 * axial face, i.e. this is not the first cylinder of its engine.
+	 *
+	 * <p>Purely cosmetic, and it changes exactly one thing: the machined top deck
+	 * runs across the seam instead of stopping short of it, so an inline-4 reads
+	 * as one continuous casting with four bores rather than four one-cylinder
+	 * engines standing shoulder to shoulder. Only the negative side is tested,
+	 * because a seam has two sides and only one of them needs to reach across it -
+	 * testing both would put two decks in the same place.
+	 *
+	 * <p>Like {@link #LIT} it is deliberately outside
+	 * {@code areStatesKineticallyEquivalent}, which compares block and rotation
+	 * axis only, so growing an engine can never re-propagate its kinetic network.
+	 */
+	public static final BooleanProperty JOINED = BooleanProperty.create("joined");
+
 	public CrankshaftBlock(Properties properties) {
 		super(properties);
 		registerDefaultState(defaultBlockState().setValue(HORIZONTAL_AXIS, Axis.X)
-			.setValue(LIT, false));
+			.setValue(LIT, false)
+			.setValue(JOINED, false));
 	}
 
 	@Override
 	protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
-		builder.add(LIT);
+		builder.add(LIT, JOINED);
 		// super adds HORIZONTAL_AXIS - the same BlockStateProperties instance the
 		// old hand-rolled declaration used, so the blockstate JSON is unchanged.
 		super.createBlockStateDefinition(builder);
@@ -123,9 +145,38 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<C
 	 */
 	@Override
 	public BlockState getStateForPlacement(BlockPlaceContext context) {
-		return defaultBlockState().setValue(HORIZONTAL_AXIS, context.getHorizontalDirection()
-			.getAxis())
-			.setValue(LIT, true);
+		Axis axis = context.getHorizontalDirection()
+			.getAxis();
+		return defaultBlockState().setValue(HORIZONTAL_AXIS, axis)
+			.setValue(LIT, true)
+			.setValue(JOINED, joinsSectionTowardsNegative(context.getLevel(), context.getClickedPos(), axis));
+	}
+
+	/**
+	 * Keeps {@link #JOINED} true exactly while a crankshaft section on the same
+	 * axis sits against this one's negative face.
+	 *
+	 * <p>{@code updateShape} rather than a block entity tick, because this is
+	 * purely a question about the neighbouring <i>block</i>: vanilla calls it for
+	 * every adjacent change, so extending or cutting an engine re-knits the
+	 * casting in the same tick, with no state of our own to keep in step.
+	 */
+	@Override
+	protected BlockState updateShape(BlockState state, Direction direction, BlockState neighbourState,
+		LevelAccessor level, BlockPos pos, BlockPos neighbourPos) {
+		Axis axis = state.getValue(HORIZONTAL_AXIS);
+		if (direction.getAxis() != axis || direction.getAxisDirection() != AxisDirection.NEGATIVE)
+			return super.updateShape(state, direction, neighbourState, level, pos, neighbourPos);
+		return state.setValue(JOINED, isSectionOn(neighbourState, axis));
+	}
+
+	private static boolean joinsSectionTowardsNegative(LevelReader level, BlockPos pos, Axis axis) {
+		return isSectionOn(level.getBlockState(pos.relative(Direction.get(AxisDirection.NEGATIVE, axis))), axis);
+	}
+
+	/** Whether this block state is a crankshaft section lined up with the given axis. */
+	private static boolean isSectionOn(BlockState state, Axis axis) {
+		return state.getBlock() instanceof CrankshaftBlock && state.getValue(HORIZONTAL_AXIS) == axis;
 	}
 
 	/**
@@ -141,8 +192,10 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<C
 	public void neighborChanged(BlockState state, Level level, BlockPos pos, Block neighborBlock, BlockPos neighborPos,
 		boolean movedByPiston) {
 		super.neighborChanged(state, level, pos, neighborBlock, neighborPos, movedByPiston);
-		if (level.isClientSide)
-			return;
+		// Not server-only. onSurroundingsChanged is safe on both sides and on the
+		// client it does one thing: drop the cached flywheel. An engine that grew a
+		// cylinder moved its flywheel to the far end of a longer run, and a client
+		// still holding the old one would draw and read the wrong generator.
 		if (level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft)
 			crankshaft.onSurroundingsChanged();
 	}

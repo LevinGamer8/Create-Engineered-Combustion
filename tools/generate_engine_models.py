@@ -412,7 +412,24 @@ def ignition_switch_elements(ignition_on, near_flank):
     return e
 
 
-def crankcase_elements(ignition_on=False):
+def crankcase_elements(ignition_on=False, joined=False):
+    """One crankcase section.
+
+    `joined` means another crankshaft section sits against this one's NEGATIVE
+    axial face, i.e. this is not the first cylinder of the engine. The only
+    thing it changes is how far the machined top deck reaches back: normally the
+    deck stops 0.5 short of the block boundary, which between two sections would
+    leave a 1-unit groove running across the top of the engine at every seam.
+    Joined, it runs 0.5 PAST the boundary instead, so it meets the neighbouring
+    section's deck face to face and an inline-4 reads as one continuous casting
+    with four bores in it.
+
+    Nothing else is conditional, and deliberately. The end walls stay: two of
+    them between adjacent throws is a 4-unit main bearing web, which is exactly
+    what an inline engine has there, and their touching faces point away from
+    each other so nothing z-fights.
+    """
+    deck_back = -0.5 if joined else 0.5
     e = []
     # --- crankcase floor and the machined joint face the Oil Sump bolts to.
     # The pan itself is NOT here: an Oil Sump block lives at crankshaft.below()
@@ -433,9 +450,9 @@ def crankcase_elements(ignition_on=False):
     # --- machined top deck, with the slot the connecting rod swings through.
     # It runs 0.5 past the top of the block so the Cylinder lands on a collar
     # that plainly belongs to the crankcase rather than butting a seam.
-    e.append(el((0.5, 13.0, 0.5), (15.5, 16.5, 2.5), "deck"))
-    e.append(el((0.5, 13.0, 13.5), (15.5, 16.5, 15.5), "deck"))
-    e.append(el((0.5, 13.0, 2.0), (5.0, 16.5, 14.0), "deck"))
+    e.append(el((deck_back, 13.0, 0.5), (15.5, 16.5, 2.5), "deck"))
+    e.append(el((deck_back, 13.0, 13.5), (15.5, 16.5, 15.5), "deck"))
+    e.append(el((deck_back, 13.0, 2.0), (5.0, 16.5, 14.0), "deck"))
     e.append(el((11.0, 13.0, 2.0), (15.5, 16.5, 14.0), "deck"))
     # --- running tell-tale, one on each side so it reads from either flank.
     # It sits on the solid lower rail rather than over a window, so it has
@@ -942,6 +959,8 @@ def flywheel_elements():
 def main():
     case = crankcase_elements(ignition_on=False)
     case_lit = crankcase_elements(ignition_on=True)
+    case_joined = crankcase_elements(ignition_on=False, joined=True)
+    case_joined_lit = crankcase_elements(ignition_on=True, joined=True)
     crank = crank_elements()
     rod = rod_elements()
     piston = piston_elements()
@@ -961,6 +980,11 @@ def main():
     # one builder, called twice, rather than two element lists.
     write("block/crankshaft_lit.json",
           model({**CASE_TEX, "ind": "indicator_on"}, case_lit))
+    # ... and the same pair again for a section whose negative neighbour is
+    # another crankcase, so the deck runs across the seam.
+    write("block/crankshaft_joined.json", model(CASE_TEX, case_joined))
+    write("block/crankshaft_joined_lit.json",
+          model({**CASE_TEX, "ind": "indicator_on"}, case_joined_lit))
     write("block/oil_sump.json", model(SUMP_TEX, sump))
     write("block/crank_assembly_x.json", model(CRANK_TEX, crank))
     write("block/crank_assembly_z.json",

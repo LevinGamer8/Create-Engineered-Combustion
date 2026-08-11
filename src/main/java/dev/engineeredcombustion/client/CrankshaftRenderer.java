@@ -28,6 +28,17 @@ import net.minecraft.core.Direction.AxisDirection;
  * flywheel rotates about. Using the engine's own crank angle - the same value
  * the piston and connecting rod use - is what keeps the crank pin underneath the
  * rod's big end at every frame, in both directions of rotation.
+ *
+ * <h2>One shaft, several throws</h2>
+ * On a multi-cylinder engine each section draws the <i>same</i> crank assembly at
+ * its <i>own</i> phase: the engine's one master angle plus
+ * {@code index * 360 / cylinderCount}. So an inline-4 shows four throws 90
+ * degrees apart on one shaft, each with its own piston and rod above it, and the
+ * player can watch the firing order walk along the engine.
+ *
+ * <p>The phase comes from the block entity's synchronised cylinder index, which
+ * is the very number the simulation fires that cylinder at - so the throw the
+ * player sees pushed is the throw the combustion pushed.
  */
 public class CrankshaftRenderer implements BlockEntityRenderer<CrankshaftBlockEntity> {
 
@@ -39,7 +50,7 @@ public class CrankshaftRenderer implements BlockEntityRenderer<CrankshaftBlockEn
 		int overlay) {
 		Axis axis = be.getAxis();
 		float angle = (float) Math.toRadians(be.getEngineState()
-			.getRenderCrankAngleDegrees(partialTicks));
+			.getLocalRenderCrankAngleDegrees(be.getCylinderIndex(), partialTicks));
 		PartialModel crank = axis == Axis.X ? ECPartialModels.CRANK_ASSEMBLY_X : ECPartialModels.CRANK_ASSEMBLY_Z;
 
 		CachedBuffers.partial(crank, be.getBlockState())

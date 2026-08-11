@@ -28,6 +28,49 @@ public final class EngineTuning {
 	private EngineTuning() {
 	}
 
+	// --- engine layout ------------------------------------------------------
+
+	/**
+	 * Most cylinders one inline engine may have.
+	 *
+	 * <p>The single place this limit lives. It bounds the assembly scan - which is
+	 * therefore a fixed handful of block lookups and never a world search - and it
+	 * sizes every per-cylinder array in {@link EngineState}, so nothing allocates
+	 * per tick.
+	 *
+	 * <p>Four is the first milestone's ceiling, not a permanent one. Raising it is a
+	 * change to this number and to the engine's models; nothing else in the
+	 * simulation assumes a count.
+	 */
+	public static final int MAX_CYLINDERS = 4;
+
+	/**
+	 * Crank phase of a cylinder, in degrees, for the simplified one-power-event-per
+	 * -revolution engine this mod currently simulates.
+	 *
+	 * <pre>
+	 * phaseOffset(i) = i * 360 / cylinderCount
+	 * </pre>
+	 *
+	 * so an inline-1 fires at 0, an inline-2 at 0 and 180, an inline-3 at 0, 120
+	 * and 240, and an inline-4 at 0, 90, 180 and 270 - evenly spaced round one
+	 * revolution.
+	 *
+	 * <p>These are <b>prototype two-stroke-like</b> crank phases. A real four-stroke
+	 * engine spreads its firing over 720 degrees and needs an explicit crank
+	 * configuration and a firing order, neither of which exists yet; when they do,
+	 * this is the function they replace.
+	 *
+	 * <p>The same value drives the simulation and the renderers, which is what makes
+	 * the crank throw a player can see through the crankcase window the throw the
+	 * combustion actually happened on.
+	 */
+	public static float cylinderPhaseOffsetDegrees(int index, int cylinderCount) {
+		if (cylinderCount <= 1)
+			return 0.0F;
+		return 360.0F * index / cylinderCount;
+	}
+
 	// --- speeds, in RPM -----------------------------------------------------
 
 	/**
@@ -180,6 +223,30 @@ public final class EngineTuning {
 	 */
 	public static final float PEAK_COMBUSTION_TORQUE = peakCombustionTorqueFor(IDLE_RPM);
 
+	/**
+	 * Peak magnitude of one cylinder's compression torque.
+	 *
+	 * <p>The gas in a cylinder is a spring. Between bottom and top dead centre the
+	 * piston works against it and the crank is held back; past top dead centre the
+	 * same gas pushes the piston down again and hands the energy back. So this
+	 * torque integrates to <b>exactly zero</b> over a revolution - see
+	 * {@link #compressionTorqueAt(float)} - and it therefore changes no equilibrium
+	 * speed and costs the engine no fuel. What it changes is the <i>shape</i> of
+	 * the rotation.
+	 *
+	 * <p>That shape is the whole reason it exists. On an inline-1 it is a single
+	 * lump per revolution, felt as the engine labouring up to compression and
+	 * being flicked over it, and it is what makes cranking one by hand feel like
+	 * cranking an engine. On an inline-4 the four lumps sit 90 degrees apart and
+	 * very nearly cancel, so a four-cylinder engine turns visibly and audibly
+	 * smoother than a single - without one line of code anywhere saying "more
+	 * cylinders are smoother".
+	 *
+	 * <p>Deliberately modest against combustion (about 36 at idle) and friction
+	 * (about 9): enough to feel, never enough to stall a running engine.
+	 */
+	public static final float COMPRESSION_PEAK_TORQUE = 6.0F;
+
 	// --- throttle -----------------------------------------------------------
 
 	/** Throttle is a whole percentage, 0-100, so it can ride Create's integer value UI. */
@@ -210,23 +277,119 @@ public final class EngineTuning {
 	public static final int TANK_SYNC_INTERVAL_TICKS = 10;
 
 	// --- publishing to Create's kinetic network -----------------------------
-
-	/** Generated speed is rounded to this step before Create ever sees it. */
-	public static final float NETWORK_RPM_QUANTUM = 4.0F;
+	//
+	// Two jobs, and they used to be done by one number that could not do both.
+	//
+	// Create re-propagates a whole kinetic network every time a source changes
+	// its generated speed, so the engine must not push its within-revolution
+	// combustion ripple onto the network. The old answer was a plain deadband:
+	// publish only once the engine's speed had moved 8 RPM from the published
+	// value. That silenced the ripple - and made a permanent steady-state error
+	// unavoidable, because any error smaller than the deadband could never be
+	// corrected. A world reload restored one of those parked values from NBT and
+	// the engine then ran for ever at a speed Create had simply been left holding.
+	//
+	// The ripple is now removed where it belongs - by *filtering* the output, see
+	// {@link #OUTPUT_FILTER_ALPHA} - which leaves the publishing rule free to be
+	// what it should always have been: a rate limit, not a dead zone. Every error
+	// above {@link #NETWORK_RPM_FINE_DELTA} is eventually published; how quickly
+	// depends only on how big it is.
 
 	/**
-	 * The engine's speed has to move this far from the currently published value
-	 * before a new value is pushed.
+	 * Generated speed is rounded to this step before Create ever sees it.
 	 *
-	 * <p>Must comfortably exceed the engine's within-revolution ripple (about
-	 * +/-2 RPM at {@link #FLYWHEEL_INERTIA} = 20), otherwise the ripple alone
-	 * would re-propagate the kinetic network once per revolution and every
-	 * downstream machine would visibly stutter.
+	 * <p>Halved from 4 now that the published value is a filtered one. The step is
+	 * what keeps the published number tidy and bounds how many distinct values the
+	 * network can ever be given; it no longer has to double as the engine's noise
+	 * floor, and at 2 RPM the engine's idle, half and full-throttle equilibria all
+	 * land exactly on their targets (64, 128, 192) instead of up to 4 RPM off.
 	 */
-	public static final float NETWORK_RPM_DEADBAND = 8.0F;
+	public static final float NETWORK_RPM_QUANTUM = 2.0F;
+
+	/**
+	 * A difference this large between the engine's filtered output and the value
+	 * Create is holding is published as soon as the minimum interval allows.
+	 *
+	 * <p>This is the throttle-change, load-change and source-handoff path: those
+	 * move the engine by tens of RPM, and the network has to follow promptly.
+	 */
+	public static final float NETWORK_RPM_MAJOR_DELTA = 6.0F;
+
+	/**
+	 * The smallest error worth correcting at all, published once
+	 * {@link #NETWORK_RECONCILE_INTERVAL_TICKS} have passed.
+	 *
+	 * <p><b>This is what guarantees convergence.</b> Anything at or above it is
+	 * published within a second; below it the published value is already within
+	 * one quantum of the truth and moving it would be churn for no visible
+	 * difference.
+	 *
+	 * <p>Deliberately larger than half a quantum. That difference - here 0.5 RPM
+	 * either side of every step boundary - is the hysteresis that stops an engine
+	 * sitting exactly on a boundary from flipping between two adjacent steps once
+	 * a second. It only has to exceed the ripple that survives the output filter,
+	 * which is about +/-0.2 RPM.
+	 */
+	public static final float NETWORK_RPM_FINE_DELTA = 1.5F;
 
 	/** Minimum ticks between two non-zero generated-speed updates. */
 	public static final int NETWORK_MIN_UPDATE_INTERVAL_TICKS = 4;
+
+	/**
+	 * How long a small error is allowed to stand before it is published anyway.
+	 *
+	 * <p>One second. Fast enough that no player will ever catch the engine
+	 * disagreeing with its own readout, slow enough that a slowly drifting engine
+	 * re-propagates its network at most once a second.
+	 */
+	public static final int NETWORK_RECONCILE_INTERVAL_TICKS = 20;
+
+	// --- generated-output filter --------------------------------------------
+
+	/**
+	 * Smoothing factor of the low-pass filter between the engine's instantaneous
+	 * angular velocity and the speed Create is told it generates, per tick.
+	 *
+	 * <p>A single-cylinder engine fires once per revolution, so its speed genuinely
+	 * oscillates - about +/-2 RPM at {@link #FLYWHEEL_INERTIA} = 20. That ripple is
+	 * real physics and the piston, the crank and the sound must keep it; what must
+	 * not have it is the kinetic network, because every change there costs a full
+	 * re-propagation.
+	 *
+	 * <p>1/32 gives a time constant of 32 ticks - 1.6 s - which attenuates the idle
+	 * ripple (a period of 18.75 ticks) by about 90 % and everything faster by more.
+	 * What survives is roughly +/-0.2 RPM, comfortably inside the hysteresis band
+	 * described at {@link #NETWORK_RPM_FINE_DELTA}.
+	 *
+	 * <p>This is the mod's only output filter. The instantaneous speed is
+	 * untouched: {@code EngineState#getSimulatedRpm} is still the engine's honest
+	 * angular velocity and still what the crank angle and combustion timing run on.
+	 */
+	public static final float OUTPUT_FILTER_ALPHA = 1.0F / 32.0F;
+
+	/**
+	 * A step larger than this is adopted by the filter at once instead of being
+	 * faded in.
+	 *
+	 * <p>Filtering is for ripple, not for events. Catching, stalling, a throttle
+	 * swung open, a load dropped, a source handoff and the post-load reconciliation
+	 * are all real discontinuities, and lagging 1.6 s behind them would be a bug of
+	 * its own. Comfortably above the ripple this filter exists to remove.
+	 */
+	public static final float OUTPUT_FILTER_SNAP_RPM = 12.0F;
+
+	/**
+	 * How long the post-load reconciliation waits for the rest of the engine's
+	 * blocks to load before going ahead with whatever it can see.
+	 *
+	 * <p>An engine may straddle a chunk boundary, and its Cylinder or Flywheel can
+	 * legitimately be a tick or two behind the Crankshaft on a world load. Declaring
+	 * such an engine broken - and tearing down its kinetic network - because a
+	 * neighbour was late is exactly the failure this budget avoids. It is a budget
+	 * rather than an open-ended wait so that an engine whose neighbour never loads
+	 * still reconciles, just conservatively.
+	 */
+	public static final int POST_LOAD_RECONCILE_WAIT_TICKS = 100;
 
 	// --- fuel ---------------------------------------------------------------
 
@@ -302,6 +465,31 @@ public final class EngineTuning {
 	 */
 	public static final int MIN_START_CYCLES = 2;
 	public static final int MAX_START_CYCLES = 5;
+
+	/**
+	 * How much more cranking a start attempt asks for per cylinder beyond the
+	 * first, as a fraction of the rolled count.
+	 *
+	 * <p>Start progress counts <i>engine-wide firing events</i>, and an inline-4
+	 * produces four of those per revolution against a single's one. Left alone,
+	 * that would make a four-cylinder engine catch in a quarter of the revolutions
+	 * - near enough instantly, which is the one thing starting must not become.
+	 *
+	 * <p>At 0.5, an inline-4 needs 2.5 times the events but gets them four times as
+	 * often, so it catches in about 60 % of the revolutions an inline-1 does.
+	 * Noticeably easier and smoother, which is true of real multi-cylinder engines,
+	 * and still several seconds of cranking.
+	 */
+	public static final float START_CYCLES_PER_EXTRA_CYLINDER = 0.5F;
+
+	/**
+	 * Firing events a start attempt needs, for a rolled base count and a cylinder
+	 * count. Always at least one.
+	 */
+	public static int requiredStartCycles(int rolledCycles, int cylinderCount) {
+		float scale = 1.0F + START_CYCLES_PER_EXTRA_CYLINDER * Math.max(0, cylinderCount - 1);
+		return Math.max(1, Math.round(rolledCycles * scale));
+	}
 
 	/**
 	 * Fraction of normal combustion torque delivered by a pre-start firing kick.
@@ -615,9 +803,76 @@ public final class EngineTuning {
 		return frictionTorqueAt(targetRpm) / (POWER_STROKE_DUTY * 0.5F);
 	}
 
+	/**
+	 * Peak combustion torque of <i>one cylinder</i> of an engine that has this
+	 * many, so that a fully-firing engine still settles on its throttle target
+	 * whatever its cylinder count.
+	 *
+	 * <pre>
+	 * perCylinder = peakCombustionTorqueFor(target) / cylinderCount
+	 * </pre>
+	 *
+	 * <p><b>Why the division is right, and not a way of taking the power back.</b>
+	 * The throttle is a governor setpoint: 0 % means "hold 64 RPM", and it has to
+	 * mean that for an inline-4 as much as for a single, or the whole readout
+	 * stops making sense. A real governor achieves that by metering <i>less charge
+	 * per cylinder</i> the more cylinders it is feeding - which is exactly this.
+	 *
+	 * <p>What more cylinders buy is not a higher free-running speed. It is:
+	 * <ul>
+	 * <li><b>Stress Capacity</b>, which scales with the number of cylinders that
+	 * are genuinely firing - see {@code EngineState#getFiringCylinderCount()} -
+	 * so an inline-4 supplies four times the power budget an inline-1 does, and
+	 * therefore sags far less under the same real load, because the load factor it
+	 * feels is that load over a four times larger capacity;</li>
+	 * <li><b>smoothness</b>, from four smaller impulses 90 degrees apart instead of
+	 * one big one;</li>
+	 * <li>and it costs four times the gasoline, because four cylinders fire four
+	 * times per revolution.</li>
+	 * </ul>
+	 *
+	 * <p>It also makes a misfire mean something. A cylinder with no Spark Plug
+	 * contributes nothing, so an inline-4 running on three cylinders makes three
+	 * quarters of the torque the governor solved for and settles visibly below its
+	 * target - which is precisely what a real engine dropping a cylinder does.
+	 */
+	public static float peakCombustionTorqueFor(float targetRpm, int cylinderCount) {
+		return peakCombustionTorqueFor(targetRpm) / Math.max(1, cylinderCount);
+	}
+
 	/** Combustion torque actually delivered during a power stroke. */
 	public static float combustionTorqueAt(float rpm, float targetRpm) {
 		return peakCombustionTorqueFor(targetRpm) * governorFactor(rpm, targetRpm);
+	}
+
+	/** Combustion torque one cylinder of a {@code cylinderCount}-cylinder engine delivers. */
+	public static float combustionTorqueAt(float rpm, float targetRpm, int cylinderCount) {
+		return peakCombustionTorqueFor(targetRpm, cylinderCount) * governorFactor(rpm, targetRpm);
+	}
+
+	/**
+	 * Torque one cylinder's trapped charge exerts on the crank at a given
+	 * <i>local</i> crank angle.
+	 *
+	 * <pre>
+	 * torque = -COMPRESSION_PEAK_TORQUE * sin(theta) * (1 - cos(theta)) / 2
+	 * </pre>
+	 *
+	 * <p>Negative - resisting - from bottom dead centre (0 degrees) up to top dead
+	 * centre (180), positive - assisting - on the way back down, and zero at both
+	 * dead centres, where the crank has no leverage on the piston at all. The
+	 * {@code (1 - cos)/2} factor is the piston's own position, so the resistance
+	 * builds as the charge is actually squeezed instead of peaking halfway up an
+	 * empty bore.
+	 *
+	 * <p><b>It integrates to exactly zero over one revolution</b>, which is what
+	 * makes it a spring rather than a second friction: it can shape the rotation
+	 * without moving the speed the engine settles at, so every equilibrium the
+	 * throttle promises still holds.
+	 */
+	public static float compressionTorqueAt(float localCrankAngleDegrees) {
+		double theta = Math.toRadians(localCrankAngleDegrees);
+		return (float) (-COMPRESSION_PEAK_TORQUE * Math.sin(theta) * (1.0D - Math.cos(theta)) / 2.0D);
 	}
 
 	public static float clamp01(float value) {
