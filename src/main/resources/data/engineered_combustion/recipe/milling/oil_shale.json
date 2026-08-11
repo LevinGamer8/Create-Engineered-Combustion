@@ -1,0 +1,14 @@
+{
+  "type": "create:milling",
+  "ingredients": [
+    {
+      "item": "engineered_combustion:oil_shale"
+    }
+  ],
+  "processing_time": 350,
+  "results": [
+    {
+      "id": "engineered_combustion:crushed_oil_shale"
+    }
+  ]
+}

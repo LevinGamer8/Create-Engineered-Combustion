@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    "engineered_combustion:crude_oil",
+    "engineered_combustion:flowing_crude_oil"
+  ]
+}

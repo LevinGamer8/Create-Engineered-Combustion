@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "engineered_combustion:item/crude_oil_bucket"
+  }
+}

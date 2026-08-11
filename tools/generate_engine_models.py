@@ -973,6 +973,9 @@ def main():
     write("block/spark_plug.json", model(SPARK_PLUG_TEX, plug))
     write("block/combustion_flash.json",
           model(FLASH_TEX, combustion_flash_elements()))
+    write("block/oil_shale.json",
+          {"parent": "minecraft:block/cube_all",
+           "textures": {"all": NS + "block/oil_shale"}})
     write("block/carburetor.json", model(CARB_TEX, carb))
     write("block/throttle_lever.json", model(THROTTLE_TEX, lever))
     write("block/air_filter.json", model(FILTER_TEX, air_filter))
@@ -1034,11 +1037,15 @@ def main():
                 [shift(x, 0, 2.0, 0) for x in piston] + item_rod,
                 display=gui_scale(0.85)))
 
+    write("item/oil_shale.json", {"parent": NS + "block/oil_shale"})
+
     # --- flat icons ---------------------------------------------------------
     # Everything that is a part or a material rather than a machine. See
     # sprite_item; the two buckets are here too, so that nothing under
     # models/ is hand-maintained any more.
-    for name in ("spark_plug", "gasoline_bucket", "engine_oil_bucket"):
+    for name in ("spark_plug", "crushed_oil_shale", "petroleum_residue",
+                 "incomplete_piston_assembly", "incomplete_carburetor",
+                 "gasoline_bucket", "engine_oil_bucket", "crude_oil_bucket"):
         write(f"item/{name}.json", sprite_item(name))
 
 

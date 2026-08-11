@@ -1,0 +1,23 @@
+{
+  "type": "create:mixing",
+  "ingredients": [
+    {
+      "item": "engineered_combustion:crushed_oil_shale"
+    },
+    {
+      "item": "engineered_combustion:crushed_oil_shale"
+    },
+    {
+      "type": "neoforge:single",
+      "amount": 500,
+      "fluid": "minecraft:water"
+    }
+  ],
+  "heat_requirement": "heated",
+  "results": [
+    {
+      "amount": 500,
+      "id": "engineered_combustion:crude_oil"
+    }
+  ]
+}

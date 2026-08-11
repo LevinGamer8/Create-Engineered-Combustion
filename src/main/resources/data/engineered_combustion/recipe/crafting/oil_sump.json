@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "I": {
+      "tag": "c:plates/iron"
+    }
+  },
+  "pattern": [
+    "I I",
+    "III"
+  ],
+  "result": {
+    "count": 1,
+    "id": "engineered_combustion:oil_sump"
+  }
+}

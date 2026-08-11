@@ -1,0 +1,23 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "I": {
+      "tag": "c:plates/iron"
+    },
+    "W": {
+      "tag": "minecraft:wool"
+    },
+    "N": {
+      "tag": "c:nuggets/iron"
+    }
+  },
+  "pattern": [
+    "IWI",
+    " N "
+  ],
+  "result": {
+    "count": 1,
+    "id": "engineered_combustion:air_filter"
+  }
+}

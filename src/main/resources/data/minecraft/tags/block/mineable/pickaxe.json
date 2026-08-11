@@ -1,6 +1,6 @@
 {
   "replace": false,
   "values": [
-    "#c:gasoline"
+    "engineered_combustion:oil_shale"
   ]
 }

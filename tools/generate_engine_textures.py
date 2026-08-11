@@ -227,6 +227,14 @@ FILTER = (58, 58, 62, 255)        # air cleaner canister, painted dark
 MESH = (96, 88, 74, 255)          # filter element behind the grille
 MODULE = (52, 47, 49, 255)        # control module housing, moulded phenolic
 REDSTONE = (168, 42, 36, 255)     # the redstone inlay that names the part
+SHALE_STONE = (128, 128, 128, 255)   # the host rock, vanilla stone's own grey
+SHALE_DARK = (38, 34, 30, 255)       # the bituminous laminae in it
+SHALE_MID = (66, 60, 52, 255)
+# Petroleum residue. Deliberately a shade lighter than the crude it comes from:
+# at (28,22,18) the lump was a black hole in the slot with no readable outline,
+# and it also has to stay apart from a piece of coal, which is why it keeps the
+# brown rather than going neutral.
+TAR = (52, 40, 30, 255)
 
 
 def t_cast_iron(seed=11, base=CAST, grain=9):
@@ -625,6 +633,47 @@ def t_combustion_flash():
 
 
 # --------------------------------------------------------------------------
+# oil shale - the one block of this mod that stands in vanilla stone
+# --------------------------------------------------------------------------
+# Drawn at 16, not at the 32 the engine castings use. Every neighbour this
+# block ever has is a vanilla stone texture, and an ore at twice the texel
+# density of the rock around it reads as a sticker on the wall. There is no
+# world-aligned-UV argument here either: it is a plain cube_all.
+#
+# It is also deliberately not drawn as an ore. Ore textures are blobs of a
+# mineral scattered on stone; oil shale is a sedimentary rock whose petroleum is
+# in the layering itself, so what is drawn is dark horizontal laminae - which
+# also makes it unmistakable next to coal ore, the thing it would otherwise be
+# confused with at a glance in a cave.
+def t_oil_shale():
+    px = blank(size=ITEM)
+    rng = Rng(613)
+    fill(px, SHALE_STONE)
+    mottle(px, rng, ((4, 12), (8, 6)))
+
+    # The bands. Each one wanders by a texel as it crosses the sprite, because a
+    # perfectly straight line across 16 pixels reads as a drawn stripe rather
+    # than as rock; and each wraps, so stacked blocks still line up.
+    # Five bands over sixteen rows, no two of them touching once the wobble is
+    # applied. Denser than this and the block stops reading as rock with
+    # something in it and starts reading as a black block.
+    for y0, thickness, tone in ((2, 1, SHALE_DARK), (5, 1, SHALE_MID),
+                                (7, 2, SHALE_DARK), (11, 1, SHALE_MID),
+                                (13, 1, SHALE_DARK)):
+        for x in range(ITEM):
+            wobble = 1 if math.sin(2 * math.pi * (x / ITEM) + y0) > 0.45 else 0
+            for dy in range(thickness):
+                y = (y0 + wobble + dy) % ITEM
+                px[y][x] = shade(tone, int(rng.rangef(-8, 8)))
+
+    # A few oil-wet specks: the giveaway that the rock is worth mining.
+    specks(px, rng, 10, -26)
+    specks(px, rng, 4, 22)
+    noise(px, rng, 4)
+    return px
+
+
+# --------------------------------------------------------------------------
 # item icons
 # --------------------------------------------------------------------------
 # Flat 16x16 sprites, for the parts and materials that are too small to read as
@@ -687,6 +736,77 @@ def t_item_spark_plug():
     return px
 
 
+def t_item_crushed_oil_shale():
+    """A heap of crushed rock, wet with the petroleum that is the point of it."""
+    px = blank(size=ITEM)
+    rng = Rng(881)
+    # A heap silhouette: narrow at the top, spreading to the base.
+    heap = [(4, 7, 9), (5, 6, 10), (6, 5, 11), (7, 4, 11), (8, 3, 12),
+            (9, 3, 12), (10, 2, 13), (11, 2, 13), (12, 3, 12), (13, 4, 11)]
+    for (y, x0, x1) in heap:
+        _shaded_row(px, y, x0, x1, SHALE_MID, 22, -26)
+    # Individual chips, so it reads as crushed rather than as a smooth pile.
+    for _ in range(26):
+        y = rng.rint(4, 13)
+        row = [h for h in heap if h[0] == y][0]
+        x = rng.rint(row[1], row[2])
+        px[y][x] = shade(SHALE_DARK if rng.rangef(0, 1) < 0.6 else SHALE_STONE,
+                         int(rng.rangef(-10, 10)))
+    # Two oily glints. Without them this is a pile of gravel.
+    px[6][7] = shade(SHALE_STONE, 34)
+    px[10][5] = shade(SHALE_STONE, 26)
+    return px
+
+
+def t_item_petroleum_residue():
+    """The heavy bottom fraction: a lump of cold tar, glossy and near-black."""
+    px = blank(size=ITEM)
+    lump = [(3, 6, 9), (4, 4, 11), (5, 3, 12), (6, 2, 13), (7, 2, 13),
+            (8, 2, 13), (9, 2, 13), (10, 3, 12), (11, 3, 12), (12, 5, 10)]
+    for (y, x0, x1) in lump:
+        _shaded_row(px, y, x0, x1, TAR, 30, -18)
+    # The gloss is the whole difference between tar and a lump of coal: one
+    # small hard highlight high on the left, and a broad dull sheen below it.
+    px[4][6] = px[4][7] = (128, 106, 80, 255)
+    px[5][5] = px[5][6] = (98, 80, 60, 255)
+    px[8][4] = px[9][4] = shade(TAR, 30)
+    for x in range(8, 12):
+        px[10][x] = shade(TAR, -12)
+    return px
+
+
+def _incomplete(base, marks):
+    """A part-built item: the material, roughly formed, with work marks on it.
+
+    Create's own transitional items are recognisably the thing they will become
+    but visibly unfinished, and these follow that: a blank of the right metal
+    with the tool marks of the step that just happened, never a finished part in
+    a different colour.
+    """
+    px = blank(size=ITEM)
+    rng = Rng(1471)
+    for (y, x0, x1) in [(y, 3, 12) for y in range(4, 12)]:
+        _shaded_row(px, y, x0, x1, base, 24, -28)
+        # Jittered here rather than with `noise`, which walks the whole sprite
+        # and - because `shade` always returns alpha 255 - would turn the
+        # transparent margin around the icon into opaque black.
+        for x in range(x0, x1 + 1):
+            px[y][x] = shade(px[y][x], int(rng.rangef(-6, 6)))
+    for (y, x0, x1) in marks:
+        _row(px, y, x0, x1, shade(base, -44))
+    # The unfinished corner: a bite out of the blank, so the outline itself says
+    # the part is not done.
+    for y, x in ((4, 12), (4, 11), (5, 12), (11, 3), (11, 4), (10, 3)):
+        px[y][x] = (0, 0, 0, 0)
+    return px
+
+
+def t_item_incomplete_piston_assembly():
+    return _incomplete(ALU, [(6, 5, 10), (8, 5, 10), (9, 7, 8), (10, 7, 8)])
+
+
+def t_item_incomplete_carburetor():
+    return _incomplete(BRASS, [(5, 6, 9), (7, 4, 11), (9, 6, 9)])
 
 
 # --------------------------------------------------------------------------
@@ -704,6 +824,7 @@ FLUID_FRAMES = 16
 
 GASOLINE_FLUID = ((150, 116, 44), (214, 178, 84), (247, 219, 139))
 ENGINE_OIL_FLUID = ((40, 29, 12), (84, 62, 28), (129, 102, 50))
+CRUDE_OIL_FLUID = ((12, 10, 8), (36, 28, 21), (74, 58, 42))
 
 # (waves along x, waves along y, periods per loop, amplitude, phase)
 STILL_WAVES = ((1, 0, 1, 0.50, 0.00), (0, 1, -1, 0.42, 0.31),
@@ -865,7 +986,12 @@ TEXTURES = {
     "block/air_filter_mesh": t_air_filter_mesh,
     "block/control_module": t_control_module,
     "block/combustion_flash": t_combustion_flash,
+    "block/oil_shale": t_oil_shale,
     "item/spark_plug": t_item_spark_plug,
+    "item/crushed_oil_shale": t_item_crushed_oil_shale,
+    "item/petroleum_residue": t_item_petroleum_residue,
+    "item/incomplete_piston_assembly": t_item_incomplete_piston_assembly,
+    "item/incomplete_carburetor": t_item_incomplete_carburetor,
 }
 
 # Sprite name -> (pixels, animation frametime or None). Still fluids idle;
@@ -875,11 +1001,14 @@ FLUIDS = {
     "block/gasoline_flow": (GASOLINE_FLUID, FLOW_WAVES, 2, 1.0),
     "block/engine_oil_still": (ENGINE_OIL_FLUID, STILL_WAVES, 4, 0.7),
     "block/engine_oil_flow": (ENGINE_OIL_FLUID, FLOW_WAVES, 3, 0.85),
+    "block/crude_oil_still": (CRUDE_OIL_FLUID, STILL_WAVES, 6, 1.0),
+    "block/crude_oil_flow": (CRUDE_OIL_FLUID, FLOW_WAVES, 4, 1.15),
 }
 
 BUCKETS = {
     "item/gasoline_bucket": GASOLINE_FLUID,
     "item/engine_oil_bucket": ENGINE_OIL_FLUID,
+    "item/crude_oil_bucket": CRUDE_OIL_FLUID,
 }
 
 

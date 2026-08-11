@@ -1,0 +1,62 @@
+{
+  "type": "create:sequenced_assembly",
+  "ingredient": {
+    "tag": "c:plates/brass"
+  },
+  "transitional_item": {
+    "id": "engineered_combustion:incomplete_carburetor"
+  },
+  "loops": 1,
+  "sequence": [
+    {
+      "type": "create:deploying",
+      "ingredients": [
+        {
+          "item": "engineered_combustion:incomplete_carburetor"
+        },
+        {
+          "tag": "c:plates/copper"
+        }
+      ],
+      "results": [
+        {
+          "id": "engineered_combustion:incomplete_carburetor"
+        }
+      ]
+    },
+    {
+      "type": "create:pressing",
+      "ingredients": [
+        {
+          "item": "engineered_combustion:incomplete_carburetor"
+        }
+      ],
+      "results": [
+        {
+          "id": "engineered_combustion:incomplete_carburetor"
+        }
+      ]
+    },
+    {
+      "type": "create:deploying",
+      "ingredients": [
+        {
+          "item": "engineered_combustion:incomplete_carburetor"
+        },
+        {
+          "item": "create:fluid_pipe"
+        }
+      ],
+      "results": [
+        {
+          "id": "engineered_combustion:incomplete_carburetor"
+        }
+      ]
+    }
+  ],
+  "results": [
+    {
+      "id": "engineered_combustion:carburetor"
+    }
+  ]
+}

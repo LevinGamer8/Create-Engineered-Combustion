@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:block/cube_all",
+  "textures": {
+    "all": "engineered_combustion:block/oil_shale"
+  }
+}
