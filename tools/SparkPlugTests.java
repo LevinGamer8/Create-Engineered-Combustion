@@ -10,14 +10,15 @@ import dev.engineeredcombustion.content.engine.*;
  *
  * <pre>
  *   javac -d /tmp/ec-sim $(ls src/main/java/dev/engineeredcombustion/content/engine/*.java \
- *                           | grep -v EngineComponents)
+ *                           | grep -v EngineComponents | grep -v CombustionAudio)
  *   javac -cp /tmp/ec-sim -d /tmp/ec-sim tools/SparkPlugTests.java
  *   java  -cp /tmp/ec-sim SparkPlugTests
  * </pre>
  *
- * <p>{@code EngineComponents} is excluded because it is the one class in that
- * package that does touch Minecraft - it resolves block entities out of a level.
- * Everything the ignition logic actually decides is in the classes that remain.
+ * <p>{@code EngineComponents} and {@code CombustionAudio} are excluded because
+ * they are the two classes in that package that do touch Minecraft - one resolves
+ * block entities out of a level, the other plays sounds into one. Everything the
+ * ignition logic actually decides is in the classes that remain.
  *
  * <p>Exits non-zero on any failure.
  */
@@ -47,8 +48,14 @@ public class SparkPlugTests {
 
 	/**
 	 * Cranks the engine by hand for `ticks` ticks and reports what happened.
-	 * `crankRpm` is what Create says the crankshaft is doing - a hand crank, a
-	 * water wheel, anything external.
+	 * `crankRpm` is what an external source is turning the crankshaft at - a hand
+	 * crank, a water wheel, anything.
+	 *
+	 * <p>The network runs at whichever of the two is faster, exactly as Create's
+	 * source handoff does, and the engine counts as externally driven only while
+	 * the crank is genuinely out-turning what the engine generates. With both at
+	 * zero the shaft is not driven at all and the engine freewheels on its own
+	 * momentum, which is what a released hand crank leaves behind.
 	 */
 	static Run crank(EngineState engine, boolean sparkPlug, boolean ignition, FuelSupply fuel,
 		float crankRpm, int ticks) {
@@ -57,13 +64,12 @@ public class SparkPlugTests {
 		java.util.Random random = new java.util.Random(1234);
 		double degrees = 0.0;
 		for (int i = 0; i < ticks; i++) {
-			// Externally driven while the crank is being turned; once the engine
-			// makes its own power the simulation owns the speed.
-			float mechanical = engine.getPhase() == EnginePhase.RUNNING
-				? engine.getPublishedRpm() : crankRpm;
-			degrees += EngineTuning.degreesPerTick(mechanical);
-			engine.advanceCrankAngle(mechanical);
-			engine.tickSimulation(new EngineInputs(true, ignition, sparkPlug, crankRpm != 0.0F,
+			float generated = engine.getPublishedRpm();
+			boolean crankWins = Math.abs(crankRpm) > Math.abs(generated);
+			float shaftRpm = crankWins ? crankRpm : generated;
+			engine.tickRotation(shaftRpm, shaftRpm != 0.0F, crankWins);
+			degrees += EngineTuning.degreesPerTick(engine.getMechanicalRpm());
+			engine.tickSimulation(new EngineInputs(true, ignition, sparkPlug,
 				1.0F, 0.0F, EngineTuning.MAX_RPM), fuel, OIL, random);
 		}
 		return new Run(engine.getSparkEventId() - sparks0,

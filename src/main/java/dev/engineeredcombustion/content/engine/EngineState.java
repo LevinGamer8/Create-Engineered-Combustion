@@ -7,23 +7,36 @@ package dev.engineeredcombustion.content.engine;
  * kinetic network is fed from this state by a separate adapter
  * ({@code EngineFlywheelBlockEntity}), never the other way around.
  *
- * <h2>Two speeds, on purpose</h2>
+ * <h2>One momentum, two readings of it</h2>
  * <dl>
- * <dt>{@link #getMechanicalRpm() mechanical RPM}</dt>
- * <dd>What Create says the crankshaft is <i>actually</i> doing right now. This
- * is the only input to the crank angle, which is why the crankshaft, the piston,
- * the flywheel disc and every attached Create shaft - on either end - can never
- * visually disagree; they all ultimately come from this one number, on both
- * client and server.</dd>
  * <dt>{@link #getSimulatedRpm() simulated RPM}</dt>
- * <dd>The engine's own angular velocity, integrated from combustion torque,
- * friction and flywheel inertia. It ripples within each revolution, as a
- * single-cylinder engine should. It is quantised behind a deadband into
- * {@link #getPublishedRpm()} before Create ever sees it.</dd>
+ * <dd><b>The engine's angular velocity, always.</b> There is one crankshaft and
+ * it has one speed, so this is never allowed to mean something different from
+ * what the shaft is physically doing. When Create holds the shaft at a speed -
+ * because another source on the network is turning it - this <i>absorbs</i> that
+ * speed rather than keeping a stale opinion beside it. When nothing is holding
+ * the shaft, this free-runs on friction and inertia. That single rule is what
+ * makes an engine spun to 200 RPM by a fast network coast down from 200 when the
+ * network is taken away, instead of snapping back to whatever it was doing
+ * before it was connected.</dd>
+ * <dt>{@link #getMechanicalRpm() mechanical RPM}</dt>
+ * <dd>The speed the crank angle actually advances by this tick: Create's speed
+ * while Create is driving the shaft, the engine's own momentum while it is not.
+ * The only input to the crank angle, which is why the crankshaft, the piston,
+ * the flywheel disc and every attached Create shaft - on either end - can never
+ * visually disagree.</dd>
+ * <dt>{@link #getPublishedRpm() published RPM}</dt>
+ * <dd>What Create is told this engine <i>generates</i>. Non-zero only while
+ * {@link #isActivelyGenerating()}, quantised behind a deadband, and capped at
+ * what the engine's own combustion could sustain.</dd>
  * </dl>
- * While something else is turning the engine, simulated RPM simply follows
- * mechanical RPM. Once combustion starts, the simulation takes over and its
- * published output is what makes Create hand the kinetic source to us.
+ *
+ * <h2>Generation is one predicate</h2>
+ * {@link #isActivelyGenerating()} is the single authority on whether this engine
+ * is producing power. Generated speed, stress capacity, passive drag, the HUD and
+ * the audio all read it; none of them re-derives its own version. Turning is not
+ * generating: an engine that is out of fuel, unlit, mid-start or merely being
+ * spun by a neighbour is turning, and contributes nothing.
  *
  * <h2>Throttle</h2>
  * The throttle never writes a speed. It scales the torque a combustion event is
@@ -46,6 +59,27 @@ public final class EngineState {
 	// --- simulation ---------------------------------------------------------
 	private float simulatedRpm;
 	private float publishedRpm;
+
+	/**
+	 * Whether the crankshaft is turning on nothing but its own momentum, because
+	 * Create is not holding it at any speed.
+	 *
+	 * <p>Computed identically on both sides by {@link #tickRotation}, and it is
+	 * what lets a disconnected engine keep visibly spinning down: while it is true
+	 * the crank angle advances from {@link #simulatedRpm} rather than from Create.
+	 */
+	private boolean freeRotation;
+
+	/**
+	 * The latched answer to {@link #isActivelyGenerating()}.
+	 *
+	 * <p>Evaluated once per server tick, from {@link #evaluateActiveGeneration()},
+	 * and synchronised - so the client's overlays, audio and rotation rule get the
+	 * server's answer rather than an approximation of it. This is deliberately a
+	 * stored bit rather than a live predicate: the conditions live in exactly one
+	 * method, and every consumer on either side reads exactly one field.
+	 */
+	private boolean activelyGenerating;
 
 	// --- conditions ---------------------------------------------------------
 	private boolean structureValid;
@@ -132,11 +166,64 @@ public final class EngineState {
 	// ------------------------------------------------------------------------
 
 	/**
-	 * Advances the crank angle by exactly one tick of the real mechanical speed.
+	 * One tick of rotation: reconciles the engine's momentum with whatever Create
+	 * is doing to the shaft, then advances the crank angle.
 	 *
-	 * <p>Client and server both call this with the same value (Create synchronises
-	 * the flywheel's kinetic speed for us), which is what keeps the animation in
-	 * step without this mod sending its own per-tick packets.
+	 * <p><b>Run on both sides, from the same inputs.</b> Every value it reads -
+	 * Create's kinetic speed, whether this block has a kinetic source, the latched
+	 * generation flag - is synchronised, so client and server derive the same crank
+	 * angle and the same momentum without this mod sending a packet per tick.
+	 *
+	 * @param shaftSpeed       what Create says this crankshaft is doing
+	 * @param shaftDriven      whether Create is <i>holding</i> the shaft at that
+	 *                         speed. True even at zero when the network is
+	 *                         overstressed - a jammed network stops the engine, it
+	 *                         does not release it to freewheel
+	 * @param externallyDriven whether the rotation on this shaft originates
+	 *                         somewhere other than this engine
+	 */
+	public void tickRotation(float shaftSpeed, boolean shaftDriven, boolean externallyDriven) {
+		this.externallyDriven = externallyDriven;
+		this.freeRotation = !shaftDriven;
+		if (shaftDriven)
+			absorbImposedSpeed(shaftSpeed);
+		advanceCrankAngle(freeRotation ? simulatedRpm : shaftSpeed);
+	}
+
+	/**
+	 * Takes on the speed Create is imposing on the shaft, because there is only one
+	 * crankshaft and it can only be doing one thing.
+	 *
+	 * <p>This is the whole of the fix for the RPM snap. The engine used to keep its
+	 * own idea of its speed while an external network span it, so disconnecting a
+	 * fast source revealed a stale number underneath and the engine appeared to
+	 * teleport from 200 RPM back to 64. Now there is no second number to reveal.
+	 *
+	 * <p>Two cases must <i>not</i> absorb, and both are about the speed already
+	 * being this engine's own work:
+	 * <ul>
+	 * <li>the engine is the network's source - then Create's speed came <i>from</i>
+	 * the engine, and absorbing it back would pin the engine to its own published
+	 * value and quietly cancel the load sag that makes it respond to work;</li>
+	 * <li>the engine's combustion has already carried it past the speed it is being
+	 * turned at - a firing kick during a start, or a spin-up. Absorbing then would
+	 * let a hand crank hold a running engine down at cranking speed forever.</li>
+	 * </ul>
+	 *
+	 * <p>Sign is carried through untouched, so an engine driven backwards holds
+	 * backwards momentum and coasts down in the direction it was actually turning.
+	 */
+	private void absorbImposedSpeed(float shaftSpeed) {
+		if (!externallyDriven && shaftSpeed != 0.0F)
+			return;
+		if (shaftSpeed != 0.0F && (activelyGenerating || phase.isFiring())
+			&& Math.abs(simulatedRpm) >= Math.abs(shaftSpeed))
+			return;
+		simulatedRpm = shaftSpeed;
+	}
+
+	/**
+	 * Advances the crank angle by exactly one tick of the given speed.
 	 *
 	 * <p>Negative speed turns the crank backwards.
 	 */
@@ -160,11 +247,28 @@ public final class EngineState {
 	 * tick or two apart.
 	 */
 	public void updateClientVisuals() {
-		powerStrokeActive = (phase == EnginePhase.RUNNING || phase == EnginePhase.STARTING)
-			&& isWithinPowerStroke();
+		powerStrokeActive = phase.isFiring() && isWithinPowerStroke();
 
 		if (combustionFlashTicks > 0)
 			combustionFlashTicks--;
+	}
+
+	/**
+	 * Spins the flywheel down on the client while nothing is driving it.
+	 *
+	 * <p>The client has to do this itself, because a coasting engine generates
+	 * nothing: Create's speed for it is zero, so there is no synchronised number
+	 * left to animate from. What makes that safe is that the coast is
+	 * <i>deterministic</i> - it runs the very same integration the server runs,
+	 * with no combustion and no network load (a freewheeling engine is by
+	 * definition on no network), from a starting speed the server synchronised at
+	 * the moment it stopped generating. Both sides therefore trace the same curve,
+	 * and the periodic resync only ever confirms it.
+	 */
+	public void tickClientCoast() {
+		if (!freeRotation || simulatedRpm == 0.0F)
+			return;
+		integrate(0.0F, 0.0F);
 	}
 
 	/**
@@ -193,13 +297,11 @@ public final class EngineState {
 		this.structureValid = inputs.structureValid();
 		this.ignitionEnabled = inputs.ignitionEnabled();
 		this.sparkPlugInstalled = inputs.sparkPlugInstalled();
-		this.externallyDriven = inputs.externallyDriven();
 		this.throttle = inputs.throttle();
 		this.loadFactor = inputs.loadFactor();
 		this.speedLimitRpm = inputs.speedLimitRpm();
 		this.targetRpm = inputs.targetRpm();
 		this.fuelAvailable = fuel.hasFuel();
-		boolean externallyDriven = this.externallyDriven;
 		// Read every tick: the sump can be filled or drained by a pipe at any time,
 		// and lubrication has to take effect immediately rather than at some
 		// revalidation interval.
@@ -210,10 +312,9 @@ public final class EngineState {
 		if (ticksSincePublish < Integer.MAX_VALUE)
 			ticksSincePublish++;
 
-		// While something else is turning us and we are not making our own power,
-		// the simulation has no say: Create's speed IS the engine's speed.
-		if (externallyDriven && !phase.simulationOwnsSpeed())
-			simulatedRpm = mechanicalRpm;
+		// The engine's speed is no longer reconciled with Create here. tickRotation
+		// did that, before the crank angle was advanced and on both sides, so by the
+		// time the simulation runs there is exactly one momentum to integrate.
 
 		// THE TWO GATES, in the order the machine imposes them.
 		//
@@ -273,16 +374,18 @@ public final class EngineState {
 			&& isWithinPowerStroke();
 		powerStrokeStrength = phase == EnginePhase.RUNNING ? 1.0F : EngineTuning.START_KICK_TORQUE_FACTOR;
 
-		integrate();
-
-		// A source that is faster than us wins; our own speed can never be below
-		// what Create is physically imposing on the shaft. Applies while STARTING
-		// too, so a firing kick shows as a brief rise above the cranking speed.
-		if (externallyDriven && phase.simulationOwnsSpeed())
-			simulatedRpm = Math.max(simulatedRpm, mechanicalRpm);
+		integrate(powerStrokeActive
+			? EngineTuning.combustionTorqueAt(simulatedRpm, targetRpm) * powerStrokeStrength
+			: 0.0F, EngineTuning.loadDragTorque(loadFactor));
 
 		expireStaleStartAttempt(mayIgnite);
 		advancePhase(combustionPossible, ignitedThisTick);
+
+		// Deliberately last, and deliberately after the phase has settled: this is
+		// the one evaluation of "is this engine producing power", and everything
+		// downstream - the speed Create is told, the capacity the network gets, the
+		// drag it does not get, the HUD, the audio - is a consequence of it.
+		activelyGenerating = evaluateActiveGeneration();
 
 		return updatePublishedRpm();
 	}
@@ -355,24 +458,30 @@ public final class EngineState {
 	 * against friction and flywheel inertia, exactly as it did before the
 	 * throttle existed.
 	 */
-	private void integrate() {
-		float netTorque = powerStrokeActive
-			? EngineTuning.combustionTorqueAt(simulatedRpm, targetRpm) * powerStrokeStrength
-			: 0.0F;
+	private void integrate(float combustionTorque, float loadDragTorque) {
 		// Friction always opposes the current direction of rotation, and is exactly
 		// zero at rest so it can never push a stationary engine into motion. The
 		// kinetic load Create has hung on the engine is drag of the same kind.
-		float drag = EngineTuning.frictionTorqueAt(simulatedRpm, lubrication)
-			+ EngineTuning.loadDragTorque(loadFactor);
-		netTorque -= Math.signum(simulatedRpm) * drag;
+		float drag = EngineTuning.frictionTorqueAt(simulatedRpm, lubrication) + loadDragTorque;
+		float netTorque = combustionTorque - Math.signum(simulatedRpm) * drag;
 
 		float next = simulatedRpm + netTorque / EngineTuning.FLYWHEEL_INERTIA;
 
-		// Friction alone must never drag the engine through zero into reverse.
-		if (!powerStrokeActive && simulatedRpm != 0.0F && Math.signum(next) != Math.signum(simulatedRpm))
+		// Friction alone must never drag the engine through zero into reverse. It
+		// lands exactly on zero instead, which is what lets a coast-down actually
+		// finish rather than creeping at a fraction of an RPM forever.
+		if (combustionTorque == 0.0F && simulatedRpm != 0.0F
+			&& Math.signum(next) != Math.signum(simulatedRpm))
 			next = 0.0F;
 
-		simulatedRpm = clamp(next, -speedLimitRpm, speedLimitRpm);
+		// The ceiling never *reduces* an existing speed: an engine that a fast
+		// external network has spun past its own limit has to be allowed to coast
+		// back down through friction, because clamping it would be exactly the
+		// instantaneous snap this milestone exists to remove. The engine's own
+		// combustion still cannot climb past the limit - the governor takes its
+		// torque away well below it.
+		float ceiling = Math.max(speedLimitRpm, Math.abs(simulatedRpm));
+		simulatedRpm = clamp(next, -ceiling, ceiling);
 	}
 
 	private void advancePhase(boolean combustionPossible, boolean ignitedThisTick) {
@@ -389,7 +498,7 @@ public final class EngineState {
 				// abandoned attempt drops us out of STARTING.
 				if (ignitedThisTick)
 					phase = EnginePhase.STARTING;
-				else if (mechanicalRpm == 0.0F)
+				else if (hasComeToRest())
 					// stop() rather than a bare phase change, so the simulated speed is
 					// zeroed too and the readout does not show a stopped engine still
 					// bleeding off RPM.
@@ -399,7 +508,7 @@ public final class EngineState {
 				if (requiredStartCycles > 0 && startProgress >= requiredStartCycles) {
 					phase = EnginePhase.RUNNING;
 					resetStartAttempt();
-				} else if (mechanicalRpm == 0.0F && simulatedRpm < EngineTuning.STALL_RPM) {
+				} else if (hasComeToRest()) {
 					stop();
 				} else if (startProgress == 0) {
 					// expireStaleStartAttempt cleared it - the attempt went cold.
@@ -413,7 +522,13 @@ public final class EngineState {
 					stop();
 			}
 			case COASTING -> {
-				if (simulatedRpm < EngineTuning.STALL_RPM)
+				// Tested against rest rather than against stall speed. Stalling is
+				// about combustion - below 10 RPM no charge can carry the engine to
+				// the next one - and this engine has already stopped burning. What is
+				// left is a flywheel with momentum in it, and calling that stopped
+				// while it is still visibly turning is what used to snap away the last
+				// of a coast-down.
+				if (hasComeToRest())
 					stop();
 				else if (combustionPossible && simulatedRpm >= EngineTuning.START_RPM)
 					phase = EnginePhase.RUNNING;
@@ -421,11 +536,25 @@ public final class EngineState {
 		}
 	}
 
+	/**
+	 * Whether the crankshaft has genuinely come to a standstill: nothing is turning
+	 * it and its own momentum has run out.
+	 *
+	 * <p>Both halves matter. Testing only the mechanical speed would declare a
+	 * freewheeling engine stopped the instant its network let go of it, because a
+	 * disconnected engine <i>has</i> no Create speed - and {@link #stop()} would
+	 * then zero the momentum that the spin-down is made of.
+	 */
+	private boolean hasComeToRest() {
+		return mechanicalRpm == 0.0F && Math.abs(simulatedRpm) < EngineTuning.REST_RPM;
+	}
+
 	private void stop() {
 		phase = EnginePhase.STOPPED;
 		simulatedRpm = 0.0F;
 		firedThisRevolution = false;
 		powerStrokeActive = false;
+		activelyGenerating = false;
 		resetStartAttempt();
 	}
 
@@ -462,6 +591,68 @@ public final class EngineState {
 	// ------------------------------------------------------------------------
 
 	/**
+	 * <b>The</b> definition of this engine producing power, and the only one.
+	 *
+	 * <p>Every condition is here, in the order the machine imposes them, and each
+	 * of them is a way an engine can be turning without generating anything:
+	 * <ol>
+	 * <li><b>caught</b> - {@link EnginePhase#mayGenerate()}. Cranking, starting and
+	 * coasting are all rotation without self-sustaining combustion;</li>
+	 * <li><b>assembled</b> - a cylinder with a piston in it and exactly one
+	 * flywheel;</li>
+	 * <li><b>lit</b> - the effective ignition, which is the player's switch unless
+	 * a Redstone Control Module is holding it;</li>
+	 * <li><b>able to spark</b> - a Spark Plug in the head;</li>
+	 * <li><b>fuelled</b> - the carburetor can still pay for a charge. This is what
+	 * makes fuel starvation instant: the tick after the last usable millibucket is
+	 * drawn, the engine is not generating, whatever it is still doing
+	 * mechanically;</li>
+	 * <li><b>above stall</b>, and turning forwards;</li>
+	 * <li><b>actually burning</b> - a charge really did fire within the last few
+	 * revolutions. This is the condition that cannot be faked by an external
+	 * source: a dead engine spun at 200 RPM by its neighbour satisfies every
+	 * mechanical test and fails this one.</li>
+	 * </ol>
+	 *
+	 * <p>Nothing here asks whether the engine is externally driven, and that is
+	 * deliberate: two fuelled engines on one shaft are both genuinely burning fuel,
+	 * and only one of them can be Create's source. Being spun by a neighbour is not
+	 * disqualifying - producing no combustion is.
+	 */
+	private boolean evaluateActiveGeneration() {
+		return phase.mayGenerate() && structureValid && ignitionEnabled && sparkPlugInstalled && fuelAvailable
+			&& simulatedRpm >= EngineTuning.STALL_RPM && combustionIsCurrent();
+	}
+
+	/**
+	 * Whether a charge burned recently enough that the engine is still, in any
+	 * meaningful sense, running on combustion.
+	 *
+	 * <p>Scaled by speed, because the firing interval is: see
+	 * {@link EngineTuning#generationCombustionAllowanceTicks}.
+	 */
+	private boolean combustionIsCurrent() {
+		return ticksSinceCombustion >= 0
+			&& ticksSinceCombustion <= EngineTuning.generationCombustionAllowanceTicks(simulatedRpm);
+	}
+
+	/**
+	 * The fastest rotation this engine may claim to be generating.
+	 *
+	 * <p>Its own speed, but never more than its own combustion could hold: the
+	 * governor's torque reaches zero at {@code target + GOVERNOR_RANGE / 2}, so
+	 * that is the engine's honest ceiling at the current throttle. The cap never
+	 * binds during normal running - an engine sits on its target, with a couple of
+	 * RPM of ripple and a small overshoot on the way up - and only bites when
+	 * something else on the network is spinning the engine faster than it could
+	 * ever drive itself. Without it, motoring an idling engine at 200 RPM would
+	 * have tripled the capacity it contributes for no extra fuel.
+	 */
+	private float generationCeiling() {
+		return Math.min(simulatedRpm, targetRpm + EngineTuning.GOVERNOR_RANGE_RPM / 2.0F);
+	}
+
+	/**
 	 * Decides whether Create's generated speed needs to change.
 	 *
 	 * <p>Three separate guards keep this from thrashing the kinetic network:
@@ -473,7 +664,11 @@ public final class EngineState {
 	 * protection.
 	 */
 	private boolean updatePublishedRpm() {
-		float target = phase.generatesPower() ? simulatedRpm : 0.0F;
+		// The single gate. An engine that is not actively generating publishes
+		// nothing, so Create's KineticNetwork#getActualCapacityOf - which multiplies
+		// the registered capacity by |getGeneratedSpeed()| - hands it a capacity of
+		// exactly zero, however fast the network is spinning it.
+		float target = activelyGenerating ? generationCeiling() : 0.0F;
 
 		if (target < EngineTuning.STALL_RPM) {
 			if (publishedRpm == 0.0F)
@@ -517,12 +712,12 @@ public final class EngineState {
 		return normalizeDegrees(crankAngleDegrees + lastAngleDeltaDegrees * partialTicks);
 	}
 
-	/** What Create says the flywheel is really doing. Drives all animation. */
+	/** The speed the crank is really turning at this tick. Drives all animation. */
 	public float getMechanicalRpm() {
 		return mechanicalRpm;
 	}
 
-	/** The engine's own integrated angular velocity. */
+	/** The engine's angular velocity: the one momentum, whatever is causing it. */
 	public float getSimulatedRpm() {
 		return simulatedRpm;
 	}
@@ -530,6 +725,31 @@ public final class EngineState {
 	/** The latched value Create sees as this engine's generated speed. */
 	public float getPublishedRpm() {
 		return publishedRpm;
+	}
+
+	/**
+	 * Whether this engine is producing power right now, and therefore whether it
+	 * may contribute generated rotation and Stress Capacity to Create.
+	 *
+	 * <p>Valid on both sides: evaluated on the server by
+	 * {@link #evaluateActiveGeneration()} and synchronised. Ask this - never a
+	 * combination of phase, fuel and speed assembled at the call site.
+	 */
+	public boolean isActivelyGenerating() {
+		return activelyGenerating;
+	}
+
+	/**
+	 * Whether the crankshaft is turning on stored momentum alone, with nothing on
+	 * the kinetic network driving it.
+	 */
+	public boolean isFreeRotating() {
+		return freeRotation;
+	}
+
+	/** Whether something other than this engine is turning the shaft. */
+	public boolean isExternallyDriven() {
+		return externallyDriven;
 	}
 
 	public EnginePhase getPhase() {
@@ -636,11 +856,21 @@ public final class EngineState {
 		return ticksSinceCombustion;
 	}
 
+	/**
+	 * Where the rotation on this crankshaft is coming from.
+	 *
+	 * <p>Ordered so the answer is the <i>cause</i> rather than a symptom: an engine
+	 * that is burning fuel is its own source even while a neighbour also drives the
+	 * network, and an engine that is merely being spun says so plainly - which is
+	 * the line to read when checking that a multi-engine network is honest.
+	 */
 	public RotationSource getRotationSource() {
-		if (publishedRpm != 0.0F && !externallyDriven)
+		if (activelyGenerating)
 			return RotationSource.ENGINE;
-		if (mechanicalRpm != 0.0F)
+		if (externallyDriven && mechanicalRpm != 0.0F)
 			return RotationSource.EXTERNAL;
+		if (mechanicalRpm != 0.0F)
+			return RotationSource.MOMENTUM;
 		return RotationSource.NONE;
 	}
 
@@ -660,12 +890,31 @@ public final class EngineState {
 		this.phase = phase;
 	}
 
+	/**
+	 * Restores the engine's momentum, bounded only against corrupt data.
+	 *
+	 * <p>Not clamped to the engine's own {@code MAX_RPM}: an engine that a fast
+	 * external network is spinning genuinely holds more momentum than it could ever
+	 * make for itself, and that momentum is what its coast-down is made of. Clamping
+	 * it here would have put the RPM snap back on the one path a chunk reload still
+	 * went through.
+	 */
 	public void setSimulatedRpm(float simulatedRpm) {
-		this.simulatedRpm = clamp(simulatedRpm, -EngineTuning.MAX_RPM, EngineTuning.MAX_RPM);
+		this.simulatedRpm = clamp(simulatedRpm, -EngineTuning.ABSOLUTE_MAX_RPM, EngineTuning.ABSOLUTE_MAX_RPM);
 	}
 
 	public void setPublishedRpm(float publishedRpm) {
 		this.publishedRpm = publishedRpm;
+	}
+
+	/**
+	 * Adopts the server's answer to {@link #isActivelyGenerating()}.
+	 *
+	 * <p>Synchronised rather than recomputed, so no client-side approximation of
+	 * the predicate can ever exist to disagree with the server's.
+	 */
+	public void setActivelyGenerating(boolean activelyGenerating) {
+		this.activelyGenerating = activelyGenerating;
 	}
 
 	public void setStartAttempt(int startProgress, int requiredStartCycles) {
@@ -706,10 +955,8 @@ public final class EngineState {
 	public void setStructureValid(boolean structureValid) {
 		this.structureValid = structureValid;
 	}
-
-	public void setExternallyDriven(boolean externallyDriven) {
-		this.externallyDriven = externallyDriven;
-	}
+	// externallyDriven has no setter on purpose: tickRotation is the one place it
+	// is written, on both sides, from Create's own synchronised source pointer.
 
 	// ------------------------------------------------------------------------
 

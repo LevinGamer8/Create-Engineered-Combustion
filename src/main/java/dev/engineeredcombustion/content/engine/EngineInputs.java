@@ -20,8 +20,6 @@ package dev.engineeredcombustion.content.engine;
  *                           plug is what makes the ignition able to produce a
  *                           spark, and has nothing to do with whether the engine
  *                           can be turned
- * @param externallyDriven   whether Create currently drives the engine from
- *                           somewhere other than the engine itself
  * @param throttle           main throttle opening, {@code [0, 1]}
  * @param loadFactor         kinetic network stress over capacity, {@code [0, 1]};
  *                           0 when there is no network or no capacity yet
@@ -30,7 +28,7 @@ package dev.engineeredcombustion.content.engine;
  *                           {@code maxRotationSpeed}
  */
 public record EngineInputs(boolean structureValid, boolean ignitionEnabled, boolean sparkPlugInstalled,
-	boolean externallyDriven, float throttle, float loadFactor, float speedLimitRpm) {
+	float throttle, float loadFactor, float speedLimitRpm) {
 
 	public EngineInputs {
 		throttle = EngineTuning.clamp01(throttle);
