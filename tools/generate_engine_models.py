@@ -345,8 +345,8 @@ def model(textures, specs, parent="minecraft:block/block", display=None):
 
 # Parts that deliberately do not fill their block look lost in an inventory
 # slot at the standard 0.625, so their icons are scaled up.
-def gui_scale(scale):
-    return {"gui": {"rotation": [30, 225, 0], "translation": [0, 0, 0],
+def gui_scale(scale, rotation=(30, 225, 0)):
+    return {"gui": {"rotation": list(rotation), "translation": [0, 0, 0],
                     "scale": [scale, scale, scale]}}
 
 
@@ -1012,16 +1012,23 @@ def main():
                 display=gui_scale(0.95)))
     # Centred in its slot: the in-world model deliberately sits high and to the
     # intake side of the Carburetor block, which looks lost as an icon.
+    #
+    # Turned to 20/215 rather than the standard 30/225 and scaled a little
+    # harder. The filter is a squat drum whose only distinguishing feature is
+    # the mesh band around its side; the shallower pitch shows more of that band
+    # and less of the flat lid, which is what separates it at a glance from the
+    # other round part in this mod.
     write("item/air_filter.json",
           model(FILTER_TEX, [shift(x, 0, -4.2, 8 - HORN_CZ) for x in air_filter],
-                display=gui_scale(0.9)))
+                display=gui_scale(1.0, (20, 215, 0))))
 
     # Small and centred in its slot, so the icon fills the frame the way the
     # other bolt-on parts do. A steeper pitch than the default puts the board's
     # face - the part carrying the redstone and the tube - towards the camera
     # instead of showing it edge-on.
     write("item/redstone_control_module.json",
-          model(MODULE_TEX, control_module_elements(), display=gui_scale(1.15)))
+          model(MODULE_TEX, control_module_elements(),
+                display=gui_scale(1.2, (40, 225, 0))))
 
     # Piston Assembly is piston *and* rod, so the item says so. The rod is
     # shortened to fit the icon; the in-world rod keeps its true length.
@@ -1032,10 +1039,15 @@ def main():
         el((6.5, 1.2, 5.9), (9.5, 3.0, 10.1), "rod"),
         el((6.5, 0.0, 5.9), (9.5, 1.4, 10.1), "steel"),
     ]
+    # Turned to 15 degrees of pitch: at the standard 30 the icon is looked down
+    # on, the crown fills the slot and the rod hides behind it, so a Piston
+    # Assembly and a bare piston would be the same picture. From nearer the side
+    # the rod and its little end are visible under the skirt, which is the
+    # difference the name is about.
     write("item/piston_assembly.json",
           model({**PISTON_TEX, **ROD_TEX, "particle": "piston"},
                 [shift(x, 0, 2.0, 0) for x in piston] + item_rod,
-                display=gui_scale(0.85)))
+                display=gui_scale(0.9, (15, 215, 0))))
 
     write("item/oil_shale.json", {"parent": NS + "block/oil_shale"})
 

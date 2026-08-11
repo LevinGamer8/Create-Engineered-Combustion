@@ -8,8 +8,9 @@ commit what it wrote.
 
 | | |
 | --- | --- |
-| Textures, fluid sprites, bucket items | `tools/generate_engine_textures.py` |
+| Textures, fluid sprites, bucket and item icons | `tools/generate_engine_textures.py` |
 | Every block and item model | `tools/generate_engine_models.py` |
+| Recipes, tags, loot tables, worldgen | `tools/generate_survival_data.py` |
 | Static checks over what those wrote | `tools/check_models.py` |
 | Offline rasteriser for looking at it | `tools/preview_engine.py` |
 | Engine audio (unrelated, untouched) | `tools/generate_sounds.py` |
@@ -17,8 +18,15 @@ commit what it wrote.
 ```
 python3 tools/generate_engine_textures.py
 python3 tools/generate_engine_models.py
+python3 tools/generate_survival_data.py
 python3 tools/check_models.py          # exits non-zero on any finding
 ```
+
+`generate_survival_data.py` is under `data/` rather than `assets/` and is a
+generator for a different reason from the other two: not because coordinates
+interlock, but because **the balance numbers must only exist once.** A yield
+that appears in two hand-written recipe files drifts. Every number a balance
+pass would touch is a named constant at the top of that file.
 
 Both generators are deterministic - the noise runs off a fixed-seed LCG - so
 re-running them reproduces the committed assets byte for byte, and a diff that
@@ -26,7 +34,7 @@ is not empty means something really changed.
 
 ## Resolutions
 
-Three, each because of what the sprite sits next to.
+Four, each because of what the sprite sits next to.
 
 **Blocks are 32x32**, two texels per model unit. The model generator emits
 world-aligned UVs, so that ratio is what puts element boundaries on texel
@@ -43,7 +51,14 @@ jump.
 **Items are 16x16**, vanilla's own item resolution. The buckets are drawn on
 vanilla's bucket silhouette - pressed pail, wire bail, and the mouth showing
 the surface of whatever is inside - so a Gasoline Bucket in the hotbar next to
-a Water Bucket reads as the same object holding something else.
+a Water Bucket reads as the same object holding something else. What separates
+the three fluid buckets from each other is the `body` parameter rather than a
+tint: see `bucket()`, and [milestone 8](milestone-8.md).
+
+**Oil Shale is 16x16**, unlike every other block texture here. Every neighbour
+it ever has is a vanilla stone texture, and an ore at twice the texel density of
+the rock around it reads as a sticker on the wall. The world-aligned-UV argument
+that puts the castings at 32 does not apply either - it is a plain `cube_all`.
 
 ## The two model invariants
 

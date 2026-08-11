@@ -822,8 +822,20 @@ def t_item_incomplete_carburetor():
 # jump. Nothing here is random, so the loop is exact rather than nearly exact.
 FLUID_FRAMES = 16
 
-GASOLINE_FLUID = ((150, 116, 44), (214, 178, 84), (247, 219, 139))
-ENGINE_OIL_FLUID = ((40, 29, 12), (84, 62, 28), (129, 102, 50))
+# Three petroleum products that have to be told apart in a tank, in a pipe, in a
+# float bowl and in a bucket - often two of them side by side. They are
+# separated by *value* first and hue second, because value survives being four
+# pixels wide and hue does not: pale straw, mid amber-brown, near-black.
+#
+# Gasoline was a saturated yellow, which read as lemonade rather than as fuel.
+# It is now pulled towards straw: less green, less saturation, a paler top end.
+GASOLINE_FLUID = ((146, 118, 62), (206, 180, 116), (240, 224, 178))
+# Engine oil keeps its darkness but gains warmth, so it is amber-brown rather
+# than the olive it was drifting towards - and stays clearly lighter than crude.
+ENGINE_OIL_FLUID = ((48, 30, 12), (99, 65, 26), (152, 106, 46))
+# Crude is the darkest thing in the mod. Its highlight is barely a highlight;
+# what makes it legible at all is the small amount of brown left in it, which is
+# also what keeps it from reading as a hole in the world.
 CRUDE_OIL_FLUID = ((12, 10, 8), (36, 28, 21), (74, 58, 42))
 
 # (waves along x, waves along y, periods per loop, amplitude, phase)
@@ -895,9 +907,27 @@ STEEL_SH = (105, 110, 118, 255)
 STEEL_DK = (68, 72, 79, 255)
 
 
-def bucket(palette):
-    """One filled bucket. `palette` is the fluid's (deep, base, high) triple."""
+def bucket(palette, body=1.0):
+    """One filled bucket.
+
+    `palette` is the fluid's (deep, base, high) triple. `body` is how thick the
+    contents look, from 0 (thin and clear, like gasoline) to 1 (heavy and opaque,
+    like crude), and it is the whole reason three buckets of three different
+    dark liquids do not look like three recolours of one sprite:
+
+    * a *thin* fluid is lit right through, so its surface is bright, the sheen
+      down the lit wall is strong, and the depth gradient from top to bottom is
+      long and smooth - you can see into it;
+    * a *thick* fluid stops light at the surface, so the surface is barely
+      brighter than the body, the sheen collapses to a single specular pixel on
+      the meniscus, and the fluid goes dark immediately below the rim.
+
+    That is a real difference in how the two are drawn rather than a difference
+    in tint, which is what makes Engine Oil and Crude Oil - two dark browns -
+    distinguishable in a hotbar at all.
+    """
     deep, base, high = (c + (255,) for c in palette)
+    clarity = 1.0 - body
     px = blank(size=ITEM)
 
     # --- wire bail. Lit on the left limb, shadowed on the right, so the loop
@@ -939,23 +969,37 @@ def bucket(palette):
     # there is two texels narrower on each side. Filling the mouth with metal
     # instead - a bright bar across the full width - is what makes a bucket
     # sprite read as a lantern.
+    # How bright the open surface is depends on how far light gets into the
+    # fluid: gasoline's mouth is nearly its highlight colour, crude's is barely
+    # above its body.
+    surface = mix(base, high, 0.35 + 0.55 * clarity)
     for x in range(4, 12):
-        px[MOUTH][x] = mix(high, base, 0.45) if x in (4, 11) else high
+        px[MOUTH][x] = mix(surface, base, 0.45) if x in (4, 11) else surface
+    # One specular pixel on the meniscus. On a thick fluid this is the only
+    # thing that says there is a surface at all; on a thin one it is a glint on
+    # top of an already-lit mouth.
+    px[MOUTH][6] = mix(surface, high, 0.55 + 0.35 * body)
 
     # The window narrows with the taper on its own, because it is derived from
     # the silhouette rather than hard-coded.
+    #
+    # Depth: a thin fluid darkens gradually over the whole window, a thick one
+    # is already at its deep tone one row under the rim. `t` is how far down the
+    # window a row is; raising it to a power greater than one for a thick fluid
+    # is what front-loads the darkening.
     spans = {y: (x0, x1) for (y, x0, x1) in PAIL}
+    rows = FLUID_BOTTOM - FLUID_TOP
+    falloff = 1.0 - 0.6 * body
     for y in range(FLUID_TOP, FLUID_BOTTOM + 1):
         x0, x1 = spans[y]
+        t = ((y - FLUID_TOP) / rows) ** falloff
         for x in range(x0 + 2, x1 - 1):
             if y == FLUID_TOP:
-                c = mix(base, high, 0.55)      # still lit by the open mouth
-            elif y >= FLUID_BOTTOM - 1:
-                c = mix(base, deep, 0.55)      # and darker with depth
+                c = mix(base, high, 0.15 + 0.45 * clarity)   # lit by the mouth
             else:
-                c = base
+                c = mix(base, deep, 0.15 + 0.6 * t)
             if x == x0 + 2:
-                c = mix(c, high, 0.28)         # sheen down the lit wall
+                c = mix(c, high, 0.10 + 0.26 * clarity)      # sheen, lit wall
             elif x == x1 - 2:
                 c = mix(c, deep, 0.42)
             px[y][x] = c
@@ -1001,14 +1045,19 @@ FLUIDS = {
     "block/gasoline_flow": (GASOLINE_FLUID, FLOW_WAVES, 2, 1.0),
     "block/engine_oil_still": (ENGINE_OIL_FLUID, STILL_WAVES, 4, 0.7),
     "block/engine_oil_flow": (ENGINE_OIL_FLUID, FLOW_WAVES, 3, 0.85),
+    # Crude is the slowest and flattest of the three - 6000 viscosity against
+    # gasoline's 600, and the sprite says so. The higher contrast is not a
+    # brighter fluid, it is the only way a near-black sprite shows any motion.
     "block/crude_oil_still": (CRUDE_OIL_FLUID, STILL_WAVES, 6, 1.0),
     "block/crude_oil_flow": (CRUDE_OIL_FLUID, FLOW_WAVES, 4, 1.15),
 }
 
+# name -> (palette, body). See `bucket`: body is what makes three dark liquids
+# read as three different substances rather than three tints.
 BUCKETS = {
-    "item/gasoline_bucket": GASOLINE_FLUID,
-    "item/engine_oil_bucket": ENGINE_OIL_FLUID,
-    "item/crude_oil_bucket": CRUDE_OIL_FLUID,
+    "item/gasoline_bucket": (GASOLINE_FLUID, 0.1),
+    "item/engine_oil_bucket": (ENGINE_OIL_FLUID, 0.6),
+    "item/crude_oil_bucket": (CRUDE_OIL_FLUID, 1.0),
 }
 
 
@@ -1029,6 +1078,6 @@ if __name__ == "__main__":
         write_meta(png + ".mcmeta", animation_meta(frametime))
         print("wrote", name + ".png", f"({FLUID_FRAMES} frames)")
 
-    for name, palette in BUCKETS.items():
-        write_png(os.path.join(OUT, name + ".png"), bucket(palette))
+    for name, (palette, body) in BUCKETS.items():
+        write_png(os.path.join(OUT, name + ".png"), bucket(palette, body))
         print("wrote", name + ".png")
