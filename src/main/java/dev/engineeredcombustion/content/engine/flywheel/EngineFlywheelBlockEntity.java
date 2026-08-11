@@ -160,6 +160,34 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	}
 
 	/**
+	 * Called once by the crankshaft on the first server tick after a world load,
+	 * with the engine's state freshly derived from the world.
+	 *
+	 * <p>Does everything {@link #onEngineOutputChanged()} does, and then refreshes
+	 * the Stress figures unconditionally.
+	 *
+	 * <p>That last part is the point. Create persists a source's capacity per
+	 * network and restores it in {@code KineticNetwork#addSilently}, and
+	 * {@code updateGeneratedRotation} only refreshes it while the block is turning
+	 * ({@code hasNetwork() && speed != 0}). An engine that stopped generating while
+	 * the chunk was unloaded - it lost its fuel, its Spark Plug or its Cylinder -
+	 * would therefore come back holding the capacity it had when the world was
+	 * saved, on a network nobody had asked to recompute. Refreshing here means the
+	 * numbers Create is running on after a reload are the ones this engine can
+	 * actually justify, which for a dead engine is zero of both.
+	 */
+	public void reconcileEngineOutput() {
+		if (level == null || level.isClientSide)
+			return;
+		updateGeneratedRotation();
+		if (!hasNetwork())
+			return;
+		notifyStressCapacityChange(calculateAddedStressCapacity());
+		getOrCreateNetwork().updateStressFor(this, calculateStressApplied());
+		getOrCreateNetwork().updateStress();
+	}
+
+	/**
 	 * Finds a crankshaft sitting directly next to this flywheel along this
 	 * flywheel's own rotation axis, with a matching axis of its own.
 	 *

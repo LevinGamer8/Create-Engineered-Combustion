@@ -89,6 +89,21 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * integrate the same deterministic spin-down, and the server confirms it every
  * {@link #COAST_RESYNC_INTERVAL} ticks.
  *
+ * <h2>Two state systems, one reconciliation</h2>
+ * A world save writes the engine twice. Create persists its own {@code Speed},
+ * {@code Source} and {@code Network} for every kinetic block, cached Stress
+ * Capacity included; this mod persists the engine's physical state. Neither can
+ * be allowed to win by loading first.
+ *
+ * <p>The rule is that the <b>simulation is authoritative and Create's kinetic
+ * speed is its published representation</b>. So loading restores only the
+ * engine's own physics - crank angle, signed angular velocity, phase, controls -
+ * and raises {@link #needsPostLoadReconcile}; the first server tick that can
+ * actually see the engine's blocks re-derives generation from the world and
+ * force-publishes the result through {@link #reconcileAfterLoad}, whatever Create
+ * came back holding. Nothing touches the kinetic network from inside
+ * {@link #read}.
+ *
  * <h2>Kinetics: one source, two shaft faces</h2>
  * This block entity is a plain {@link KineticBlockEntity}. It never generates -
  * {@code getGeneratedSpeed()} is inherited as 0 - and it carries neither stress
@@ -146,6 +161,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private static final String KEY_SPARK_EVENT = "SparkEvent";
 	private static final String KEY_COMBUSTION_EVENT = "CombustionEvent";
 	private static final String KEY_GENERATING = "Generating";
+	private static final String KEY_COMBUSTION_AGE = "TicksSinceCombustion";
 
 	private final EngineState engine = new EngineState();
 
@@ -255,6 +271,34 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private int resyncCountdown = RESYNC_INTERVAL;
 
 	/**
+	 * Set when this engine's state came off disk, and cleared by the first server
+	 * tick that reconciles it with Create.
+	 *
+	 * <p><b>Why a flag and not work done in {@code read}.</b> Reading NBT happens
+	 * while the chunk is still being assembled: neighbouring block entities may not
+	 * exist yet, the level cannot be safely asked about blocks a chunk away, and
+	 * nothing that touches the kinetic network belongs there. So loading only
+	 * restores the engine's own physical state and records that it has not yet been
+	 * squared with Create; {@link #reconcileAfterLoad} - running inside a normal
+	 * server tick, with the structure resolved and the simulation live - is what
+	 * makes it true.
+	 */
+	private boolean needsPostLoadReconcile;
+
+	/**
+	 * Ticks the reconciliation has spent waiting for the rest of the engine to
+	 * load. Bounded by {@link EngineTuning#POST_LOAD_RECONCILE_WAIT_TICKS}.
+	 */
+	private int postLoadWaitTicks;
+
+	/**
+	 * Who was turning the shaft on the previous tick, so a handoff can be noticed.
+	 * A change here is a discontinuity, not drift, and the generated speed has to
+	 * be republished at once rather than waiting out a reconciliation interval.
+	 */
+	private boolean wasExternallyDriven;
+
+	/**
 	 * Bridges the simulation to the carburetor. EngineState never learns what a
 	 * fluid is; it only asks whether a combustion event can be paid for.
 	 */
@@ -361,6 +405,22 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			return;
 		}
 
+		// A change of who is turning the shaft is a discontinuity: the value Create
+		// is holding may bear no relation to what the engine is doing, and the
+		// correction must not wait out a reconciliation interval.
+		if (wasExternallyDriven != engine.isExternallyDriven()) {
+			wasExternallyDriven = engine.isExternallyDriven();
+			engine.requestGeneratedRepublish();
+		}
+
+		// An engine loading in cannot be judged until the blocks it is made of are
+		// there to judge. Waiting costs a tick or two on a chunk boundary; not
+		// waiting would mean declaring the engine broken - and tearing down its
+		// kinetic network - because a neighbour was late.
+		if (needsPostLoadReconcile && !engineNeighbourhoodLoaded()
+			&& postLoadWaitTicks++ < EngineTuning.POST_LOAD_RECONCILE_WAIT_TICKS)
+			return;
+
 		EngineFlywheelBlockEntity flywheel = getFlywheel();
 
 		// Resolved once per server tick and held only for the duration of that tick.
@@ -368,7 +428,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// all act on one consistent snapshot - and it is the same call the overlay
 		// makes, which is what keeps the HUD from ever contradicting the simulation.
 		tickComponents = resolveComponents();
-		reassertKineticSourceIfNeeded(flywheel);
+		// Skipped on the reconciliation tick: that already republishes
+		// unconditionally, and from the engine's real state rather than from the
+		// provisional value this safety net would push.
+		if (!needsPostLoadReconcile)
+			reassertKineticSourceIfNeeded(flywheel);
 
 		// Read live every tick, and only in a mode that uses it. Reading here is the
 		// only way the state can never go stale, whatever order neighbour updates
@@ -399,7 +463,15 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			tickComponents.hasSparkPlug(), control.throttle(), readLoadFactor(), speedLimit());
 		boolean generatedSpeedChanged = engine.tickSimulation(inputs, fuelSupply, oilSupply, random);
 
-		if (generatedSpeedChanged && flywheel != null)
+		// This tick is the engine's first since the world was loaded, and the
+		// simulation above has just re-derived everything from the world: whether the
+		// structure is intact, whether there is a plug, fuel and oil, and therefore
+		// whether the engine is generating at all. Now - and not in read() - is when
+		// Create is told.
+		boolean reconciled = needsPostLoadReconcile;
+		if (reconciled)
+			reconcileAfterLoad(flywheel);
+		else if (generatedSpeedChanged && flywheel != null)
 			// The one and only place engine state crosses into Create's world.
 			flywheel.onEngineOutputChanged();
 
@@ -418,7 +490,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// things that change the engine's rotation. Toggling redstone on a stopped
 		// engine changes no speed and no phase, so without this the client would
 		// keep showing the ignition state it was last told about.
-		if (generatedSpeedChanged || eventFired || signalBefore != redstoneSignal
+		if (generatedSpeedChanged || eventFired || reconciled || signalBefore != redstoneSignal
 			|| phaseBefore != engine.getPhase() || structureValidBefore != engine.isStructureValid()
 			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()
 			|| sparkPlugBefore != engine.isSparkPlugInstalled()
@@ -536,6 +608,64 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (previousFlywheel != null && level != null && !level.isClientSide && level.isLoaded(previousFlywheel)
 			&& level.getBlockEntity(previousFlywheel) instanceof EngineFlywheelBlockEntity flywheel)
 			flywheel.onEngineOutputChanged();
+	}
+
+	// --- post-load reconciliation -------------------------------------------
+
+	/**
+	 * Squares Create's restored generator state with what the engine actually is.
+	 *
+	 * <p>Two state systems persist across a world save. Create writes its own
+	 * {@code Speed}, {@code Source} and {@code Network} - including a cached Stress
+	 * Capacity per source - and restores them verbatim. This mod writes the
+	 * engine's physical state. On load they can disagree about anything the world
+	 * did while the chunk was gone, and about anything that was merely
+	 * <i>in flight</i> when the save was taken; whichever of them loads first is
+	 * pure accident and must not be what decides the answer.
+	 *
+	 * <p>The engine's simulation wins, always. This is called from the first server
+	 * tick that has resolved the engine's components and run the simulation once,
+	 * so by now generation has been re-derived from the world - structure, plug,
+	 * fuel, oil, speed - rather than trusted from NBT. Publishing it here is
+	 * unconditional and bypasses the normal rate limits: an engine that is
+	 * generating replaces Create's restored speed and capacity with its own, and
+	 * one that is not forces both to zero.
+	 *
+	 * <p>That second half is what keeps a save from resurrecting the free-power
+	 * exploit. Create's {@code KineticNetwork#addSilently} re-registers a source
+	 * with the capacity it had on disk; an engine that lost its fuel, its plug or
+	 * its cylinder while unloaded would otherwise keep handing that capacity out
+	 * until something happened to ask it again.
+	 */
+	private void reconcileAfterLoad(@Nullable EngineFlywheelBlockEntity flywheel) {
+		needsPostLoadReconcile = false;
+		postLoadWaitTicks = 0;
+		if (flywheel != null)
+			flywheel.reconcileEngineOutput();
+	}
+
+	/**
+	 * Whether every position the component resolver looks at can be read right now.
+	 *
+	 * <p>An engine is three blocks tall and three long, so it may straddle a chunk
+	 * boundary, and on a world load its Cylinder or Flywheel can be a tick or two
+	 * behind its Crankshaft. Resolving components against an unloaded chunk answers
+	 * "absent", which for the one tick that decides the reconciliation would mean
+	 * an intact engine being reconciled as a broken one.
+	 *
+	 * <p>Deliberately only asks whether the chunks are <i>loaded</i>, never whether
+	 * the blocks are there. A genuinely missing Carburetor still reconciles as a
+	 * missing Carburetor - this cannot make an incomplete engine wait for ever.
+	 */
+	private boolean engineNeighbourhoodLoaded() {
+		if (level == null)
+			return false;
+		BlockPos pos = worldPosition;
+		Axis axis = getAxis();
+		return level.isLoaded(EngineComponents.cylinderPos(pos)) && level.isLoaded(EngineComponents.carburetorPos(pos))
+			&& level.isLoaded(EngineComponents.oilSumpPos(pos))
+			&& level.isLoaded(EngineComponents.flywheelCandidatePos(pos, axis, Direction.AxisDirection.POSITIVE))
+			&& level.isLoaded(EngineComponents.flywheelCandidatePos(pos, axis, Direction.AxisDirection.NEGATIVE));
 	}
 
 	/**
@@ -1040,16 +1170,39 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// means a chunk reload does not visibly snap the piston to a new position.
 		engine.setCrankAngleDegrees(tag.getFloat(KEY_CRANK_ANGLE));
 		// A running engine should survive a chunk reload rather than silently dying,
-		// so the phase and both speeds are restored too. Structure validity and the
-		// effective ignition are re-derived from the world on the next server tick.
+		// so the phase and the engine's own momentum are restored too. Structure
+		// validity and the effective ignition are re-derived from the world on the
+		// next server tick.
 		engine.setPhase(EnginePhase.byId(tag.getString(KEY_PHASE)));
+		// THE authoritative rotational state, and the only one that is persisted:
+		// signed angular velocity. Everything else about how fast this engine is
+		// turning - what Create is told it generates, what the network is running at
+		// - is a representation of this number and is rebuilt from it below.
 		engine.setSimulatedRpm(tag.getFloat(KEY_SIMULATED_RPM));
-		engine.setPublishedRpm(tag.getFloat(KEY_PUBLISHED_RPM));
-		// The one authoritative answer to "is this engine producing power",
-		// carried rather than recomputed. The client's overlays, its audio and the
-		// rotation rule all read it, and a client-side approximation of the
-		// predicate is exactly the second opinion this milestone removed.
-		engine.setActivelyGenerating(tag.getBoolean(KEY_GENERATING));
+
+		if (clientPacket) {
+			// The client is shown what the server decided, never a second opinion:
+			// the published speed for the diagnostics, and the one authoritative
+			// answer to "is this engine producing power", which its overlays, its
+			// audio and its rotation rule all read.
+			engine.setPublishedRpm(tag.getFloat(KEY_PUBLISHED_RPM));
+			engine.setActivelyGenerating(tag.getBoolean(KEY_GENERATING));
+		} else {
+			// Off disk. How long ago a charge last burned is simulation state, not
+			// bookkeeping: it is the condition an external source cannot fake, and
+			// dropping it used to make a saved running engine disown its own kinetic
+			// network for a tick before claiming it back.
+			engine.setTicksSinceCombustion(tag.getInt(KEY_COMBUSTION_AGE));
+			// The published speed is deliberately NOT restored - it is a cached
+			// derivative of the momentum above, so it is reconstructed from that
+			// momentum instead, and the first reconciled server tick then replaces
+			// even the reconstruction with a freshly derived value. What this refuses
+			// to do is let a number Create happened to be holding at save time outlive
+			// the physical state it was supposed to describe.
+			engine.restoreAfterLoad(tag.getBoolean(KEY_GENERATING));
+			needsPostLoadReconcile = true;
+			postLoadWaitTicks = 0;
+		}
 		engine.setIgnitionEnabled(tag.getBoolean(KEY_IGNITION));
 		engine.setStructureValid(tag.getBoolean(KEY_STRUCTURE_VALID));
 		// The ignition switch is a physical switch on the crankcase: it stays where
@@ -1096,7 +1249,15 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		tag.putString(KEY_PHASE, engine.getPhase()
 			.getId());
 		tag.putFloat(KEY_SIMULATED_RPM, engine.getSimulatedRpm());
-		tag.putFloat(KEY_PUBLISHED_RPM, engine.getPublishedRpm());
+		// Client only. On disk this would be a second, competing copy of a speed the
+		// simulated RPM above already determines - and it is exactly the copy that
+		// used to come back stale and stay stale. The client still needs it: the
+		// goggle diagnostics print what Create is really being told, and only the
+		// server knows that.
+		if (clientPacket)
+			tag.putFloat(KEY_PUBLISHED_RPM, engine.getPublishedRpm());
+		else
+			tag.putInt(KEY_COMBUSTION_AGE, engine.getTicksSinceCombustion());
 		tag.putBoolean(KEY_GENERATING, engine.isActivelyGenerating());
 		tag.putBoolean(KEY_IGNITION, engine.isIgnitionEnabled());
 		tag.putBoolean(KEY_STRUCTURE_VALID, engine.isStructureValid());

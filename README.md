@@ -147,3 +147,14 @@ for what writes what, why the resolutions differ, and the two model invariants
   pulse per charge that actually burned, so the engine's rhythm is its real firing
   rhythm and a fuel-starved engine audibly stops combusting while it is still
   spinning. See [`docs/milestone-9.md`](docs/milestone-9.md).
+* **Milestone 10** - save/reload RPM reconciliation: an engine that survives a
+  world save no longer comes back running at a speed Create simply happened to be
+  holding. The engine's signed angular velocity is the one persisted rotational
+  state and the generated speed is reconstructed from it; an explicit post-load
+  reconciliation step re-derives generation from the world on the first tick the
+  engine's blocks are actually loaded and force-publishes the result - including
+  zero, and including Create's cached Stress Capacity, so a save cannot resurrect
+  a dead engine's power. The generated-speed update rule is now a low-pass filter
+  plus a rate limit rather than a deadband, so combustion ripple still never
+  reaches the kinetic network but a small error can no longer persist for ever.
+  See [`docs/milestone-10.md`](docs/milestone-10.md).

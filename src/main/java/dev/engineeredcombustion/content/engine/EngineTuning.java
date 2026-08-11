@@ -210,23 +210,119 @@ public final class EngineTuning {
 	public static final int TANK_SYNC_INTERVAL_TICKS = 10;
 
 	// --- publishing to Create's kinetic network -----------------------------
-
-	/** Generated speed is rounded to this step before Create ever sees it. */
-	public static final float NETWORK_RPM_QUANTUM = 4.0F;
+	//
+	// Two jobs, and they used to be done by one number that could not do both.
+	//
+	// Create re-propagates a whole kinetic network every time a source changes
+	// its generated speed, so the engine must not push its within-revolution
+	// combustion ripple onto the network. The old answer was a plain deadband:
+	// publish only once the engine's speed had moved 8 RPM from the published
+	// value. That silenced the ripple - and made a permanent steady-state error
+	// unavoidable, because any error smaller than the deadband could never be
+	// corrected. A world reload restored one of those parked values from NBT and
+	// the engine then ran for ever at a speed Create had simply been left holding.
+	//
+	// The ripple is now removed where it belongs - by *filtering* the output, see
+	// {@link #OUTPUT_FILTER_ALPHA} - which leaves the publishing rule free to be
+	// what it should always have been: a rate limit, not a dead zone. Every error
+	// above {@link #NETWORK_RPM_FINE_DELTA} is eventually published; how quickly
+	// depends only on how big it is.
 
 	/**
-	 * The engine's speed has to move this far from the currently published value
-	 * before a new value is pushed.
+	 * Generated speed is rounded to this step before Create ever sees it.
 	 *
-	 * <p>Must comfortably exceed the engine's within-revolution ripple (about
-	 * +/-2 RPM at {@link #FLYWHEEL_INERTIA} = 20), otherwise the ripple alone
-	 * would re-propagate the kinetic network once per revolution and every
-	 * downstream machine would visibly stutter.
+	 * <p>Halved from 4 now that the published value is a filtered one. The step is
+	 * what keeps the published number tidy and bounds how many distinct values the
+	 * network can ever be given; it no longer has to double as the engine's noise
+	 * floor, and at 2 RPM the engine's idle, half and full-throttle equilibria all
+	 * land exactly on their targets (64, 128, 192) instead of up to 4 RPM off.
 	 */
-	public static final float NETWORK_RPM_DEADBAND = 8.0F;
+	public static final float NETWORK_RPM_QUANTUM = 2.0F;
+
+	/**
+	 * A difference this large between the engine's filtered output and the value
+	 * Create is holding is published as soon as the minimum interval allows.
+	 *
+	 * <p>This is the throttle-change, load-change and source-handoff path: those
+	 * move the engine by tens of RPM, and the network has to follow promptly.
+	 */
+	public static final float NETWORK_RPM_MAJOR_DELTA = 6.0F;
+
+	/**
+	 * The smallest error worth correcting at all, published once
+	 * {@link #NETWORK_RECONCILE_INTERVAL_TICKS} have passed.
+	 *
+	 * <p><b>This is what guarantees convergence.</b> Anything at or above it is
+	 * published within a second; below it the published value is already within
+	 * one quantum of the truth and moving it would be churn for no visible
+	 * difference.
+	 *
+	 * <p>Deliberately larger than half a quantum. That difference - here 0.5 RPM
+	 * either side of every step boundary - is the hysteresis that stops an engine
+	 * sitting exactly on a boundary from flipping between two adjacent steps once
+	 * a second. It only has to exceed the ripple that survives the output filter,
+	 * which is about +/-0.2 RPM.
+	 */
+	public static final float NETWORK_RPM_FINE_DELTA = 1.5F;
 
 	/** Minimum ticks between two non-zero generated-speed updates. */
 	public static final int NETWORK_MIN_UPDATE_INTERVAL_TICKS = 4;
+
+	/**
+	 * How long a small error is allowed to stand before it is published anyway.
+	 *
+	 * <p>One second. Fast enough that no player will ever catch the engine
+	 * disagreeing with its own readout, slow enough that a slowly drifting engine
+	 * re-propagates its network at most once a second.
+	 */
+	public static final int NETWORK_RECONCILE_INTERVAL_TICKS = 20;
+
+	// --- generated-output filter --------------------------------------------
+
+	/**
+	 * Smoothing factor of the low-pass filter between the engine's instantaneous
+	 * angular velocity and the speed Create is told it generates, per tick.
+	 *
+	 * <p>A single-cylinder engine fires once per revolution, so its speed genuinely
+	 * oscillates - about +/-2 RPM at {@link #FLYWHEEL_INERTIA} = 20. That ripple is
+	 * real physics and the piston, the crank and the sound must keep it; what must
+	 * not have it is the kinetic network, because every change there costs a full
+	 * re-propagation.
+	 *
+	 * <p>1/32 gives a time constant of 32 ticks - 1.6 s - which attenuates the idle
+	 * ripple (a period of 18.75 ticks) by about 90 % and everything faster by more.
+	 * What survives is roughly +/-0.2 RPM, comfortably inside the hysteresis band
+	 * described at {@link #NETWORK_RPM_FINE_DELTA}.
+	 *
+	 * <p>This is the mod's only output filter. The instantaneous speed is
+	 * untouched: {@code EngineState#getSimulatedRpm} is still the engine's honest
+	 * angular velocity and still what the crank angle and combustion timing run on.
+	 */
+	public static final float OUTPUT_FILTER_ALPHA = 1.0F / 32.0F;
+
+	/**
+	 * A step larger than this is adopted by the filter at once instead of being
+	 * faded in.
+	 *
+	 * <p>Filtering is for ripple, not for events. Catching, stalling, a throttle
+	 * swung open, a load dropped, a source handoff and the post-load reconciliation
+	 * are all real discontinuities, and lagging 1.6 s behind them would be a bug of
+	 * its own. Comfortably above the ripple this filter exists to remove.
+	 */
+	public static final float OUTPUT_FILTER_SNAP_RPM = 12.0F;
+
+	/**
+	 * How long the post-load reconciliation waits for the rest of the engine's
+	 * blocks to load before going ahead with whatever it can see.
+	 *
+	 * <p>An engine may straddle a chunk boundary, and its Cylinder or Flywheel can
+	 * legitimately be a tick or two behind the Crankshaft on a world load. Declaring
+	 * such an engine broken - and tearing down its kinetic network - because a
+	 * neighbour was late is exactly the failure this budget avoids. It is a budget
+	 * rather than an open-ended wait so that an engine whose neighbour never loads
+	 * still reconciles, just conservatively.
+	 */
+	public static final int POST_LOAD_RECONCILE_WAIT_TICKS = 100;
 
 	// --- fuel ---------------------------------------------------------------
 

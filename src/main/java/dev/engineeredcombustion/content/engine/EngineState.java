@@ -27,8 +27,10 @@ package dev.engineeredcombustion.content.engine;
  * visually disagree.</dd>
  * <dt>{@link #getPublishedRpm() published RPM}</dt>
  * <dd>What Create is told this engine <i>generates</i>. Non-zero only while
- * {@link #isActivelyGenerating()}, quantised behind a deadband, and capped at
- * what the engine's own combustion could sustain.</dd>
+ * {@link #isActivelyGenerating()}, low-pass filtered and quantised, and capped at
+ * what the engine's own combustion could sustain. <b>Derived, never
+ * authoritative:</b> it is rebuilt from the simulation on a world load rather
+ * than restored beside it - see {@link #restoreAfterLoad(boolean)}.</dd>
  * </dl>
  *
  * <h2>Generation is one predicate</h2>
@@ -48,6 +50,14 @@ package dev.engineeredcombustion.content.engine;
  * {@link #getCrankAngleDegrees()} stays in {@code [0, 360)} and is the single
  * source of truth for every mechanical animation and for combustion timing.
  * There is deliberately no separate animation timer anywhere in the codebase.
+ *
+ * <h2>What survives a world save</h2>
+ * The signed simulated RPM, the crank angle, the phase, how long ago a charge
+ * burned, and the counters and flags the client needs. <b>Not</b> the published
+ * RPM, and not the filtered output behind it: those are representations of the
+ * simulated RPM, and persisting a representation beside the thing it represents
+ * is how the two came back from a reload disagreeing. They are rebuilt instead -
+ * see {@link #restoreAfterLoad(boolean)}.
  */
 public final class EngineState {
 
@@ -59,6 +69,33 @@ public final class EngineState {
 	// --- simulation ---------------------------------------------------------
 	private float simulatedRpm;
 	private float publishedRpm;
+
+	/**
+	 * The engine's output as Create should see it: {@link #simulatedRpm} with the
+	 * within-revolution combustion ripple filtered out.
+	 *
+	 * <p>A single cylinder firing once per revolution really does make the
+	 * crankshaft speed oscillate, and the piston, the crank angle and the sound all
+	 * need that ripple. The kinetic network does not: every speed a source
+	 * publishes costs Create a full network re-propagation. So the ripple is
+	 * removed here, once, by a low-pass filter - and <i>only</i> here. Nothing
+	 * downstream of the simulation filters anything a second time, and the
+	 * instantaneous speed is never touched.
+	 *
+	 * <p>Derived state: seeded from {@link #simulatedRpm} on a world load, and
+	 * never persisted.
+	 */
+	private float outputRpm;
+
+	/**
+	 * Set when the next evaluation must publish whatever the engine's output
+	 * actually is, ignoring the rate limits that normally keep small corrections
+	 * off the network.
+	 *
+	 * <p>Raised for the discontinuities those limits must not apply to: the
+	 * post-load reconciliation, and a change of who is turning the shaft.
+	 */
+	private boolean forceGeneratedRepublish;
 
 	/**
 	 * Whether the crankshaft is turning on nothing but its own momentum, because
@@ -653,22 +690,66 @@ public final class EngineState {
 	}
 
 	/**
+	 * Tracks {@link #outputRpm} towards the engine's honest instantaneous output.
+	 *
+	 * <p>A first-order low pass, with one deliberate exception: a step larger than
+	 * {@link EngineTuning#OUTPUT_FILTER_SNAP_RPM} is adopted immediately. The
+	 * filter exists to remove combustion ripple, not to blur events - catching,
+	 * stalling, a throttle swung open or a load dropped are all real, and lagging
+	 * behind them would be its own bug.
+	 *
+	 * <p>While the engine is not generating the filter simply follows the truth
+	 * rather than decaying towards zero. Nothing is published from it then - the
+	 * gate below sees to that - but it means an engine that re-catches starts from
+	 * the speed it is actually turning at instead of ramping up from a stale value.
+	 */
+	private void updateOutputFilter() {
+		float raw = generationCeiling();
+		if (!activelyGenerating || Math.abs(raw - outputRpm) >= EngineTuning.OUTPUT_FILTER_SNAP_RPM)
+			outputRpm = raw;
+		else
+			outputRpm += (raw - outputRpm) * EngineTuning.OUTPUT_FILTER_ALPHA;
+	}
+
+	/**
 	 * Decides whether Create's generated speed needs to change.
 	 *
-	 * <p>Three separate guards keep this from thrashing the kinetic network:
-	 * quantisation to {@link EngineTuning#NETWORK_RPM_QUANTUM}, a deadband of one
-	 * full quantum around the currently published value, and a minimum interval
-	 * between non-zero updates. Transitions to and from zero bypass the interval
-	 * so the engine engages and disengages promptly; the large START/STALL gap is
-	 * what guarantees those cannot repeat quickly enough to trip Create's flicker
-	 * protection.
+	 * <p>The value offered to Create is the <i>filtered</i> output, so this rule no
+	 * longer has to protect the network from combustion ripple and is therefore
+	 * free to be a rate limit rather than a dead zone:
+	 * <ul>
+	 * <li>a difference of {@link EngineTuning#NETWORK_RPM_MAJOR_DELTA} or more -
+	 * a throttle change, a load change, catching or stalling - is published as soon
+	 * as {@link EngineTuning#NETWORK_MIN_UPDATE_INTERVAL_TICKS} allow;</li>
+	 * <li>anything smaller, down to {@link EngineTuning#NETWORK_RPM_FINE_DELTA}, is
+	 * published once {@link EngineTuning#NETWORK_RECONCILE_INTERVAL_TICKS} have
+	 * passed - one second - so a small error can persist for a moment but never
+	 * for ever;</li>
+	 * <li>below the fine delta the published value is already within one quantum of
+	 * the truth, and moving it would be churn with nothing to show for it.</li>
+	 * </ul>
+	 *
+	 * <p><b>Every error above the fine delta is eventually published.</b> That is
+	 * the property the old deadband lacked: it refused any correction smaller than
+	 * itself, so wherever the published value happened to be parked - by a
+	 * transient, or by a world reload restoring one - it stayed, for as long as the
+	 * engine ran.
+	 *
+	 * <p>Transitions to and from zero bypass the interval entirely so the engine
+	 * engages and disengages promptly; the large START/STALL gap is what guarantees
+	 * those cannot repeat quickly enough to trip Create's flicker protection.
 	 */
 	private boolean updatePublishedRpm() {
+		boolean force = forceGeneratedRepublish;
+		forceGeneratedRepublish = false;
+
+		updateOutputFilter();
+
 		// The single gate. An engine that is not actively generating publishes
 		// nothing, so Create's KineticNetwork#getActualCapacityOf - which multiplies
 		// the registered capacity by |getGeneratedSpeed()| - hands it a capacity of
 		// exactly zero, however fast the network is spinning it.
-		float target = activelyGenerating ? generationCeiling() : 0.0F;
+		float target = activelyGenerating ? outputRpm : 0.0F;
 
 		if (target < EngineTuning.STALL_RPM) {
 			if (publishedRpm == 0.0F)
@@ -678,24 +759,51 @@ public final class EngineState {
 			return true;
 		}
 
-		if (publishedRpm != 0.0F) {
-			if (Math.abs(target - publishedRpm) < EngineTuning.NETWORK_RPM_DEADBAND)
-				return false;
-			if (ticksSincePublish < EngineTuning.NETWORK_MIN_UPDATE_INTERVAL_TICKS)
-				return false;
-		}
-
-		float quantised = Math.round(target / EngineTuning.NETWORK_RPM_QUANTUM) * EngineTuning.NETWORK_RPM_QUANTUM;
-		// The upper bound is the *runtime* limit, not the tuning constant: Create's
-		// maxRotationSpeed is a server config and going past it makes
-		// RotationPropagator destroy the block rather than merely refuse the speed.
-		quantised = clamp(quantised, EngineTuning.NETWORK_RPM_QUANTUM, speedLimitRpm);
+		float quantised = quantiseForNetwork(target);
 		if (quantised == publishedRpm)
+			return false;
+		if (!force && publishedRpm != 0.0F && !mayPublish(Math.abs(target - publishedRpm)))
 			return false;
 
 		publishedRpm = quantised;
 		ticksSincePublish = 0;
 		return true;
+	}
+
+	/** Whether an error of this size has waited long enough to be worth a network update. */
+	private boolean mayPublish(float error) {
+		if (error < EngineTuning.NETWORK_RPM_FINE_DELTA)
+			return false;
+		if (ticksSincePublish < EngineTuning.NETWORK_MIN_UPDATE_INTERVAL_TICKS)
+			return false;
+		return error >= EngineTuning.NETWORK_RPM_MAJOR_DELTA
+			|| ticksSincePublish >= EngineTuning.NETWORK_RECONCILE_INTERVAL_TICKS;
+	}
+
+	/**
+	 * Rounds a speed to the step Create is allowed to see it in.
+	 *
+	 * <p>The upper bound is the <i>runtime</i> limit, not the tuning constant:
+	 * Create's {@code maxRotationSpeed} is a server config and going past it makes
+	 * {@code RotationPropagator} destroy the block rather than merely refuse the
+	 * speed.
+	 */
+	private float quantiseForNetwork(float rpm) {
+		float quantised = Math.round(rpm / EngineTuning.NETWORK_RPM_QUANTUM) * EngineTuning.NETWORK_RPM_QUANTUM;
+		return clamp(quantised, EngineTuning.NETWORK_RPM_QUANTUM, speedLimitRpm);
+	}
+
+	/**
+	 * Demands that the next simulated tick publish the engine's real output,
+	 * whatever the rate limits would otherwise have allowed.
+	 *
+	 * <p>For discontinuities, not for drift: the post-load reconciliation, and a
+	 * change in who is driving the shaft. Both are moments where the value Create
+	 * is holding may bear no relation to what the engine is doing, and waiting out
+	 * an interval before saying so would leave a visible lie on the network.
+	 */
+	public void requestGeneratedRepublish() {
+		forceGeneratedRepublish = true;
 	}
 
 	// ------------------------------------------------------------------------
@@ -722,9 +830,22 @@ public final class EngineState {
 		return simulatedRpm;
 	}
 
-	/** The latched value Create sees as this engine's generated speed. */
+	/**
+	 * The latched value Create sees as this engine's generated speed: the engine's
+	 * own speed, filtered and quantised. Derived from the simulation, never the
+	 * other way round.
+	 */
 	public float getPublishedRpm() {
 		return publishedRpm;
+	}
+
+	/**
+	 * The engine's output with the combustion ripple filtered out - what the
+	 * published speed is quantised from. Diagnostic; the simulation reads
+	 * {@link #getSimulatedRpm()}.
+	 */
+	public float getOutputRpm() {
+		return outputRpm;
 	}
 
 	/**
@@ -903,8 +1024,78 @@ public final class EngineState {
 		this.simulatedRpm = clamp(simulatedRpm, -EngineTuning.ABSOLUTE_MAX_RPM, EngineTuning.ABSOLUTE_MAX_RPM);
 	}
 
+	/**
+	 * Adopts the server's published speed. <b>Client side only.</b>
+	 *
+	 * <p>On the server this value is never restored, only computed: see
+	 * {@link #restoreAfterLoad(boolean)}. It exists on the client so the goggle
+	 * diagnostics can print what Create is really being told rather than an
+	 * approximation of it.
+	 */
 	public void setPublishedRpm(float publishedRpm) {
 		this.publishedRpm = publishedRpm;
+	}
+
+	/**
+	 * Restores the derived half of the engine after a world load, from the
+	 * authoritative half.
+	 *
+	 * <p>Call once, on the server, after the persisted simulation state - the
+	 * signed simulated RPM above all - has been read back. What it rebuilds is
+	 * everything that is merely a <i>representation</i> of that state:
+	 * <ul>
+	 * <li>the output filter, seeded from the engine's own momentum so the first
+	 * tick does not ramp up from zero;</li>
+	 * <li>the published speed, reconstructed from that same momentum rather than
+	 * restored from a saved copy of itself. Reconstructing it is what stops a value
+	 * Create happened to be holding when the world was saved from outliving the
+	 * physical state it was supposed to describe;</li>
+	 * <li>a demand that the next tick publish the result, bypassing the rate
+	 * limits.</li>
+	 * </ul>
+	 *
+	 * <p>The reconstruction here is deliberately provisional - it exists so that
+	 * Create's own restored network speed has something coherent to agree with for
+	 * the tick or two before the engine's components are resolvable. The
+	 * <i>authoritative</i> answer comes from the first reconciled simulation tick,
+	 * which re-derives generation from the world - structure, plug, fuel, oil - and
+	 * force-publishes whatever it finds, including zero.
+	 *
+	 * @param wasGenerating the engine's own saved answer to
+	 *                      {@link #isActivelyGenerating()}. Trusted only as far as
+	 *                      the next tick, and never upwards: an engine that was not
+	 *                      generating reconstructs no generated speed at all, so a
+	 *                      dead engine cannot come back from a save with capacity.
+	 */
+	public void restoreAfterLoad(boolean wasGenerating) {
+		activelyGenerating = wasGenerating;
+		outputRpm = simulatedRpm;
+		publishedRpm = wasGenerating && simulatedRpm >= EngineTuning.STALL_RPM
+			? quantiseForNetwork(simulatedRpm)
+			: 0.0F;
+		// No artificial wait before the first correction: the reconciliation is
+		// forced anyway, and this keeps any later correction on the same footing as
+		// an engine that never unloaded.
+		ticksSincePublish = EngineTuning.NETWORK_RECONCILE_INTERVAL_TICKS;
+		forceGeneratedRepublish = true;
+	}
+
+	/**
+	 * Restores how long ago the last charge burned.
+	 *
+	 * <p>Persisted because it is genuinely part of the engine's physical state:
+	 * {@link #combustionIsCurrent()} is what separates an engine running on
+	 * combustion from one merely being turned, and it is the condition an external
+	 * source cannot fake. Without it a saved running engine declared itself
+	 * non-generating on its first tick back - which tore its kinetic network down
+	 * and rebuilt it a moment later, for no reason other than a counter having been
+	 * dropped.
+	 *
+	 * <p>Time spent unloaded does not count against it. The engine was not turning
+	 * while the world was closed, so no firing opportunities were missed.
+	 */
+	public void setTicksSinceCombustion(int ticks) {
+		this.ticksSinceCombustion = Math.max(-1, ticks);
 	}
 
 	/**
