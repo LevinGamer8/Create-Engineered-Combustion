@@ -574,14 +574,29 @@ CYL_TEX = {"particle": "cylinder", "barrel": "cylinder", "fin": "cylinder_fin",
 # ---------------------------------------------------------------------------
 # Spark plug
 # ---------------------------------------------------------------------------
-# Screwed through the head from its +X flank, which is the one face the intake
-# (-Z) and exhaust (+Z) bosses leave free on both engine axes.
+# Screwed vertically down through the head, on the +X side of the bore, and
+# standing up out of the head's boss beside the Carburetor.
+#
+# It used to be mounted horizontally through the head's +X flank. That is what a
+# real small engine does and in a 16-unit block it does not work: a plug long
+# enough to read as hex, insulator and terminal needs about 3.8 units, the
+# head's flank is at x 14.8, and the 1.2 units of block left over are nowhere
+# near enough - so two thirds of the plug hung in the sky beside the machine
+# with nothing behind it, which is exactly what it looked like.
+#
+# Vertical solves that without shortening anything. The column at
+# x 11.25 .. 12.55, z 7.35 .. 8.65 is inside the bore at the bottom and empty
+# all the way up: the Carburetor's nearest parts on that side are its air horn
+# and clamp ring at x <= 11.1, and its throttle lever swings no further than
+# z 6.6. So the plug passes through 3.2 units of solid head casting, emerges
+# from the top of the head's boss, and stands next to the carburetor - inside
+# the engine's own silhouette from every angle.
 #
 # The plug is drilled through the *casting*, exactly as a real head is: the
-# threaded shell runs horizontally inside the head slab (y 14.0 .. 15.6) and is
-# invisible, because it is buried in metal. Everything a player can see is
-# either outside the head - hex, insulator, terminal - or inside the chamber -
-# electrode and ground strap - and nothing else.
+# threaded shell is buried in metal from the chamber roof to the top of the
+# boss and is therefore invisible. Everything a player can see is either above
+# the head - hex, insulator, terminal - or inside the chamber - electrode and
+# ground strap - and nothing else.
 #
 # CHAMBER GEOMETRY, which decides every number below:
 #
@@ -599,26 +614,35 @@ CHAMBER_ROOF = 14.0
 PISTON_TDC_CROWN = 13.5
 
 # Where the spark actually happens: the gap between the electrode tip and the
-# strap, on the bore side of the roof. CrankshaftBlockEntity aims its particle
-# here, so the two must not drift apart.
-SPARK_PLUG_ELECTRODE = (11.95, 13.79, 8.0)
+# strap under it, on the bore side of the roof. CrankshaftBlockEntity aims its
+# particle here, so the two must not drift apart.
+SPARK_PLUG_AXIS_X, SPARK_PLUG_AXIS_Z = 11.90, 8.0
+SPARK_PLUG_ELECTRODE = (SPARK_PLUG_AXIS_X, 13.79, SPARK_PLUG_AXIS_Z)
 
 
 def spark_plug_elements():
     return [
         # --- in the chamber: electrode and strap, and nothing else ---------
-        # The electrode passes through the roof; only its last 0.2 is in the
-        # chamber, which is all that fits and all a real plug shows.
-        el((11.80, 13.84, 7.85), (12.15, 14.60, 8.15), "steel"),   # centre electrode
-        el((11.45, 13.60, 7.80), (11.70, 14.30, 8.20), "steel"),   # ground strap, leg
-        el((11.45, 13.60, 7.80), (12.25, 13.74, 8.20), "steel"),   # ground strap, tip
+        # The electrode comes through the roof; only its last 0.16 is in the
+        # chamber, which is all that fits under a 0.5 unit clearance volume and
+        # all a real plug shows anyway.
+        el((11.75, 13.84, 7.85), (12.05, 14.60, 8.15), "steel"),   # centre electrode
+        el((11.30, 13.60, 7.80), (11.55, 14.30, 8.20), "steel"),   # ground strap, leg
+        el((11.30, 13.60, 7.80), (12.15, 13.74, 8.20), "steel"),   # ground strap, tip
         # --- through the head: buried in the casting, never in the bore ----
-        el((12.15, 14.05, 7.60), (14.90, 15.15, 8.40), "steel"),   # threaded shell
-        # --- outside the head ---------------------------------------------
-        el((14.90, 13.85, 7.25), (16.20, 15.25, 8.75), "steel"),   # spanner hex
-        el((16.20, 14.05, 7.45), (17.50, 15.05, 8.55), "ceramic"),  # insulator
-        el((17.50, 14.20, 7.60), (18.10, 14.90, 8.40), "ceramic"),  # insulator, ribbed
-        el((18.10, 14.35, 7.75), (18.60, 14.75, 8.25), "brass"),   # terminal
+        # Wholly enclosed by the head slab and the boss above it, so `bake`
+        # drops it and it costs nothing. It is kept because it is the reason the
+        # parts above and below line up, and because it would reappear the
+        # moment the head stopped covering it.
+        el((11.25, 14.05, 7.35), (12.55, 17.15, 8.65), "steel"),   # threaded shell
+        # --- above the head, standing beside the Carburetor ---------------
+        # The hex starts inside the boss rather than on top of it: seated in the
+        # casting it can only read as screwed in, where a hex resting exactly on
+        # the surface reads as balanced on it.
+        el((11.15, 17.05, 7.25), (12.65, 18.35, 8.75), "steel"),    # spanner hex
+        el((11.30, 18.35, 7.40), (12.50, 19.75, 8.60), "ceramic"),  # insulator
+        el((11.45, 19.75, 7.55), (12.35, 20.45, 8.45), "ceramic"),  # insulator, ribbed
+        el((11.55, 20.45, 7.65), (12.25, 21.00, 8.35), "brass"),    # terminal
     ]
 
 

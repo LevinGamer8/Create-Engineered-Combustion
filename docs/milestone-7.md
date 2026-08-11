@@ -32,28 +32,61 @@ The crown figure is not measured off a render: it is the piston model's own top
 clearance volume is about a tenth of its stroke - here 0.6 - so that is right
 rather than merely tight.
 
+### Why it is not mounted horizontally
+
+The obvious fix was to keep it on the head's +X flank and simply put the
+electrode where the chamber is. That was tried and it is wrong, for a reason
+that has nothing to do with engines: a plug long enough to read as hex,
+insulator and terminal needs about 3.8 units, the head's flank is at x 14.8, and
+the block ends 1.2 units later. Two thirds of the plug hung in the sky beside
+the machine with nothing behind it - which is exactly what it looked like.
+
+Vertical costs nothing and fixes it. The column at x 11.25 .. 12.55,
+z 7.35 .. 8.65 is over the piston at the bottom and empty all the way up: the
+Carburetor's nearest parts on that side are its air horn and clamp ring at
+x <= 11.1, and its throttle lever swings no further than z 6.6. That x is also
+the furthest the plug can be offset and still sit over the piston rather than
+over the wall - 3.9 from the bore centre against a crown that reaches 4.25.
+
 ### The plug now
 
-Drilled through the head from its +X flank, exactly as a real head is drilled:
+Screwed vertically down through the head, and standing up out of the head's boss
+beside the Carburetor:
 
-* **outside** - spanner hex, ceramic insulator, ribbed insulator, brass terminal,
-  standing proud of the head's face at x 14.9 .. 18.6;
-* **through the casting** - the threaded shell, y 14.05 .. 15.15, buried in the
-  head slab where nobody can see it and where it cannot touch the bore;
 * **in the chamber** - the centre electrode (its last 0.16 below the roof) and
-  the ground strap, and nothing else. Lowest point 13.60, which clears the
-  piston at TDC by 0.10. The spark gap between the electrode tip (13.84) and the
-  strap (13.74) is where `CrankshaftBlockEntity` aims the spark particle.
+  the ground strap, and nothing else. Lowest point 13.60, which clears the piston
+  at TDC by 0.10. The spark gap between the electrode tip (13.84) and the strap
+  (13.74) is where `CrankshaftBlockEntity` aims the spark particle;
+* **through the casting** - the threaded shell, y 14.05 .. 17.15, buried in 3.2
+  units of head slab and boss where nobody can see it and where it cannot touch
+  the bore. `bake` drops it entirely for being wholly enclosed, which is the
+  correct outcome and costs nothing;
+* **above the head** - spanner hex, ceramic insulator, ribbed insulator and brass
+  terminal, y 17.05 .. 21.00. The hex starts *inside* the boss rather than on top
+  of it, so it reads as screwed in rather than balanced on the surface.
+
+Everything is inside the engine's own silhouette from every angle. The
+carburetor hides it from the intake side, which is honest - it does not need to
+render through solid metal.
 
 ### Enforced, not eyeballed
 
-`tools/check_models.py` gained `check_chamber`: it swings the real piston model
-through a full revolution using CrankMath's own slider-crank relation and
-intersects it with every element of the Cylinder. Anything fixed that stands in
-the piston's path fails the check. Moving the crank throw, the rod, the piston
-or the head now breaks the build rather than bending a plug in a world.
+`tools/check_models.py` gained two invariants.
 
-It also asserts the combustion flash stays under the head and inside the bore.
+`check_chamber` swings the real piston model through a full revolution using
+CrankMath's own slider-crank relation and intersects it with every element of the
+Cylinder. Anything fixed that stands in the piston's path fails the check, so
+moving the crank throw, the rod, the piston or the head now breaks the build
+rather than bending a plug in a world. It also asserts the combustion flash stays
+under the head and inside the bore.
+
+`check_sideways_reach` asserts that the Cylinder, Carburetor and Oil Sump leave
+their own block only *vertically*. The engine is a stack, so a part reaching up
+or down lands inside the next block of the same machine; a part reaching sideways
+lands in whatever the player built next to it - usually nothing - and hangs in
+the air. Run against the horizontal plug, it names all four of its outboard
+elements. The Crankshaft is exempt on purpose: its main journals deliberately
+reach a unit into the Flywheel and into whatever Shaft is bolted to the far end.
 
 ## 2. The flash was too small - because of its UVs
 
