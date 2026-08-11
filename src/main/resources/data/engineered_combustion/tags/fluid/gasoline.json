@@ -1,7 +1,6 @@
 {
   "replace": false,
   "values": [
-    "engineered_combustion:gasoline",
-    "engineered_combustion:flowing_gasoline"
+    "#c:gasoline"
   ]
 }

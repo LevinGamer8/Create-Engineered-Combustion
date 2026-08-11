@@ -227,6 +227,14 @@ FILTER = (58, 58, 62, 255)        # air cleaner canister, painted dark
 MESH = (96, 88, 74, 255)          # filter element behind the grille
 MODULE = (52, 47, 49, 255)        # control module housing, moulded phenolic
 REDSTONE = (168, 42, 36, 255)     # the redstone inlay that names the part
+SHALE_STONE = (128, 128, 128, 255)   # the host rock, vanilla stone's own grey
+SHALE_DARK = (38, 34, 30, 255)       # the bituminous laminae in it
+SHALE_MID = (66, 60, 52, 255)
+# Petroleum residue. Deliberately a shade lighter than the crude it comes from:
+# at (28,22,18) the lump was a black hole in the slot with no readable outline,
+# and it also has to stay apart from a piece of coal, which is why it keeps the
+# brown rather than going neutral.
+TAR = (52, 40, 30, 255)
 
 
 def t_cast_iron(seed=11, base=CAST, grain=9):
@@ -625,6 +633,183 @@ def t_combustion_flash():
 
 
 # --------------------------------------------------------------------------
+# oil shale - the one block of this mod that stands in vanilla stone
+# --------------------------------------------------------------------------
+# Drawn at 16, not at the 32 the engine castings use. Every neighbour this
+# block ever has is a vanilla stone texture, and an ore at twice the texel
+# density of the rock around it reads as a sticker on the wall. There is no
+# world-aligned-UV argument here either: it is a plain cube_all.
+#
+# It is also deliberately not drawn as an ore. Ore textures are blobs of a
+# mineral scattered on stone; oil shale is a sedimentary rock whose petroleum is
+# in the layering itself, so what is drawn is dark horizontal laminae - which
+# also makes it unmistakable next to coal ore, the thing it would otherwise be
+# confused with at a glance in a cave.
+def t_oil_shale():
+    px = blank(size=ITEM)
+    rng = Rng(613)
+    fill(px, SHALE_STONE)
+    mottle(px, rng, ((4, 12), (8, 6)))
+
+    # The bands. Each one wanders by a texel as it crosses the sprite, because a
+    # perfectly straight line across 16 pixels reads as a drawn stripe rather
+    # than as rock; and each wraps, so stacked blocks still line up.
+    # Five bands over sixteen rows, no two of them touching once the wobble is
+    # applied. Denser than this and the block stops reading as rock with
+    # something in it and starts reading as a black block.
+    for y0, thickness, tone in ((2, 1, SHALE_DARK), (5, 1, SHALE_MID),
+                                (7, 2, SHALE_DARK), (11, 1, SHALE_MID),
+                                (13, 1, SHALE_DARK)):
+        for x in range(ITEM):
+            wobble = 1 if math.sin(2 * math.pi * (x / ITEM) + y0) > 0.45 else 0
+            for dy in range(thickness):
+                y = (y0 + wobble + dy) % ITEM
+                px[y][x] = shade(tone, int(rng.rangef(-8, 8)))
+
+    # A few oil-wet specks: the giveaway that the rock is worth mining.
+    specks(px, rng, 10, -26)
+    specks(px, rng, 4, 22)
+    noise(px, rng, 4)
+    return px
+
+
+# --------------------------------------------------------------------------
+# item icons
+# --------------------------------------------------------------------------
+# Flat 16x16 sprites, for the parts and materials that are too small to read as
+# geometry in an inventory slot. Each one is drawn from an explicit row table so
+# the silhouette is designed rather than emergent - a spark plug that is not
+# instantly a spark plug has failed at the only job an icon has.
+def _row(px, y, x0, x1, color):
+    """One inclusive run of pixels. The unit every icon below is drawn in."""
+    for x in range(max(0, x0), min(len(px[0]), x1 + 1)):
+        px[y][x] = color
+
+
+def _shaded_row(px, y, x0, x1, base, lit=26, dark=-30):
+    """A run with a lit left edge and a shadowed right one, i.e. a round body."""
+    for x in range(max(0, x0), min(len(px[0]), x1 + 1)):
+        if x == x0:
+            px[y][x] = shade(base, lit)
+        elif x == x1:
+            px[y][x] = shade(base, dark)
+        elif x == x0 + 1:
+            px[y][x] = shade(base, lit // 2)
+        else:
+            px[y][x] = base
+
+
+def t_item_spark_plug():
+    """The Spark Plug, standing upright.
+
+    Five parts from the top down - brass terminal, ribbed porcelain insulator,
+    the spanner hex, the threaded shell, and the electrode with its ground strap
+    - because that stack of widths *is* the silhouette. The hex is the widest
+    thing in the sprite on purpose: a plug narrowing, flaring and narrowing
+    again is recognisable at 16 pixels in a way a plain rod never is.
+    """
+    px = blank(size=ITEM)
+    steel = (150, 156, 165, 255)
+
+    _shaded_row(px, 1, 6, 9, shade(BRASS, 18))          # terminal nut
+    _shaded_row(px, 2, 6, 9, BRASS)
+    _shaded_row(px, 3, 6, 9, shade(BRASS, -30))         # collar under it
+
+    # Insulator: three ribs, each one texel wider than the body between them.
+    for y in range(4, 10):
+        rib = y % 2 == 0
+        _shaded_row(px, y, 4 if rib else 5, 11 if rib else 10,
+                    shade(CERAMIC, 10) if rib else CERAMIC)
+
+    _shaded_row(px, 10, 3, 12, shade(steel, 14))        # spanner hex
+    _shaded_row(px, 11, 3, 12, shade(steel, -18))
+
+    for y in (12, 13):                                   # threaded shell
+        _shaded_row(px, y, 5, 10, steel)
+        for x in range(5, 11, 2):                        # the thread itself
+            px[y][x] = shade(steel, -34)
+
+    _row(px, 14, 5, 10, shade(steel, -40))               # shell mouth
+    _row(px, 15, 7, 8, shade(steel, 30))                 # centre electrode
+    px[15][5] = px[15][10] = shade(steel, -20)           # ground strap
+    px[14][7] = px[14][8] = shade(CERAMIC, -6)           # insulator nose
+    return px
+
+
+def t_item_crushed_oil_shale():
+    """A heap of crushed rock, wet with the petroleum that is the point of it."""
+    px = blank(size=ITEM)
+    rng = Rng(881)
+    # A heap silhouette: narrow at the top, spreading to the base.
+    heap = [(4, 7, 9), (5, 6, 10), (6, 5, 11), (7, 4, 11), (8, 3, 12),
+            (9, 3, 12), (10, 2, 13), (11, 2, 13), (12, 3, 12), (13, 4, 11)]
+    for (y, x0, x1) in heap:
+        _shaded_row(px, y, x0, x1, SHALE_MID, 22, -26)
+    # Individual chips, so it reads as crushed rather than as a smooth pile.
+    for _ in range(26):
+        y = rng.rint(4, 13)
+        row = [h for h in heap if h[0] == y][0]
+        x = rng.rint(row[1], row[2])
+        px[y][x] = shade(SHALE_DARK if rng.rangef(0, 1) < 0.6 else SHALE_STONE,
+                         int(rng.rangef(-10, 10)))
+    # Two oily glints. Without them this is a pile of gravel.
+    px[6][7] = shade(SHALE_STONE, 34)
+    px[10][5] = shade(SHALE_STONE, 26)
+    return px
+
+
+def t_item_petroleum_residue():
+    """The heavy bottom fraction: a lump of cold tar, glossy and near-black."""
+    px = blank(size=ITEM)
+    lump = [(3, 6, 9), (4, 4, 11), (5, 3, 12), (6, 2, 13), (7, 2, 13),
+            (8, 2, 13), (9, 2, 13), (10, 3, 12), (11, 3, 12), (12, 5, 10)]
+    for (y, x0, x1) in lump:
+        _shaded_row(px, y, x0, x1, TAR, 30, -18)
+    # The gloss is the whole difference between tar and a lump of coal: one
+    # small hard highlight high on the left, and a broad dull sheen below it.
+    px[4][6] = px[4][7] = (128, 106, 80, 255)
+    px[5][5] = px[5][6] = (98, 80, 60, 255)
+    px[8][4] = px[9][4] = shade(TAR, 30)
+    for x in range(8, 12):
+        px[10][x] = shade(TAR, -12)
+    return px
+
+
+def _incomplete(base, marks):
+    """A part-built item: the material, roughly formed, with work marks on it.
+
+    Create's own transitional items are recognisably the thing they will become
+    but visibly unfinished, and these follow that: a blank of the right metal
+    with the tool marks of the step that just happened, never a finished part in
+    a different colour.
+    """
+    px = blank(size=ITEM)
+    rng = Rng(1471)
+    for (y, x0, x1) in [(y, 3, 12) for y in range(4, 12)]:
+        _shaded_row(px, y, x0, x1, base, 24, -28)
+        # Jittered here rather than with `noise`, which walks the whole sprite
+        # and - because `shade` always returns alpha 255 - would turn the
+        # transparent margin around the icon into opaque black.
+        for x in range(x0, x1 + 1):
+            px[y][x] = shade(px[y][x], int(rng.rangef(-6, 6)))
+    for (y, x0, x1) in marks:
+        _row(px, y, x0, x1, shade(base, -44))
+    # The unfinished corner: a bite out of the blank, so the outline itself says
+    # the part is not done.
+    for y, x in ((4, 12), (4, 11), (5, 12), (11, 3), (11, 4), (10, 3)):
+        px[y][x] = (0, 0, 0, 0)
+    return px
+
+
+def t_item_incomplete_piston_assembly():
+    return _incomplete(ALU, [(6, 5, 10), (8, 5, 10), (9, 7, 8), (10, 7, 8)])
+
+
+def t_item_incomplete_carburetor():
+    return _incomplete(BRASS, [(5, 6, 9), (7, 4, 11), (9, 6, 9)])
+
+
+# --------------------------------------------------------------------------
 # fluids
 # --------------------------------------------------------------------------
 # Both fluids used to be a single flat colour repeated 256 times, with the
@@ -637,8 +822,21 @@ def t_combustion_flash():
 # jump. Nothing here is random, so the loop is exact rather than nearly exact.
 FLUID_FRAMES = 16
 
-GASOLINE_FLUID = ((150, 116, 44), (214, 178, 84), (247, 219, 139))
-ENGINE_OIL_FLUID = ((40, 29, 12), (84, 62, 28), (129, 102, 50))
+# Three petroleum products that have to be told apart in a tank, in a pipe, in a
+# float bowl and in a bucket - often two of them side by side. They are
+# separated by *value* first and hue second, because value survives being four
+# pixels wide and hue does not: pale straw, mid amber-brown, near-black.
+#
+# Gasoline was a saturated yellow, which read as lemonade rather than as fuel.
+# It is now pulled towards straw: less green, less saturation, a paler top end.
+GASOLINE_FLUID = ((146, 118, 62), (206, 180, 116), (240, 224, 178))
+# Engine oil keeps its darkness but gains warmth, so it is amber-brown rather
+# than the olive it was drifting towards - and stays clearly lighter than crude.
+ENGINE_OIL_FLUID = ((48, 30, 12), (99, 65, 26), (152, 106, 46))
+# Crude is the darkest thing in the mod. Its highlight is barely a highlight;
+# what makes it legible at all is the small amount of brown left in it, which is
+# also what keeps it from reading as a hole in the world.
+CRUDE_OIL_FLUID = ((12, 10, 8), (36, 28, 21), (74, 58, 42))
 
 # (waves along x, waves along y, periods per loop, amplitude, phase)
 STILL_WAVES = ((1, 0, 1, 0.50, 0.00), (0, 1, -1, 0.42, 0.31),
@@ -709,9 +907,27 @@ STEEL_SH = (105, 110, 118, 255)
 STEEL_DK = (68, 72, 79, 255)
 
 
-def bucket(palette):
-    """One filled bucket. `palette` is the fluid's (deep, base, high) triple."""
+def bucket(palette, body=1.0):
+    """One filled bucket.
+
+    `palette` is the fluid's (deep, base, high) triple. `body` is how thick the
+    contents look, from 0 (thin and clear, like gasoline) to 1 (heavy and opaque,
+    like crude), and it is the whole reason three buckets of three different
+    dark liquids do not look like three recolours of one sprite:
+
+    * a *thin* fluid is lit right through, so its surface is bright, the sheen
+      down the lit wall is strong, and the depth gradient from top to bottom is
+      long and smooth - you can see into it;
+    * a *thick* fluid stops light at the surface, so the surface is barely
+      brighter than the body, the sheen collapses to a single specular pixel on
+      the meniscus, and the fluid goes dark immediately below the rim.
+
+    That is a real difference in how the two are drawn rather than a difference
+    in tint, which is what makes Engine Oil and Crude Oil - two dark browns -
+    distinguishable in a hotbar at all.
+    """
     deep, base, high = (c + (255,) for c in palette)
+    clarity = 1.0 - body
     px = blank(size=ITEM)
 
     # --- wire bail. Lit on the left limb, shadowed on the right, so the loop
@@ -753,23 +969,37 @@ def bucket(palette):
     # there is two texels narrower on each side. Filling the mouth with metal
     # instead - a bright bar across the full width - is what makes a bucket
     # sprite read as a lantern.
+    # How bright the open surface is depends on how far light gets into the
+    # fluid: gasoline's mouth is nearly its highlight colour, crude's is barely
+    # above its body.
+    surface = mix(base, high, 0.35 + 0.55 * clarity)
     for x in range(4, 12):
-        px[MOUTH][x] = mix(high, base, 0.45) if x in (4, 11) else high
+        px[MOUTH][x] = mix(surface, base, 0.45) if x in (4, 11) else surface
+    # One specular pixel on the meniscus. On a thick fluid this is the only
+    # thing that says there is a surface at all; on a thin one it is a glint on
+    # top of an already-lit mouth.
+    px[MOUTH][6] = mix(surface, high, 0.55 + 0.35 * body)
 
     # The window narrows with the taper on its own, because it is derived from
     # the silhouette rather than hard-coded.
+    #
+    # Depth: a thin fluid darkens gradually over the whole window, a thick one
+    # is already at its deep tone one row under the rim. `t` is how far down the
+    # window a row is; raising it to a power greater than one for a thick fluid
+    # is what front-loads the darkening.
     spans = {y: (x0, x1) for (y, x0, x1) in PAIL}
+    rows = FLUID_BOTTOM - FLUID_TOP
+    falloff = 1.0 - 0.6 * body
     for y in range(FLUID_TOP, FLUID_BOTTOM + 1):
         x0, x1 = spans[y]
+        t = ((y - FLUID_TOP) / rows) ** falloff
         for x in range(x0 + 2, x1 - 1):
             if y == FLUID_TOP:
-                c = mix(base, high, 0.55)      # still lit by the open mouth
-            elif y >= FLUID_BOTTOM - 1:
-                c = mix(base, deep, 0.55)      # and darker with depth
+                c = mix(base, high, 0.15 + 0.45 * clarity)   # lit by the mouth
             else:
-                c = base
+                c = mix(base, deep, 0.15 + 0.6 * t)
             if x == x0 + 2:
-                c = mix(c, high, 0.28)         # sheen down the lit wall
+                c = mix(c, high, 0.10 + 0.26 * clarity)      # sheen, lit wall
             elif x == x1 - 2:
                 c = mix(c, deep, 0.42)
             px[y][x] = c
@@ -800,6 +1030,12 @@ TEXTURES = {
     "block/air_filter_mesh": t_air_filter_mesh,
     "block/control_module": t_control_module,
     "block/combustion_flash": t_combustion_flash,
+    "block/oil_shale": t_oil_shale,
+    "item/spark_plug": t_item_spark_plug,
+    "item/crushed_oil_shale": t_item_crushed_oil_shale,
+    "item/petroleum_residue": t_item_petroleum_residue,
+    "item/incomplete_piston_assembly": t_item_incomplete_piston_assembly,
+    "item/incomplete_carburetor": t_item_incomplete_carburetor,
 }
 
 # Sprite name -> (pixels, animation frametime or None). Still fluids idle;
@@ -809,11 +1045,19 @@ FLUIDS = {
     "block/gasoline_flow": (GASOLINE_FLUID, FLOW_WAVES, 2, 1.0),
     "block/engine_oil_still": (ENGINE_OIL_FLUID, STILL_WAVES, 4, 0.7),
     "block/engine_oil_flow": (ENGINE_OIL_FLUID, FLOW_WAVES, 3, 0.85),
+    # Crude is the slowest and flattest of the three - 6000 viscosity against
+    # gasoline's 600, and the sprite says so. The higher contrast is not a
+    # brighter fluid, it is the only way a near-black sprite shows any motion.
+    "block/crude_oil_still": (CRUDE_OIL_FLUID, STILL_WAVES, 6, 1.0),
+    "block/crude_oil_flow": (CRUDE_OIL_FLUID, FLOW_WAVES, 4, 1.15),
 }
 
+# name -> (palette, body). See `bucket`: body is what makes three dark liquids
+# read as three different substances rather than three tints.
 BUCKETS = {
-    "item/gasoline_bucket": GASOLINE_FLUID,
-    "item/engine_oil_bucket": ENGINE_OIL_FLUID,
+    "item/gasoline_bucket": (GASOLINE_FLUID, 0.1),
+    "item/engine_oil_bucket": (ENGINE_OIL_FLUID, 0.6),
+    "item/crude_oil_bucket": (CRUDE_OIL_FLUID, 1.0),
 }
 
 
@@ -834,6 +1078,6 @@ if __name__ == "__main__":
         write_meta(png + ".mcmeta", animation_meta(frametime))
         print("wrote", name + ".png", f"({FLUID_FRAMES} frames)")
 
-    for name, palette in BUCKETS.items():
-        write_png(os.path.join(OUT, name + ".png"), bucket(palette))
+    for name, (palette, body) in BUCKETS.items():
+        write_png(os.path.join(OUT, name + ".png"), bucket(palette, body))
         print("wrote", name + ".png")

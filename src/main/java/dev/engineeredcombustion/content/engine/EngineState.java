@@ -50,6 +50,15 @@ public final class EngineState {
 	// --- conditions ---------------------------------------------------------
 	private boolean structureValid;
 	private boolean ignitionEnabled;
+	/**
+	 * Whether the cylinder head has a Spark Plug in it.
+	 *
+	 * <p>The coil has somewhere to discharge only if this is true. It is what
+	 * separates "the ignition is switched on" from "a spark can happen", and it is
+	 * deliberately independent of {@link #structureValid}: an engine with no plug
+	 * turns over perfectly.
+	 */
+	private boolean sparkPlugInstalled;
 	private boolean externallyDriven;
 
 	/** Main throttle opening, {@code [0, 1]}. Re-read from the carburetor each tick. */
@@ -183,6 +192,7 @@ public final class EngineState {
 	public boolean tickSimulation(EngineInputs inputs, FuelSupply fuel, OilSupply oil, java.util.Random random) {
 		this.structureValid = inputs.structureValid();
 		this.ignitionEnabled = inputs.ignitionEnabled();
+		this.sparkPlugInstalled = inputs.sparkPlugInstalled();
 		this.externallyDriven = inputs.externallyDriven();
 		this.throttle = inputs.throttle();
 		this.loadFactor = inputs.loadFactor();
@@ -205,23 +215,28 @@ public final class EngineState {
 		if (externallyDriven && !phase.simulationOwnsSpeed())
 			simulatedRpm = mechanicalRpm;
 
-		// Fuel is now a hard requirement. An engine with a missing or empty
-		// carburetor is mechanically fine but can never produce power.
-		boolean combustionPossible = structureValid && ignitionEnabled && fuelAvailable;
+		// THE TWO GATES, in the order the machine imposes them.
+		//
+		// A spark needs an assembled engine, a live ignition and somewhere for the
+		// coil to discharge - a Spark Plug. Fuel has nothing to do with it: the
+		// coil is wired to the crank, not to the fuel system, so a plug fires
+		// whether or not there is gasoline to light. That is the mechanically
+		// honest model and it is the useful one, because it makes the two failures
+		// distinguishable by looking: a plug that visibly sparks while the engine
+		// refuses to catch says the problem is fuel, a plug that stays dark says it
+		// is ignition, and no plug at all says so on the overlay.
+		//
+		// Combustion needs a spark AND a charge to light. Nothing may reorder these
+		// two: fuel must never be what decides whether the plug sparks.
+		boolean sparkPossible = structureValid && ignitionEnabled && sparkPlugInstalled;
+		boolean combustionPossible = sparkPossible && fuelAvailable;
 		float requiredRpm = phase == EnginePhase.RUNNING ? EngineTuning.STALL_RPM : EngineTuning.START_RPM;
 		// Forward rotation only. Cranking the engine backwards never ignites it.
 		boolean mayIgnite = combustionPossible && lastAngleDeltaDegrees > 0.0F && simulatedRpm >= requiredRpm;
 
 		boolean firingAngleCrossed = crossedFiringAngle();
 
-		// The coil is wired to the crank, not to the fuel system. It fires whenever
-		// the ignition is on and the engine is turning forwards fast enough for a
-		// firing opportunity - whether or not there is any gasoline to light. That
-		// is the mechanically honest model, and it is the useful one: a plug that
-		// visibly sparks while the engine refuses to catch tells the player the
-		// problem is fuel, and a plug that stays dark tells them it is ignition.
-		if (firingAngleCrossed && structureValid && ignitionEnabled && lastAngleDeltaDegrees > 0.0F
-			&& simulatedRpm >= requiredRpm)
+		if (firingAngleCrossed && sparkPossible && lastAngleDeltaDegrees > 0.0F && simulatedRpm >= requiredRpm)
 			sparkEventId++;
 
 		boolean ignitedThisTick = false;
@@ -592,6 +607,16 @@ public final class EngineState {
 		return ignitionEnabled;
 	}
 
+	/**
+	 * Whether a Spark Plug was fitted on the last simulated tick.
+	 *
+	 * <p>Synchronised so the client-side overlays can explain a dead engine
+	 * without re-reading the world.
+	 */
+	public boolean isSparkPlugInstalled() {
+		return sparkPlugInstalled;
+	}
+
 	/** How well lubricated the engine was on the last simulated tick. */
 	public LubricationState getLubrication() {
 		return lubrication;
@@ -672,6 +697,10 @@ public final class EngineState {
 
 	public void setIgnitionEnabled(boolean ignitionEnabled) {
 		this.ignitionEnabled = ignitionEnabled;
+	}
+
+	public void setSparkPlugInstalled(boolean sparkPlugInstalled) {
+		this.sparkPlugInstalled = sparkPlugInstalled;
 	}
 
 	public void setStructureValid(boolean structureValid) {

@@ -1,0 +1,24 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "B": {
+      "tag": "c:plates/brass"
+    },
+    "R": {
+      "tag": "c:dusts/redstone"
+    },
+    "E": {
+      "item": "create:electron_tube"
+    }
+  },
+  "pattern": [
+    "BRB",
+    "RER",
+    "BRB"
+  ],
+  "result": {
+    "count": 1,
+    "id": "engineered_combustion:redstone_control_module"
+  }
+}

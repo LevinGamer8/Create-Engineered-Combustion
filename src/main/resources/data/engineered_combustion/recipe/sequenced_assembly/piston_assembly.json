@@ -1,0 +1,62 @@
+{
+  "type": "create:sequenced_assembly",
+  "ingredient": {
+    "tag": "c:plates/iron"
+  },
+  "transitional_item": {
+    "id": "engineered_combustion:incomplete_piston_assembly"
+  },
+  "loops": 2,
+  "sequence": [
+    {
+      "type": "create:deploying",
+      "ingredients": [
+        {
+          "item": "engineered_combustion:incomplete_piston_assembly"
+        },
+        {
+          "item": "create:andesite_alloy"
+        }
+      ],
+      "results": [
+        {
+          "id": "engineered_combustion:incomplete_piston_assembly"
+        }
+      ]
+    },
+    {
+      "type": "create:pressing",
+      "ingredients": [
+        {
+          "item": "engineered_combustion:incomplete_piston_assembly"
+        }
+      ],
+      "results": [
+        {
+          "id": "engineered_combustion:incomplete_piston_assembly"
+        }
+      ]
+    },
+    {
+      "type": "create:deploying",
+      "ingredients": [
+        {
+          "item": "engineered_combustion:incomplete_piston_assembly"
+        },
+        {
+          "tag": "c:nuggets/iron"
+        }
+      ],
+      "results": [
+        {
+          "id": "engineered_combustion:incomplete_piston_assembly"
+        }
+      ]
+    }
+  ],
+  "results": [
+    {
+      "id": "engineered_combustion:piston_assembly"
+    }
+  ]
+}

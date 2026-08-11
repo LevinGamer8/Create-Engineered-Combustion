@@ -81,9 +81,10 @@ resolution before it ever reaches compilation.
 ## Assets
 
 Every texture and model is generated, not hand-edited, and the generators are
-deterministic. See [`docs/assets.md`](docs/assets.md) for what writes what, why
-the three resolutions differ, and the two model invariants `tools/check_models.py`
-enforces.
+deterministic. So are the recipes, tags, loot tables and worldgen, so that the
+balance numbers exist in exactly one place. See [`docs/assets.md`](docs/assets.md)
+for what writes what, why the resolutions differ, and the two model invariants
+`tools/check_models.py` enforces.
 
 ## Milestones
 
@@ -128,3 +129,10 @@ enforces.
   the flash and the firing sound are driven by server-authoritative spark and
   combustion counters, so what the player sees and hears is the charge that
   actually burned. See [`docs/milestone-7.md`](docs/milestone-7.md).
+* **Milestone 8** - Survival foundation: the Spark Plug becomes a real installable
+  component without which the engine sparks and burns nothing, every part of a
+  working engine gains a Create-tier recipe, and a small standalone petroleum
+  chain - Oil Shale, Crude Oil, and refining into Gasoline and Engine Oil - makes
+  the mod playable without Creative and without any other petroleum mod. Fuel and
+  lubricant acceptance is tag-driven, so another mod's fluids can join with a
+  datapack. See [`docs/milestone-8.md`](docs/milestone-8.md).

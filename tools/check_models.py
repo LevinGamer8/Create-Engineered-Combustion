@@ -123,6 +123,7 @@ ASSEMBLY = [
     ("crankshaft.json", (0, 0, 0)),
     ("crank_assembly_x.json", (0, 0, 0)),
     ("cylinder.json", (0, 16, 0)),
+    ("spark_plug.json", (0, 16, 0)),
     ("carburetor.json", (0, 32, 0)),
     ("air_filter.json", (0, 32, 0)),
     ("flywheel_wheel_x.json", (16, 0, 0)),
@@ -206,15 +207,22 @@ def check_chamber():
     problems = []
     tdc_crown = max(hi[1] for _, hi in piston_boxes(180.0))
 
-    fixed = json.loads((ROOT / "cylinder.json").read_text())["elements"]
+    # The spark plug is checked alongside the cylinder even though it is a
+    # separate model now. It is still bolted into the same head, its electrode
+    # and strap are still the two parts of this engine closest to the piston at
+    # top dead centre, and splitting the model must not be what quietly stops
+    # that clearance from being enforced.
+    fixed = [(name, element)
+             for name in ("cylinder.json", "spark_plug.json")
+             for element in json.loads((ROOT / name).read_text())["elements"]]
     for degrees in range(0, 360, 5):
         for piston in piston_boxes(float(degrees)):
-            for element in fixed:
+            for name, element in fixed:
                 lo, hi = box(element)
                 if not intersects((lo, hi), piston):
                     continue
                 problems.append(
-                    f"cylinder.json: {lo}->{hi} is inside the piston at crank "
+                    f"{name}: {lo}->{hi} is inside the piston at crank "
                     f"angle {degrees} deg (crown reaches y {tdc_crown:.2f} at TDC)")
     # One report per offending element, however many angles hit it.
     problems = sorted(set(problems))
@@ -241,7 +249,8 @@ def check_chamber():
 # The Crankshaft is exempt on purpose: its main journals deliberately reach a
 # unit into the Flywheel and into whatever Shaft is bolted to the far end, which
 # is what makes the output side read as one continuous shaft.
-STACKED_ONLY_VERTICALLY = ["cylinder.json", "carburetor.json", "oil_sump.json"]
+STACKED_ONLY_VERTICALLY = ["cylinder.json", "spark_plug.json",
+                           "carburetor.json", "oil_sump.json"]
 
 
 def check_sideways_reach():

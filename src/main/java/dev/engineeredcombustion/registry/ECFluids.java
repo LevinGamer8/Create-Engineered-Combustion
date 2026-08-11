@@ -19,10 +19,11 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 import net.neoforged.neoforge.registries.NeoForgeRegistries;
 
 /**
- * The mod's fluids: gasoline and engine oil.
+ * The mod's fluids: crude oil, and the two things it refines into - gasoline
+ * and engine oil.
  *
  * <h2>Why there is no placeable fluid block</h2>
- * Both exist to be piped, stored and consumed, not poured into pools, so no
+ * All three exist to be piped, stored and consumed, not poured into pools, so no
  * {@code LiquidBlock} is registered and {@link SimpleFluid#createLegacyBlock} returns
  * air - the same arrangement Create uses for its own {@code VirtualFluid}. The
  * fluids still behave normally everywhere it matters: buckets, tanks, pipes and
@@ -85,12 +86,49 @@ public class ECFluids {
 	public static final DeferredHolder<Fluid, SimpleFluid> ENGINE_OIL =
 		FLUIDS.register("engine_oil", () -> new SimpleFluid(engineOilProperties(), true));
 
+	public static final ResourceLocation CRUDE_OIL_STILL_TEXTURE =
+		EngineeredCombustion.asResource("block/crude_oil_still");
+	public static final ResourceLocation CRUDE_OIL_FLOWING_TEXTURE =
+		EngineeredCombustion.asResource("block/crude_oil_flow");
+
+	/**
+	 * Unrefined petroleum: the output of the Oil Shale chain and the input to
+	 * both refining branches.
+	 *
+	 * <p>Denser and far more viscous than either product, which is the whole
+	 * reason it has to be processed - and the numbers say so rather than a
+	 * comment: crude sits at 900 kg/m3 and 6000 viscosity, against gasoline's 750
+	 * and 600.
+	 *
+	 * <p>Deliberately <i>not</i> accepted by the Carburetor or the Oil Sump.
+	 * Neither block knows this fluid exists; they ask
+	 * {@code EngineFuel}/{@code EngineLubricant}, and crude is in neither tag.
+	 */
+	public static final DeferredHolder<FluidType, FluidType> CRUDE_OIL_TYPE =
+		FLUID_TYPES.register("crude_oil", () -> new SimpleFluidType(FluidType.Properties.create()
+			.descriptionId("fluid.engineered_combustion.crude_oil")
+			.density(900)
+			.viscosity(6000)
+			.temperature(300)
+			.lightLevel(0)
+			.canSwim(false)
+			.canDrown(true)
+			.supportsBoating(false)
+			.canHydrate(false), CRUDE_OIL_STILL_TEXTURE, CRUDE_OIL_FLOWING_TEXTURE));
+
+	public static final DeferredHolder<Fluid, SimpleFluid> FLOWING_CRUDE_OIL =
+		FLUIDS.register("flowing_crude_oil", () -> new SimpleFluid(crudeOilProperties(), false));
+
+	public static final DeferredHolder<Fluid, SimpleFluid> CRUDE_OIL =
+		FLUIDS.register("crude_oil", () -> new SimpleFluid(crudeOilProperties(), true));
+
 	/**
 	 * Built lazily and cached. They cannot be plain field initialisers because the
 	 * properties reference the very holders declared above.
 	 */
 	private static BaseFlowingFluid.Properties properties;
 	private static BaseFlowingFluid.Properties engineOilProperties;
+	private static BaseFlowingFluid.Properties crudeOilProperties;
 
 	private static BaseFlowingFluid.Properties properties() {
 		if (properties == null)
@@ -104,6 +142,13 @@ public class ECFluids {
 			engineOilProperties = new BaseFlowingFluid.Properties(ENGINE_OIL_TYPE, ENGINE_OIL, FLOWING_ENGINE_OIL)
 				.bucket(ECItems.ENGINE_OIL_BUCKET);
 		return engineOilProperties;
+	}
+
+	private static BaseFlowingFluid.Properties crudeOilProperties() {
+		if (crudeOilProperties == null)
+			crudeOilProperties = new BaseFlowingFluid.Properties(CRUDE_OIL_TYPE, CRUDE_OIL, FLOWING_CRUDE_OIL)
+				.bucket(ECItems.CRUDE_OIL_BUCKET);
+		return crudeOilProperties;
 	}
 
 	/**

@@ -345,9 +345,22 @@ def model(textures, specs, parent="minecraft:block/block", display=None):
 
 # Parts that deliberately do not fill their block look lost in an inventory
 # slot at the standard 0.625, so their icons are scaled up.
-def gui_scale(scale):
-    return {"gui": {"rotation": [30, 225, 0], "translation": [0, 0, 0],
+def gui_scale(scale, rotation=(30, 225, 0)):
+    return {"gui": {"rotation": list(rotation), "translation": [0, 0, 0],
                     "scale": [scale, scale, scale]}}
+
+
+def sprite_item(path):
+    """A flat 16x16 item icon.
+
+    Used for the small parts and the consumables rather than a cuboid model.
+    A spark plug is three millimetres of hex and a ceramic body: rendered as
+    geometry at inventory scale it is a grey stick, where a drawn icon keeps the
+    silhouette a player recognises without reading the name. Vanilla makes the
+    same call for every one of its own small items.
+    """
+    return {"parent": "minecraft:item/generated",
+            "textures": {"layer0": NS + "item/" + path}}
 
 
 # ===========================================================================
@@ -566,10 +579,11 @@ def piston_elements():
 # ===========================================================================
 # CYLINDER - cutaway finned barrel with an integrated head
 # ===========================================================================
+# No ceramic or brass here any more: the spark plug moved to its own model, and
+# a texture reference that nothing uses is a texture that quietly rots.
 CYL_TEX = {"particle": "cylinder", "barrel": "cylinder", "fin": "cylinder_fin",
            "head": "cylinder_head", "deck": "crankcase_deck",
-           "steel": "journal", "case": "crankshaft",
-           "ceramic": "spark_plug_ceramic", "brass": "brass"}
+           "steel": "journal", "case": "crankshaft"}
 
 # ---------------------------------------------------------------------------
 # Spark plug
@@ -620,7 +634,23 @@ SPARK_PLUG_AXIS_X, SPARK_PLUG_AXIS_Z = 11.90, 8.0
 SPARK_PLUG_ELECTRODE = (SPARK_PLUG_AXIS_X, 13.79, SPARK_PLUG_AXIS_Z)
 
 
+SPARK_PLUG_TEX = {"particle": "spark_plug_ceramic", "steel": "journal",
+                  "ceramic": "spark_plug_ceramic", "brass": "brass"}
+
+
 def spark_plug_elements():
+    """The plug itself, in Cylinder block space.
+
+    Its own model since the plug became an installable component: the block
+    entity renderer draws it only when the head has one in it, so no transform
+    is applied and these coordinates are the final ones.
+
+    The threaded shell is kept even though the head casting hides it. It used to
+    be dropped by `bake` for being wholly enclosed - by elements of the *same*
+    model, back when the plug was part of the Cylinder - and on its own nothing
+    encloses it any more. Six quads inside opaque metal cost nothing, and they
+    are the reason the parts above and below the head line up.
+    """
     return [
         # --- in the chamber: electrode and strap, and nothing else ---------
         # The electrode comes through the roof; only its last 0.16 is in the
@@ -691,7 +721,11 @@ def cylinder_elements():
     e.append(el((4.6, 16.6, 0.2), (11.4, 17.75, 4.2), "deck"))      # intake flange
     e.append(el((6.0, 13.8, 11.6), (10.0, 16.4, 16.0), "head"))     # exhaust boss
     e.append(el((5.2, 12.9, 15.0), (10.8, 16.9, 16.0), "deck"))     # exhaust flange
-    e += spark_plug_elements()
+    # The spark plug is NOT part of this model any more. It is an installable
+    # component now, so it lives in its own model that the block entity renderer
+    # draws only when one is fitted - see spark_plug_elements. The head keeps its
+    # boss either way, because the boss is the threaded seat cast into the head
+    # and is there whether or not anything is screwed into it.
     return e
 
 
@@ -912,6 +946,7 @@ def main():
     rod = rod_elements()
     piston = piston_elements()
     cyl = cylinder_elements()
+    plug = spark_plug_elements()
     carb = carburetor_elements()
     fly = flywheel_elements()
     lever = throttle_lever_elements()
@@ -935,8 +970,12 @@ def main():
           model(ROD_TEX, [transpose(x) for x in rod]))
     write("block/piston_head.json", model(PISTON_TEX, piston))
     write("block/cylinder.json", model(CYL_TEX, cyl))
+    write("block/spark_plug.json", model(SPARK_PLUG_TEX, plug))
     write("block/combustion_flash.json",
           model(FLASH_TEX, combustion_flash_elements()))
+    write("block/oil_shale.json",
+          {"parent": "minecraft:block/cube_all",
+           "textures": {"all": NS + "block/oil_shale"}})
     write("block/carburetor.json", model(CARB_TEX, carb))
     write("block/throttle_lever.json", model(THROTTLE_TEX, lever))
     write("block/air_filter.json", model(FILTER_TEX, air_filter))
@@ -973,14 +1012,23 @@ def main():
                 display=gui_scale(0.95)))
     # Centred in its slot: the in-world model deliberately sits high and to the
     # intake side of the Carburetor block, which looks lost as an icon.
+    #
+    # Turned to 20/215 rather than the standard 30/225 and scaled a little
+    # harder. The filter is a squat drum whose only distinguishing feature is
+    # the mesh band around its side; the shallower pitch shows more of that band
+    # and less of the flat lid, which is what separates it at a glance from the
+    # other round part in this mod.
     write("item/air_filter.json",
           model(FILTER_TEX, [shift(x, 0, -4.2, 8 - HORN_CZ) for x in air_filter],
-                display=gui_scale(0.9)))
+                display=gui_scale(1.0, (20, 215, 0))))
 
     # Small and centred in its slot, so the icon fills the frame the way the
-    # other bolt-on parts do.
+    # other bolt-on parts do. A steeper pitch than the default puts the board's
+    # face - the part carrying the redstone and the tube - towards the camera
+    # instead of showing it edge-on.
     write("item/redstone_control_module.json",
-          model(MODULE_TEX, control_module_elements(), display=gui_scale(1.15)))
+          model(MODULE_TEX, control_module_elements(),
+                display=gui_scale(1.2, (40, 225, 0))))
 
     # Piston Assembly is piston *and* rod, so the item says so. The rod is
     # shortened to fit the icon; the in-world rod keeps its true length.
@@ -991,10 +1039,26 @@ def main():
         el((6.5, 1.2, 5.9), (9.5, 3.0, 10.1), "rod"),
         el((6.5, 0.0, 5.9), (9.5, 1.4, 10.1), "steel"),
     ]
+    # Turned to 15 degrees of pitch: at the standard 30 the icon is looked down
+    # on, the crown fills the slot and the rod hides behind it, so a Piston
+    # Assembly and a bare piston would be the same picture. From nearer the side
+    # the rod and its little end are visible under the skirt, which is the
+    # difference the name is about.
     write("item/piston_assembly.json",
           model({**PISTON_TEX, **ROD_TEX, "particle": "piston"},
                 [shift(x, 0, 2.0, 0) for x in piston] + item_rod,
-                display=gui_scale(0.85)))
+                display=gui_scale(0.9, (15, 215, 0))))
+
+    write("item/oil_shale.json", {"parent": NS + "block/oil_shale"})
+
+    # --- flat icons ---------------------------------------------------------
+    # Everything that is a part or a material rather than a machine. See
+    # sprite_item; the two buckets are here too, so that nothing under
+    # models/ is hand-maintained any more.
+    for name in ("spark_plug", "crushed_oil_shale", "petroleum_residue",
+                 "incomplete_piston_assembly", "incomplete_carburetor",
+                 "gasoline_bucket", "engine_oil_bucket", "crude_oil_bucket"):
+        write(f"item/{name}.json", sprite_item(name))
 
 
 if __name__ == "__main__":

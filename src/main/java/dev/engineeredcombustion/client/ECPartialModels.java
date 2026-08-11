@@ -34,6 +34,17 @@ public class ECPartialModels {
 	public static final PartialModel CONNECTING_ROD_Z = block("connecting_rod_z");
 
 	/**
+	 * The Spark Plug, drawn only when one is installed in the cylinder head.
+	 *
+	 * <p>It used to be baked into the Cylinder's own model, which meant every
+	 * cylinder had a plug in it whether or not the player had ever made one.
+	 * Authored directly in Cylinder block space, exactly where the head's boss
+	 * leaves the hole for it, so it needs no transform at all - the same
+	 * arrangement as the Air Filter on the Carburetor.
+	 */
+	public static final PartialModel SPARK_PLUG = block("spark_plug");
+
+	/**
 	 * Main journals, crank webs, counterweights and the offset crank pin.
 	 * Authored at crank angle 0 - pin at bottom dead centre.
 	 */

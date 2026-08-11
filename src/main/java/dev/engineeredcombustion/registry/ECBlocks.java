@@ -36,6 +36,26 @@ public class ECBlocks {
 	public static final DeferredHolder<Block, OilSumpBlock> OIL_SUMP =
 		BLOCKS.register("oil_sump", () -> new OilSumpBlock(metal().noOcclusion()));
 
+	/**
+	 * The mod's one worldgen block: a petroleum-bearing sedimentary rock, and the
+	 * standalone Survival entry point into the whole fuel chain.
+	 *
+	 * <p>A plain {@link Block} rather than a {@code DropExperienceBlock}: it drops
+	 * <i>itself</i> and is then processed, so there is no raw-material item to give
+	 * experience for, and no silk-touch special case to get wrong. See
+	 * {@code data/engineered_combustion/loot_table/blocks/oil_shale.json}.
+	 *
+	 * <p>Modelled on vanilla stone ore rather than on this mod's metal parts:
+	 * stone sounds, stone strength, and a correct tool required, so a bare hand
+	 * cannot mine petroleum out of the ground.
+	 */
+	public static final DeferredHolder<Block, Block> OIL_SHALE =
+		BLOCKS.register("oil_shale", () -> new Block(BlockBehaviour.Properties.of()
+			.mapColor(MapColor.TERRACOTTA_GRAY)
+			.strength(3.0F, 3.0F)
+			.requiresCorrectToolForDrops()
+			.sound(SoundType.STONE)));
+
 	private static BlockBehaviour.Properties metal() {
 		return BlockBehaviour.Properties.of()
 			.mapColor(MapColor.METAL)

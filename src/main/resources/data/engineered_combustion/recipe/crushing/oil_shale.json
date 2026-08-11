@@ -1,0 +1,23 @@
+{
+  "type": "create:crushing",
+  "ingredients": [
+    {
+      "item": "engineered_combustion:oil_shale"
+    }
+  ],
+  "processing_time": 250,
+  "results": [
+    {
+      "id": "engineered_combustion:crushed_oil_shale",
+      "count": 2
+    },
+    {
+      "id": "engineered_combustion:crushed_oil_shale",
+      "chance": 0.25
+    },
+    {
+      "id": "minecraft:coal",
+      "chance": 0.1
+    }
+  ]
+}

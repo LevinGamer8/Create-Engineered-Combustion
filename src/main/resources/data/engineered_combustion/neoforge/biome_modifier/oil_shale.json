@@ -1,0 +1,6 @@
+{
+  "type": "neoforge:add_features",
+  "biomes": "#minecraft:is_overworld",
+  "features": "engineered_combustion:oil_shale",
+  "step": "underground_ores"
+}

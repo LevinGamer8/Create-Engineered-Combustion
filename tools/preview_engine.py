@@ -195,12 +195,17 @@ def rod_swing(theta_deg):
     return math.asin(CRANK_R * math.sin(math.radians(theta_deg)) / ROD_L)
 
 
-def assemble(theta, with_carb=True, flywheel=True):
+def assemble(theta, with_carb=True, flywheel=True, spark_plug=True):
     q = []
     q += quads_of("block/crankshaft.json", mk_xform())
     q += quads_of("block/crank_assembly_x.json",
                   mk_xform(pivot=(8, 8, 8), angle=math.radians(theta), axis="x"))
     q += quads_of("block/cylinder.json", mk_xform((0, 16, 0)))
+    # Its own model since it became an installable component, and drawn here for
+    # the same reason the block entity renderer draws it: a preview of a finished
+    # engine is a preview of one with a plug in it.
+    if spark_plug:
+        q += quads_of("block/spark_plug.json", mk_xform((0, 16, 0)))
     wl = wrist_local(theta)
     q += quads_of("block/piston_head.json", mk_xform((0, 16 + wl - 8.0, 0)))
     q += quads_of("block/connecting_rod_x.json",

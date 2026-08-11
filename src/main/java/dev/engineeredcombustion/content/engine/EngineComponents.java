@@ -283,6 +283,20 @@ public record EngineComponents(BlockPos crankshaftPos, Axis axis,
 		return cylinder != null && cylinder.hasPistonAssembly() && flywheel != null;
 	}
 
+	/**
+	 * Whether a Spark Plug is screwed into the cylinder head.
+	 *
+	 * <p>Deliberately <i>not</i> part of {@link #isMechanicallyValid()}. A plug is
+	 * an ignition component, not a structural one: an engine without one is a
+	 * complete, sound machine that any Create source can turn - it simply has no
+	 * way to light a charge. Folding it into structural validity would have
+	 * stopped the crank turning, which is exactly the wrong failure to show a
+	 * player.
+	 */
+	public boolean hasSparkPlug() {
+		return cylinder != null && cylinder.hasSparkPlug();
+	}
+
 	public boolean hasCarburetor() {
 		return carburetor != null;
 	}

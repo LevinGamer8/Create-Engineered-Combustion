@@ -1,0 +1,21 @@
+{
+  "type": "create:mixing",
+  "ingredients": [
+    {
+      "item": "engineered_combustion:petroleum_residue"
+    },
+    {
+      "item": "engineered_combustion:petroleum_residue"
+    },
+    {
+      "tag": "c:nuggets/zinc"
+    }
+  ],
+  "heat_requirement": "heated",
+  "results": [
+    {
+      "amount": 500,
+      "id": "engineered_combustion:engine_oil"
+    }
+  ]
+}

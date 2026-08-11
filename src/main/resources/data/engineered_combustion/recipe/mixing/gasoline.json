@@ -1,0 +1,20 @@
+{
+  "type": "create:mixing",
+  "ingredients": [
+    {
+      "type": "neoforge:tag",
+      "amount": 1000,
+      "tag": "engineered_combustion:crude_oil"
+    }
+  ],
+  "heat_requirement": "heated",
+  "results": [
+    {
+      "amount": 600,
+      "id": "engineered_combustion:gasoline"
+    },
+    {
+      "id": "engineered_combustion:petroleum_residue"
+    }
+  ]
+}
