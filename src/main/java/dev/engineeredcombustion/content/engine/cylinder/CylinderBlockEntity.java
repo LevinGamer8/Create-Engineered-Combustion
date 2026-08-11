@@ -27,19 +27,29 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Holds whether a Piston Assembly has been inserted into this cylinder.
+ * Holds which of the cylinder's two installable parts are fitted: the Piston
+ * Assembly in the bore, and the Spark Plug in the head.
  *
- * <p>A piston and a cylinder occupy the same physical volume, so the piston is
- * an <i>item</i> that gets installed into a placed cylinder rather than a second
- * block. This block entity stores that single fact and nothing else: the piston
- * has no independent state, because its position is derived from the
- * crankshaft's crank angle.
+ * <p>Both are <i>items</i> installed into a placed cylinder rather than blocks
+ * of their own, because both occupy the same physical volume the cylinder does.
+ * Neither has any independent state worth storing: the piston's position is
+ * derived from the crankshaft's crank angle, and the plug either is there or is
+ * not.
+ *
+ * <p>The two flags mean quite different things to the engine, and the difference
+ * is the whole of this milestone. The piston is <i>structural</i> - without it
+ * the engine cannot turn at all - so it feeds
+ * {@code EngineComponents#isMechanicallyValid}. The plug is not: an engine
+ * missing its plug is mechanically perfect and will be motored happily by any
+ * other Create source. It simply never lights a charge.
  */
 public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInformation {
 
 	private static final String KEY_PISTON_INSTALLED = "PistonInstalled";
+	private static final String KEY_SPARK_PLUG_INSTALLED = "SparkPlugInstalled";
 
 	private boolean pistonInstalled;
+	private boolean sparkPlugInstalled;
 
 	/** Client-side render cache only; never used for game logic. */
 	@Nullable
@@ -69,14 +79,47 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		return true;
 	}
 
+	public boolean hasSparkPlug() {
+		return sparkPlugInstalled;
+	}
+
+	/** @return false when a spark plug is already installed. */
+	public boolean installSparkPlug() {
+		if (sparkPlugInstalled)
+			return false;
+		sparkPlugInstalled = true;
+		onInstalledPartsChanged();
+		return true;
+	}
+
+	/** @return false when there was nothing to remove. */
+	public boolean removeSparkPlug() {
+		if (!sparkPlugInstalled)
+			return false;
+		sparkPlugInstalled = false;
+		onInstalledPartsChanged();
+		return true;
+	}
+
 	private void setPistonInstalled(boolean installed) {
 		pistonInstalled = installed;
+		onInstalledPartsChanged();
+	}
+
+	/**
+	 * Publishes a change to either installed part.
+	 *
+	 * <p>Both need exactly the same treatment and for the same reason: fitting or
+	 * pulling a part changes what the engine can do without changing any block
+	 * state, so the client has to be told (it draws both parts) and the crankshaft
+	 * has to be told (it decides whether the engine may turn, and now whether it
+	 * may spark). Neither would ever hear about it otherwise.
+	 */
+	private void onInstalledPartsChanged() {
 		setChanged();
 		if (level == null || level.isClientSide)
 			return;
 		level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
-		// Installing or removing the piston changes structural validity without
-		// changing any block state, so the crankshaft has to be told explicitly.
 		if (level.getBlockEntity(EngineComponents.crankshaftPosFromCylinder(worldPosition)) instanceof CrankshaftBlockEntity crankshaft)
 			crankshaft.onSurroundingsChanged();
 	}
@@ -137,12 +180,17 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	protected void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {
 		super.loadAdditional(tag, registries);
 		pistonInstalled = tag.getBoolean(KEY_PISTON_INSTALLED);
+		// Absent on a cylinder saved before this milestone, and getBoolean answers
+		// false for a missing key - so an existing world loads its engines with no
+		// plug fitted, which is exactly right: nobody has ever installed one.
+		sparkPlugInstalled = tag.getBoolean(KEY_SPARK_PLUG_INSTALLED);
 	}
 
 	@Override
 	public void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
 		super.saveAdditional(tag, registries);
 		tag.putBoolean(KEY_PISTON_INSTALLED, pistonInstalled);
+		tag.putBoolean(KEY_SPARK_PLUG_INSTALLED, sparkPlugInstalled);
 	}
 
 	@Override
@@ -158,7 +206,14 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 
 	// --- goggle overlay -----------------------------------------------------
 
-	/** Deliberately concise - the full engine diagnostic lives on the crankshaft. */
+	/**
+	 * Deliberately concise - the full engine diagnostic lives on the crankshaft.
+	 *
+	 * <p>This is where the <i>installed components</i> of an engine are listed,
+	 * and it is the reason the crankshaft's overlay does not have to grow a line
+	 * per part: a player asking "what is fitted to this cylinder" looks at the
+	 * cylinder.
+	 */
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
 		ECLang.translate("gui.cylinder")
@@ -169,6 +224,14 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 			ECLang.translate(pistonInstalled ? "gui.value.installed"
 				: "gui.value.missing")
 				.style(pistonInstalled ? ChatFormatting.GREEN : ChatFormatting.RED)
+				.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
+		ECLang.translate("gui.spark_plug",
+			ECLang.translate(sparkPlugInstalled ? "gui.value.installed"
+				: "gui.value.missing")
+				.style(sparkPlugInstalled ? ChatFormatting.GREEN : ChatFormatting.RED)
 				.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);

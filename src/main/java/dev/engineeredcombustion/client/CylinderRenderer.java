@@ -19,8 +19,13 @@ import net.minecraft.core.Direction.AxisDirection;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Draws the Piston Assembly - piston <i>and</i> connecting rod - at the position
- * the crank angle dictates.
+ * Draws the cylinder's installed parts: the Spark Plug in the head, and the
+ * Piston Assembly - piston <i>and</i> connecting rod - at the position the crank
+ * angle dictates.
+ *
+ * <p>Both are drawn here rather than baked into the Cylinder's block model
+ * because both are optional. A plug baked into the casting is a plug every
+ * cylinder has, which is precisely what stopped it being a component.
  *
  * <p>There is no interpolation state and no animation timer here. Both parts are
  * a pure function of the crank angle the engine simulation owns, evaluated with
@@ -47,6 +52,17 @@ public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity
 	@Override
 	public void render(CylinderBlockEntity be, float partialTicks, PoseStack ms, MultiBufferSource buffer, int light,
 		int overlay) {
+		BlockState state = be.getBlockState();
+		VertexConsumer vertices = buffer.getBuffer(RenderType.solid());
+
+		// Independent of the piston: a head can have a plug in it with nothing in
+		// the bore, and a bore can have a piston in it with no plug in the head.
+		// Both are real states a player can build, and both have to draw correctly.
+		if (be.hasSparkPlug())
+			CachedBuffers.partial(ECPartialModels.SPARK_PLUG, state)
+				.light(light)
+				.renderInto(ms, vertices);
+
 		if (!be.hasPistonAssembly())
 			return;
 
@@ -54,9 +70,6 @@ public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity
 		// Both models put the wrist pin at the same height, so one offset moves
 		// the piston and the rod together and they cannot come apart.
 		float lift = (CrankMath.wristPinHeight(crankAngle) - CrankMath.WRIST_PIN_MODEL_HEIGHT) / 16.0F;
-
-		BlockState state = be.getBlockState();
-		VertexConsumer vertices = buffer.getBuffer(RenderType.solid());
 
 		CachedBuffers.partial(ECPartialModels.PISTON, state)
 			.translate(0, lift, 0)

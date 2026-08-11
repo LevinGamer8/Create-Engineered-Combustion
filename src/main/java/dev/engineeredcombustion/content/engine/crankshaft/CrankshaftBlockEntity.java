@@ -119,6 +119,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private static final String KEY_START_PROGRESS = "StartProgress";
 	private static final String KEY_START_REQUIRED = "StartRequired";
 	private static final String KEY_FUEL_AVAILABLE = "FuelAvailable";
+	private static final String KEY_SPARK_PLUG = "SparkPlug";
 	private static final String KEY_LUBRICATION = "Lubrication";
 	private static final String KEY_OIL_WEAR = "OilWear";
 	private static final String KEY_SPARK_EVENT = "SparkEvent";
@@ -341,12 +342,14 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		boolean structureValidBefore = engine.isStructureValid();
 		int startProgressBefore = engine.getStartProgress();
 		boolean fuelBefore = engine.isFuelAvailable();
+		boolean sparkPlugBefore = engine.isSparkPlugInstalled();
 		LubricationState lubricationBefore = engine.getLubrication();
 		int sparkEventBefore = engine.getSparkEventId();
 		int combustionEventBefore = engine.getCombustionEventId();
 
 		EngineInputs inputs = new EngineInputs(tickComponents.isMechanicallyValid(), control.ignitionEnabled(),
-			flywheel != null && flywheel.hasSource(), control.throttle(), readLoadFactor(), speedLimit());
+			tickComponents.hasSparkPlug(), flywheel != null && flywheel.hasSource(), control.throttle(),
+			readLoadFactor(), speedLimit());
 		boolean generatedSpeedChanged = engine.tickSimulation(inputs, fuelSupply, oilSupply, random);
 
 		if (generatedSpeedChanged && flywheel != null)
@@ -371,6 +374,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (generatedSpeedChanged || eventFired || signalBefore != redstoneSignal
 			|| phaseBefore != engine.getPhase() || structureValidBefore != engine.isStructureValid()
 			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()
+			|| sparkPlugBefore != engine.isSparkPlugInstalled()
 			|| lubricationBefore != engine.getLubrication()) {
 			sync();
 		} else if (engine.getMechanicalRpm() != 0.0F && --resyncCountdown <= 0) {
@@ -957,6 +961,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		redstoneSignal = tag.getInt(KEY_REDSTONE_SIGNAL);
 		engine.setStartAttempt(tag.getInt(KEY_START_PROGRESS), tag.getInt(KEY_START_REQUIRED));
 		engine.setFuelAvailable(tag.getBoolean(KEY_FUEL_AVAILABLE));
+		// Carried for the client's benefit only - the overlay explains a dead engine
+		// with it, and the cylinder that owns the truth may be a block the client
+		// has not been told about yet. The server overwrites it from the world on
+		// the very next tick.
+		engine.setSparkPlugInstalled(tag.getBoolean(KEY_SPARK_PLUG));
 		engine.setLubrication(LubricationState.byId(tag.getString(KEY_LUBRICATION)));
 		// Persisted so a chunk reload does not hand the player free oil by
 		// discarding the revolutions already banked towards the next draw.
@@ -983,6 +992,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		tag.putInt(KEY_START_PROGRESS, engine.getStartProgress());
 		tag.putInt(KEY_START_REQUIRED, engine.getRequiredStartCycles());
 		tag.putBoolean(KEY_FUEL_AVAILABLE, engine.isFuelAvailable());
+		tag.putBoolean(KEY_SPARK_PLUG, engine.isSparkPlugInstalled());
 		tag.putString(KEY_LUBRICATION, engine.getLubrication()
 			.getId());
 		tag.putInt(KEY_OIL_WEAR, engine.getCombustionEventsSinceOilDraw());
@@ -1050,6 +1060,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		addThrottleLine(tooltip, components.carburetor(), control);
 		addControlLines(tooltip, control);
 		addFlywheelWarning(tooltip, components);
+		addSparkPlugWarning(tooltip, components);
 		addFuelLines(tooltip, components.carburetor());
 		addLubricationLines(tooltip, components.oilSump());
 
@@ -1167,6 +1178,30 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	}
 
 	/**
+	 * The missing plug, and <b>only</b> when it is missing.
+	 *
+	 * <p>A fitted plug is the normal state of every working engine, so a line
+	 * saying so on every running engine's overlay would be pure noise - which is
+	 * why the full inventory of installed parts lives on the <i>Cylinder</i>'s
+	 * overlay, where a player goes to ask exactly that question. What belongs
+	 * here is the fault, because this is the overlay a player reads when the
+	 * engine will not start.
+	 *
+	 * <p>Skipped on a cylinder that is missing altogether: the structure lines
+	 * already say the engine is incomplete, and "no spark plug" about an engine
+	 * with no cylinder is the less useful of the two facts.
+	 */
+	private void addSparkPlugWarning(List<Component> tooltip, EngineComponents components) {
+		if (components.cylinder() == null || components.hasSparkPlug())
+			return;
+		ECLang.translate("gui.spark_plug", ECLang.translate("gui.value.missing")
+			.style(ChatFormatting.RED)
+			.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+	}
+
+	/**
 	 * Fuel, distinguishing the three cases the player actually needs told apart:
 	 * no Carburetor at all, a Carburetor that is empty, and one with fuel in it.
 	 *
@@ -1278,6 +1313,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// resolver found the one the player actually built.
 		diagnostic(tooltip, "flywheel_side", ECLang.translate(flywheelSideKey(components.flywheelPlacement()))
 			.style(components.hasFlywheelConflict() ? ChatFormatting.RED : ChatFormatting.WHITE));
+		// Resolved from the world like the structure line above, not from the
+		// synchronised simulation flag, so it is the same answer the server will
+		// use on its next tick rather than the one it used on its last.
+		boolean sparkPlug = components.hasSparkPlug();
+		diagnostic(tooltip, "spark_plug", ECLang
+			.translate(sparkPlug ? "gui.value.installed" : "gui.value.missing")
+			.style(sparkPlug ? ChatFormatting.GREEN : ChatFormatting.RED));
 		diagnostic(tooltip, "control_module", ECLang
 			.translate(controlModuleInstalled ? "gui.value.installed" : "gui.value.missing")
 			.style(controlModuleInstalled ? ChatFormatting.GREEN : ChatFormatting.DARK_GRAY));
@@ -1381,6 +1423,19 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 				.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
+
+		// The one goggle-less component reading, and only when it is both missing
+		// and the reason nothing is happening. Someone who has switched the
+		// ignition on is trying to run the engine; without this they would be told
+		// the ignition is On, hear it turn over, and have nothing at all to explain
+		// why it never fires. With the ignition off, an absent plug is not yet the
+		// player's problem, and saying so would be the clutter this overlay avoids.
+		if (ignition && !engineComponents().hasSparkPlug())
+			ECLang.translate("gui.spark_plug", ECLang.translate("gui.value.missing")
+				.style(ChatFormatting.RED)
+				.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
 
 		// Only when automation is actually holding the controls, and only that much:
 		// which mode it is and how strong the signal is are goggle readings. Without

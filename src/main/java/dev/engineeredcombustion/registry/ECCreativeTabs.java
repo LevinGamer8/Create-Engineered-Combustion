@@ -23,6 +23,7 @@ public class ECCreativeTabs {
 				output.accept(ECItems.CRANKSHAFT.get());
 				output.accept(ECItems.CYLINDER.get());
 				output.accept(ECItems.PISTON_ASSEMBLY.get());
+				output.accept(ECItems.SPARK_PLUG.get());
 				output.accept(ECItems.FLYWHEEL.get());
 				output.accept(ECItems.CARBURETOR.get());
 				output.accept(ECItems.AIR_FILTER.get());

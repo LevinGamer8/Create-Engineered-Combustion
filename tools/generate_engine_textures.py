@@ -625,6 +625,71 @@ def t_combustion_flash():
 
 
 # --------------------------------------------------------------------------
+# item icons
+# --------------------------------------------------------------------------
+# Flat 16x16 sprites, for the parts and materials that are too small to read as
+# geometry in an inventory slot. Each one is drawn from an explicit row table so
+# the silhouette is designed rather than emergent - a spark plug that is not
+# instantly a spark plug has failed at the only job an icon has.
+def _row(px, y, x0, x1, color):
+    """One inclusive run of pixels. The unit every icon below is drawn in."""
+    for x in range(max(0, x0), min(len(px[0]), x1 + 1)):
+        px[y][x] = color
+
+
+def _shaded_row(px, y, x0, x1, base, lit=26, dark=-30):
+    """A run with a lit left edge and a shadowed right one, i.e. a round body."""
+    for x in range(max(0, x0), min(len(px[0]), x1 + 1)):
+        if x == x0:
+            px[y][x] = shade(base, lit)
+        elif x == x1:
+            px[y][x] = shade(base, dark)
+        elif x == x0 + 1:
+            px[y][x] = shade(base, lit // 2)
+        else:
+            px[y][x] = base
+
+
+def t_item_spark_plug():
+    """The Spark Plug, standing upright.
+
+    Five parts from the top down - brass terminal, ribbed porcelain insulator,
+    the spanner hex, the threaded shell, and the electrode with its ground strap
+    - because that stack of widths *is* the silhouette. The hex is the widest
+    thing in the sprite on purpose: a plug narrowing, flaring and narrowing
+    again is recognisable at 16 pixels in a way a plain rod never is.
+    """
+    px = blank(size=ITEM)
+    steel = (150, 156, 165, 255)
+
+    _shaded_row(px, 1, 6, 9, shade(BRASS, 18))          # terminal nut
+    _shaded_row(px, 2, 6, 9, BRASS)
+    _shaded_row(px, 3, 6, 9, shade(BRASS, -30))         # collar under it
+
+    # Insulator: three ribs, each one texel wider than the body between them.
+    for y in range(4, 10):
+        rib = y % 2 == 0
+        _shaded_row(px, y, 4 if rib else 5, 11 if rib else 10,
+                    shade(CERAMIC, 10) if rib else CERAMIC)
+
+    _shaded_row(px, 10, 3, 12, shade(steel, 14))        # spanner hex
+    _shaded_row(px, 11, 3, 12, shade(steel, -18))
+
+    for y in (12, 13):                                   # threaded shell
+        _shaded_row(px, y, 5, 10, steel)
+        for x in range(5, 11, 2):                        # the thread itself
+            px[y][x] = shade(steel, -34)
+
+    _row(px, 14, 5, 10, shade(steel, -40))               # shell mouth
+    _row(px, 15, 7, 8, shade(steel, 30))                 # centre electrode
+    px[15][5] = px[15][10] = shade(steel, -20)           # ground strap
+    px[14][7] = px[14][8] = shade(CERAMIC, -6)           # insulator nose
+    return px
+
+
+
+
+# --------------------------------------------------------------------------
 # fluids
 # --------------------------------------------------------------------------
 # Both fluids used to be a single flat colour repeated 256 times, with the
@@ -800,6 +865,7 @@ TEXTURES = {
     "block/air_filter_mesh": t_air_filter_mesh,
     "block/control_module": t_control_module,
     "block/combustion_flash": t_combustion_flash,
+    "item/spark_plug": t_item_spark_plug,
 }
 
 # Sprite name -> (pixels, animation frametime or None). Still fluids idle;

@@ -66,6 +66,18 @@ public class ECItems {
 		ITEMS.register("redstone_control_module", () -> new Item(new Item.Properties().stacksTo(16)));
 
 	/**
+	 * The ignition component, screwed <i>into</i> a placed Cylinder's head.
+	 *
+	 * <p>An item for the same reason the Piston Assembly is one: a spark plug
+	 * occupies a hole in a cylinder head, not a block of its own. Unlike the Air
+	 * Filter and the Redstone Control Module it is not optional - a gasoline
+	 * engine with no plug turns over perfectly well and never fires. See
+	 * {@code EngineState#tickSimulation}.
+	 */
+	public static final DeferredHolder<Item, Item> SPARK_PLUG =
+		ITEMS.register("spark_plug", () -> new Item(new Item.Properties().stacksTo(16)));
+
+	/**
 	 * Vanilla's BucketItem needs the Fluid itself, not a supplier. That is safe
 	 * here because the FLUID registry is populated before the ITEM registry, so
 	 * the fluid already exists by the time this supplier runs.

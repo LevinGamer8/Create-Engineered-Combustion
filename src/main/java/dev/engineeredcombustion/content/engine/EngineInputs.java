@@ -13,19 +13,24 @@ package dev.engineeredcombustion.content.engine;
  * crankshaft block entity does it - but the simulation only ever sees plain
  * numbers and flags.
  *
- * @param structureValid   whether the engine is assembled well enough to turn
- * @param ignitionEnabled  whether the ignition switch is on
- * @param externallyDriven whether Create currently drives the engine from
- *                         somewhere other than the engine itself
- * @param throttle         main throttle opening, {@code [0, 1]}
- * @param loadFactor       kinetic network stress over capacity, {@code [0, 1]};
- *                         0 when there is no network or no capacity yet
- * @param speedLimitRpm    highest speed the engine may reach or publish, already
- *                         reconciled with Create's configured
- *                         {@code maxRotationSpeed}
+ * @param structureValid     whether the engine is assembled well enough to turn
+ * @param ignitionEnabled    whether the ignition switch is on
+ * @param sparkPlugInstalled whether a Spark Plug is fitted to the cylinder head.
+ *                           Separate from {@code structureValid} on purpose: a
+ *                           plug is what makes the ignition able to produce a
+ *                           spark, and has nothing to do with whether the engine
+ *                           can be turned
+ * @param externallyDriven   whether Create currently drives the engine from
+ *                           somewhere other than the engine itself
+ * @param throttle           main throttle opening, {@code [0, 1]}
+ * @param loadFactor         kinetic network stress over capacity, {@code [0, 1]};
+ *                           0 when there is no network or no capacity yet
+ * @param speedLimitRpm      highest speed the engine may reach or publish,
+ *                           already reconciled with Create's configured
+ *                           {@code maxRotationSpeed}
  */
-public record EngineInputs(boolean structureValid, boolean ignitionEnabled, boolean externallyDriven, float throttle,
-	float loadFactor, float speedLimitRpm) {
+public record EngineInputs(boolean structureValid, boolean ignitionEnabled, boolean sparkPlugInstalled,
+	boolean externallyDriven, float throttle, float loadFactor, float speedLimitRpm) {
 
 	public EngineInputs {
 		throttle = EngineTuning.clamp01(throttle);
