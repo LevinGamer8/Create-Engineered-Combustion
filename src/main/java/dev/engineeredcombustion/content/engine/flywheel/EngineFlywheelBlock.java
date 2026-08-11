@@ -44,7 +44,16 @@ public class EngineFlywheelBlock extends HorizontalAxisKineticBlock implements I
 		return super.getStateForPlacement(context);
 	}
 
-	/** The flywheel generates; it never loads the network. */
+	/**
+	 * Keeps the static impact figure off the <i>item</i> tooltip.
+	 *
+	 * <p>The flywheel does have a registered impact now - the parasitic cost of
+	 * motoring a dead engine - but it applies only while the engine is not
+	 * generating, so printing it on the item beside "Generated Speed" would
+	 * describe a state the item cannot be in. The live figure is still shown, by
+	 * Create's own goggle overlay, on exactly the engines it is actually being
+	 * charged to.
+	 */
 	@Override
 	public boolean hideStressImpact() {
 		return true;

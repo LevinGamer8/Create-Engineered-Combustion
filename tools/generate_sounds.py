@@ -11,39 +11,70 @@ project. Run it to regenerate them:
 
 Output goes to src/main/resources/assets/engineered_combustion/sounds/.
 
-How the engine sound is built
------------------------------
-A single-cylinder four-stroke fires once every two revolutions, so at idle the
-ear hears a train of widely spaced, individually distinguishable events rather
-than a hum. Each event is layered:
+Two layers, because the engine has two voices
+---------------------------------------------
+The mod plays this engine as a *hybrid*: one continuous mechanical loop, plus one
+short one-shot per combustion event that actually happened. So the assets come in
+two families and they must not contain each other.
 
-  * cylinder thump   - a short, downward-swept low sine. The pressure pulse.
-  * exhaust bark     - band-limited noise, fast decay. The sound leaving the port.
-  * mechanical clack - a brief high transient a little after the bark, standing in
-                       for valvetrain and piston slap.
+  engine_mechanical      The rotating machine and nothing else - bearings, the
+                         flywheel, and the piston pumping against compression
+                         once per revolution. It is pitched by mechanical RPM and
+                         plays whenever the crank turns, including when the engine
+                         is dead and being spun by something else. It therefore
+                         contains NO firing whatsoever: a single trace of
+                         combustion in here would make a fuel-starved engine sound
+                         like it was still burning.
+
+  engine_fire_1..3       One charge burning. Three interchangeable variants, since
+                         the game picks one at random per event with a little
+                         pitch and volume spread - a single-cylinder engine is
+                         never metronomic, and one sample on a metronome is
+                         exactly what that sounds like.
+
+  engine_combustion_loop The aggregate of firing events, for a future engine that
+                         fires too fast to hear individually. Unused at the
+                         current 3.2 Hz maximum.
+
+A combustion pulse is built from three layers, in this order and with these
+weights on purpose:
+
+  * pressure body    - a low sine sweeping downward as the charge expands. It
+                       LEADS, and it has a few milliseconds of attack rather than
+                       starting instantaneously. A hard transient at sample zero
+                       is what makes a synthesised bang read as a gunshot.
+  * exhaust bark     - band-limited noise following the body out of the port,
+                       with a fast decay. No long tail: a long noise tail reads as
+                       an explosion.
+  * mechanical tick  - a brief high resonance a few milliseconds later, standing
+                       in for piston slap and valve gear. Quiet - it is texture,
+                       and at any real level it turns the pulse into a click.
 
 Those layers are then driven through resonators tuned to a few fixed frequencies,
 which is what gives the engine a consistent metallic *body* rather than sounding
-like separate noises played together. Cycle-to-cycle amplitude and timing are
-varied slightly, because a single-cylinder engine is never metronomic.
+like separate noises played together, and what makes the mechanical loop and the
+pulses audibly the same machine.
 
-Two details that matter for quality:
+Three details that matter for quality:
 
-  * The loops place their pulses with wrap-around, so the decay of the last event
+  * The loops place their events with wrap-around, so the decay of the last one
     lands at the start of the buffer.
   * IIR filters are run over three tiled copies of a loop and only the middle
     copy is kept. Filtering a loop linearly leaves a start-up transient at sample
     zero, which is audible as a tick every time the loop repeats.
+  * Every sound draws from its own RNG, seeded from its name. Sounds can then be
+    added, removed or reordered without silently re-rolling the noise every other
+    sound is built from.
 
 Mono throughout: Minecraft only applies distance attenuation to mono sounds, so a
 stereo file would play at full volume everywhere and break positional audio.
 
-These remain placeholders in the sense that a recorded or professionally designed
-engine would still be better, but they are built to be usable rather than merely
-indicative.
+Everything here is synthesised from noise, impulses and filters. Nothing is
+sampled, recorded or derived from any other work.
 """
 
 import os
+import zlib
 
 import numpy as np
 import soundfile as sf
@@ -52,6 +83,7 @@ SR = 44100
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "main", "resources",
                    "assets", "engineered_combustion", "sounds")
 
+# Replaced per sound by main(), so each asset is reproducible on its own.
 rng = np.random.default_rng(0x0C0FFEE)
 
 
@@ -130,13 +162,26 @@ def add_at(buf, start, chunk):
 
 # ------------------------------------------------------------------ layers
 
-def cylinder_thump(f_start=58.0, f_end=38.0, decay=0.055, length=0.30):
-    """The pressure pulse: a low sine sweeping down as the charge expands."""
+def cylinder_thump(f_start=58.0, f_end=38.0, decay=0.055, length=0.30, attack=0.0):
+    """
+    The pressure pulse: a low sine sweeping down as the charge expands.
+
+    `attack` gives the pulse a short rise instead of starting at full amplitude on
+    sample zero. That rise is the single most important difference between "an
+    engine firing" and "a gunshot": real cylinder pressure takes a few
+    milliseconds to build, and an instantaneous onset is what the ear labels a
+    weapon.
+    """
     n = int(SR * length)
     t = np.arange(n) / SR
     freq = f_end + (f_start - f_end) * np.exp(-t / (decay * 0.7))
     phase = 2.0 * np.pi * np.cumsum(freq) / SR
-    return np.sin(phase) * np.exp(-t / decay)
+    envelope = np.exp(-t / decay)
+    if attack > 0.0:
+        # Raised cosine, so the rise has no corner in it to click on.
+        k = max(1, int(SR * attack))
+        envelope[:k] *= 0.5 - 0.5 * np.cos(np.linspace(0.0, np.pi, k))
+    return np.sin(phase) * envelope
 
 
 def exhaust_bark(lo=180.0, hi=1600.0, decay=0.030, length=0.18):
@@ -172,10 +217,14 @@ def body_periodic(x, mix=0.75):
 
 
 def combustion_event(strength=1.0, thump_f=58.0, bark_level=0.55, clack_level=0.22):
-    """One firing event, before it is placed in a buffer."""
+    """
+    One firing event, before it is placed in a buffer. Used by the aggregate
+    combustion loop; the standalone pulses have their own, more carefully shaped
+    builder in `combustion_pulse`.
+    """
     n = int(SR * 0.30)
     out = np.zeros(n)
-    add_at(out, 0, cylinder_thump(f_start=thump_f, f_end=thump_f * 0.66))
+    add_at(out, 0, cylinder_thump(f_start=thump_f, f_end=thump_f * 0.66, attack=0.003))
     add_at(out, SR * 0.002, exhaust_bark() * bark_level)
     add_at(out, SR * 0.030, mechanical_clack() * clack_level)
     return out * strength
@@ -201,74 +250,93 @@ def declick(x, ms=6.0):
 
 # ------------------------------------------------------------------ loops
 
-def engine_running():
+def engine_mechanical():
     """
-    The engine at its reference speed, which the pitch mapping treats as idle.
+    The rotating machine, with no combustion anywhere in it.
 
-    8 firing events per second: slow enough that they stay individually audible
-    at the bottom of the pitch range and blend as pitch rises, which is the
-    single-cylinder character the engine is supposed to have.
+    This is the layer that plays whenever the crank turns - cranked by hand,
+    running, coasting down, or being motored by another engine on the network -
+    so it has to be the sound of an engine that is NOT firing. Anything that
+    reads as a bang would make a dead engine sound alive, which is precisely the
+    confusion the two-layer split exists to remove.
+
+    Built from what actually makes noise while a crank goes round:
+
+      * bearing and flywheel rumble  - low, continuous, the bed of the whole thing
+      * compression swell            - once per revolution the piston comes up
+                                       against a closed cylinder, the load builds,
+                                       and it releases over top dead centre. This
+                                       is the "rrrr ... rrrr" of cranking
+      * over-centre knock            - a soft mechanical thud as it goes over, not
+                                       a firing event: no bark, no low pressure
+                                       body, and about a fifth of the level
+      * gear whirr                   - a quiet fixed tone, integer cycles so it
+                                       loops seamlessly
+
+    One revolution per second across a two-second loop: two revolutions exactly,
+    so it wraps, and close enough to the engine's 1.07 rev/s idle that the swell
+    rate reads as this engine at its reference speed.
     """
-    fire_hz = 8.0
-    dur = 1.0                        # 8 events exactly -> seamless
+    rev_hz = 1.0
+    dur = 2.0                        # 2 revolutions exactly -> seamless
+    n = int(SR * dur)
+    period = SR / rev_hz
+    buf = np.zeros(n)
+    t = np.arange(n) / SR
+
+    # Compression: a slow asymmetric build, then a fast release over the top.
+    phase = (t * rev_hz) % 1.0
+    load = np.where(phase < 0.72, (phase / 0.72) ** 1.8, np.exp(-(phase - 0.72) / 0.05))
+
+    rumble = periodic(noise(n), lambda v: lowpass(v, 220.0))
+    buf += rumble * (0.22 + 0.34 * load)
+
+    # A low tone that sags as the compression load comes on, like the crank
+    # being held back - and recovers as it goes over.
+    drag_f = 44.0 - 8.0 * load
+    buf += np.sin(2.0 * np.pi * np.cumsum(drag_f) / SR) * (0.12 + 0.22 * load)
+
+    for i in range(int(round(dur * rev_hz))):
+        # Deliberately mid-range and quiet. A low thump here would be a firing
+        # pulse, and this layer must never contain one.
+        add_wrapped(buf, i * period + 0.73 * period,
+                    mechanical_clack(decay=0.016, length=0.10, tone=1150.0) * 0.34)
+        add_wrapped(buf, i * period + 0.75 * period,
+                    mechanical_clack(decay=0.030, length=0.14, tone=430.0) * 0.20)
+
+    # Gear whirr: 156 cycles over 2 s, an integer, so it wraps.
+    buf += np.sin(2.0 * np.pi * 78.0 * t) * 0.05 * (0.6 + 0.4 * load)
+
+    return normalize(body_periodic(buf, 0.5), 0.58)
+
+
+def engine_combustion_loop():
+    """
+    Firing so fast the individual events have merged - the aggregate layer.
+
+    Unused by the current engine, which tops out at 3.2 events a second, and
+    kept deliberately plain: it exists so that a faster engine, a four-stroke or
+    a second cylinder is a tuning change rather than an audio rewrite. The game
+    fades it in only above 12 Hz, thinning the one-shots out as it does.
+
+    16 events per second over one second: seamless, and fast enough that the
+    events genuinely fuse instead of sounding like a fast train of separate bangs.
+    """
+    fire_hz = 16.0
+    dur = 1.0
     n = int(SR * dur)
     period = SR / fire_hz
     buf = np.zeros(n)
 
     for i in range(int(round(dur * fire_hz))):
-        # Deterministic per-cycle variation. A metronomic engine sounds synthetic.
-        strength = 1.0 + 0.09 * np.sin(i * 2.399) + 0.04 * np.sin(i * 5.1)
-        jitter = 0.0018 * SR * np.sin(i * 1.77)
-        thump_f = 58.0 * (1.0 + 0.03 * np.sin(i * 3.1))
+        strength = 0.55 * (1.0 + 0.10 * np.sin(i * 2.399) + 0.05 * np.sin(i * 5.1))
+        jitter = 0.0012 * SR * np.sin(i * 1.77)
         add_wrapped(buf, i * period + jitter,
-                    combustion_event(strength=strength, thump_f=thump_f))
+                    combustion_event(strength=strength, thump_f=62.0, bark_level=0.34,
+                                     clack_level=0.12))
 
-    # Intake and mechanical bed, ducked between events so it fills the gaps
-    # instead of masking the rhythm.
-    t = np.arange(n) / SR
-    bed = periodic(noise(n), lambda v: lowpass(v, 320.0)) * 0.20
-    bed *= 0.65 + 0.35 * np.sin(2.0 * np.pi * fire_hz * t + 1.6)
-    buf += bed
-
-    return normalize(body_periodic(buf, 0.62), 0.80)
-
-
-def engine_cranking():
-    """
-    Being turned over without catching.
-
-    Built around compression rather than around firing: each revolution the load
-    rises as the piston comes up on the compression stroke, then releases over
-    the top with a mechanical knock. That swell-and-release is what makes
-    cranking sound like effort instead of like a motor.
-    """
-    crank_hz = 5.0
-    dur = 0.8                        # 4 revolutions, and 144 whirr cycles - both integers
-    n = int(SR * dur)
-    period = SR / crank_hz
-    buf = np.zeros(n)
-    t = np.arange(n) / SR
-
-    # Compression load: a slow asymmetric swell once per revolution.
-    phase = (t * crank_hz) % 1.0
-    load = np.where(phase < 0.72, (phase / 0.72) ** 1.8, np.exp(-(phase - 0.72) / 0.06))
-
-    rumble = periodic(noise(n), lambda v: lowpass(v, 240.0))
-    buf += rumble * (0.18 + 0.42 * load)
-
-    # A low tone that sags under compression, like the crank slowing.
-    drag_f = 46.0 - 9.0 * load
-    buf += np.sin(2.0 * np.pi * np.cumsum(drag_f) / SR) * (0.10 + 0.26 * load)
-
-    # Knock as each compression releases over top dead centre.
-    for i in range(int(round(dur * crank_hz))):
-        add_wrapped(buf, i * period + 0.72 * period, mechanical_clack(decay=0.014, length=0.09, tone=1300.0) * 0.5)
-        add_wrapped(buf, i * period + 0.74 * period, cylinder_thump(f_start=40.0, f_end=30.0, decay=0.035) * 0.35)
-
-    # Starter whirr, integer cycles so it loops.
-    buf += np.sin(2.0 * np.pi * 180.0 * t) * 0.05 * (0.6 + 0.4 * load)
-
-    return normalize(body_periodic(buf, 0.5), 0.62)
+    buf += periodic(noise(n), lambda v: lowpass(v, 300.0)) * 0.14
+    return normalize(body_periodic(buf, 0.60), 0.72)
 
 
 # ------------------------------------------------------------------ one-shots
@@ -291,128 +359,197 @@ def engine_spark():
     return normalize(declick(tick * 0.7 + ring, ms=1.5), 0.5)
 
 
-def engine_fire_attempt():
+def combustion_pulse(sweep_from, sweep_to, decay, bark_hi, bark_decay, tick_tone, tick_level, peak):
     """
-    One failed-to-catch cough.
+    One charge burning: the PUT.
 
-    Weighted towards low-frequency body with a soft attack. A hard transient here
-    reads as a gunshot rather than as combustion, so the thump leads and the
-    noise follows it rather than the other way round.
+    The single most important asset in the mod, because it is the engine's voice.
+    Every one of these the player hears is one real combustion event, so this has
+    to sound like a cylinder firing and like nothing else:
+
+      * it must not be a GUNSHOT      - so the pressure body leads with a 4 ms
+                                        raised-cosine attack instead of an
+                                        instantaneous onset, and there is no
+                                        broadband crack at sample zero
+      * it must not be an EXPLOSION   - so the noise decays inside 40 ms and there
+                                        is no long tail
+      * it must not be a CLICK        - so the high transient sits 7 ms in, at a
+                                        fifth of the level, behind the body
+      * it must not be a BASS DRUM    - so the low body SWEEPS downward as the
+                                        charge expands rather than holding a
+                                        pitch, and it is band-limited noise, not a
+                                        pure tone, that carries it out of the port
+      * it must not be an ELECTRIC    - so nothing here is periodic; every layer
+                        MOTOR           is an impulse response
+
+    The variants differ only in sweep, brightness and tick colour. They are the
+    same cylinder firing under slightly different conditions, which is what
+    cycle-to-cycle variation in a real single is.
     """
-    n = int(SR * 0.42)
+    n = int(SR * 0.34)
     buf = np.zeros(n)
-    add_at(buf, 0, cylinder_thump(f_start=54.0, f_end=32.0, decay=0.075, length=0.40) * 1.0)
-    add_at(buf, SR * 0.004, exhaust_bark(lo=140.0, hi=1200.0, decay=0.045, length=0.25) * 0.5)
-    add_at(buf, SR * 0.035, mechanical_clack(decay=0.012, length=0.06, tone=1500.0) * 0.28)
 
-    # The trailing hiss is what makes it read as "did not take".
+    # 1. Pressure body. Leads, sweeps down, and rises rather than starting.
+    add_at(buf, 0, cylinder_thump(f_start=sweep_from, f_end=sweep_to, decay=decay,
+                                  length=0.30, attack=0.004))
+
+    # 2. Gas leaving the port, just behind the pressure peak. Short.
+    add_at(buf, SR * 0.005, exhaust_bark(lo=170.0, hi=bark_hi, decay=bark_decay, length=0.16) * 0.46)
+
+    # 3. Piston slap / valve gear. Texture only.
+    add_at(buf, SR * 0.007, mechanical_clack(decay=0.007, length=0.05, tone=tick_tone) * tick_level)
+
+    # A short breath of low noise underneath, which is what stops the body from
+    # sounding like a synthesised tone with things stuck on it.
     t = np.arange(n) / SR
-    tail = highpass(lowpass(noise(n), 2200.0), 400.0) * np.exp(-t / 0.085) * 0.22
-    buf += tail
-    return normalize(declick(body(buf, 0.6)), 0.72)
+    buf += lowpass(noise(n), 240.0) * np.exp(-t / 0.045) * 0.18
+
+    return normalize(declick(body(buf, 0.66), ms=4.0), peak)
+
+
+def engine_fire_1():
+    """The baseline pulse: mid sweep, moderately bright port."""
+    return combustion_pulse(sweep_from=76.0, sweep_to=41.0, decay=0.062, bark_hi=1500.0,
+                            bark_decay=0.026, tick_tone=2300.0, tick_level=0.20, peak=0.76)
+
+
+def engine_fire_2():
+    """A slightly softer cycle: lower sweep, duller port, a touch longer."""
+    return combustion_pulse(sweep_from=70.0, sweep_to=37.0, decay=0.070, bark_hi=1250.0,
+                            bark_decay=0.030, tick_tone=1950.0, tick_level=0.16, peak=0.73)
+
+
+def engine_fire_3():
+    """A crisper cycle: higher sweep, brighter port, faster decay."""
+    return combustion_pulse(sweep_from=82.0, sweep_to=45.0, decay=0.055, bark_hi=1800.0,
+                            bark_decay=0.023, tick_tone=2650.0, tick_level=0.23, peak=0.78)
 
 
 def engine_start():
     """
-    The catch: two hesitant kicks, then the firing rate runs up and settles at
-    the running loop's 8 Hz so the loop can take over without a seam in character.
+    The catch: the moment the engine stops being turned and starts pulling.
+
+    Deliberately contains NO firing events. It did before, back when firing lived
+    inside a running loop and the transition had to bridge between two recordings.
+    It must not now: real combustion pulses are already playing, one per charge, so
+    a run-up of synthetic ones on top would double every bang the player hears at
+    exactly the moment they most want to hear it clearly.
+
+    What is left is everything else about catching, and it is plenty: the drag
+    tone lifting as the load comes off, the intake drawing harder, and the whole
+    machine settling into a rhythm. Layered under the real pulses, that reads as
+    "and it's running".
     """
-    dur = 1.15
+    dur = 0.75
     n = int(SR * dur)
+    t = np.arange(n) / SR
     buf = np.zeros(n)
 
-    times, tt, rate = [], 0.0, 3.6
-    while tt < dur - 0.14:
-        times.append((tt, rate))
-        rate += (8.0 - rate) * 0.34          # converges on the running loop's rate
-        tt += 1.0 / rate
-    for i, (tt, rate) in enumerate(times):
-        settle = min(1.0, i / 4.0)
-        add_at(buf, tt * SR, combustion_event(
-            strength=0.55 + 0.45 * settle,
-            thump_f=46.0 + 12.0 * settle,
-            bark_level=0.40 + 0.20 * settle))
+    # The crank speeding up as combustion takes over: 34 Hz to 64 Hz, easing out.
+    lift = 1.0 - np.exp(-t / 0.20)
+    buf += np.sin(2.0 * np.pi * np.cumsum(34.0 + 30.0 * lift) / SR) * (0.30 + 0.22 * lift)
 
-    t = np.arange(n) / SR
-    buf += lowpass(noise(n), 300.0) * np.clip(t / 0.45, 0.0, 1.0) * 0.16
-    return normalize(declick(body(buf, 0.62)), 0.85)
+    # Intake: broad, quiet, swelling with the revs.
+    buf += lowpass(noise(n), 900.0) * (0.06 + 0.16 * lift) * np.exp(-t / 0.55)
+
+    # One soft mechanical settle as the flywheel takes up the drive.
+    add_at(buf, SR * 0.05, mechanical_clack(decay=0.022, length=0.14, tone=520.0) * 0.30)
+
+    return normalize(declick(body(buf, 0.6)), 0.80)
 
 
 def engine_stall():
     """
-    The engine dying: the firing rate drags down and the pulses get weaker and
-    more uneven, ending in a last half-hearted combustion and a mechanical stop.
-    Deliberately not explosive - it is energy running out, not a bang.
+    The engine coming to rest after dying on the player.
+
+    Played when rotation finally stops, not when combustion did - by then the
+    flywheel has been spinning down for several seconds with the mechanical layer
+    following it, so this is the last of that rotation, not a bang. It is uneven
+    and drags: something went wrong, and the machine stops like it.
     """
-    dur = 1.5
+    dur = 0.95
     n = int(SR * dur)
+    t = np.arange(n) / SR
     buf = np.zeros(n)
 
-    times, tt, rate = [], 0.0, 7.5
-    while tt < dur - 0.35 and rate > 1.1:
-        times.append((tt, rate))
-        rate *= 0.72
-        tt += 1.0 / rate
-    for i, (tt, rate) in enumerate(times):
-        frac = rate / 7.5
-        add_at(buf, tt * SR, combustion_event(
-            strength=max(0.14, 0.95 - i * 0.17),
-            thump_f=34.0 + 24.0 * frac,
-            bark_level=0.30 * frac,
-            clack_level=0.18))
+    # The last of the rotation, sagging away with a judder in it.
+    fall = np.exp(-t / 0.34)
+    judder = 1.0 + 0.22 * np.sin(2.0 * np.pi * 6.5 * t) * fall
+    buf += np.sin(2.0 * np.pi * np.cumsum(30.0 * fall + 4.0) / SR) * 0.34 * fall * judder
+    buf += periodic(noise(n), lambda v: lowpass(v, 260.0)) * 0.16 * fall
 
-    # Final rotation dying away, then the mechanism coming to rest.
-    tail_start = dur - 0.34
-    tail_n = int(SR * 0.30)
-    tt = np.arange(tail_n) / SR
-    drag = np.sin(2.0 * np.pi * np.cumsum(26.0 - 18.0 * tt / 0.30) / SR) * np.exp(-tt / 0.11) * 0.35
-    add_at(buf, tail_start * SR, drag)
-    add_at(buf, (dur - 0.13) * SR, mechanical_clack(decay=0.020, length=0.12, tone=900.0) * 0.45)
+    # Two uneven compression stops as it rocks to a halt, then rest.
+    add_at(buf, SR * 0.34, mechanical_clack(decay=0.024, length=0.14, tone=760.0) * 0.34)
+    add_at(buf, SR * 0.58, mechanical_clack(decay=0.028, length=0.16, tone=610.0) * 0.40)
+    add_at(buf, SR * 0.58, cylinder_thump(f_start=38.0, f_end=26.0, decay=0.045, attack=0.005) * 0.26)
 
-    return normalize(declick(body(buf, 0.6)), 0.74)
+    return normalize(declick(body(buf, 0.6)), 0.70)
 
 
 def engine_stop():
-    """A deliberate shutdown: shorter than a stall, no laboured dying pulses."""
-    dur = 0.85
+    """
+    A deliberate shutdown coming to rest: the same event without the drama.
+
+    Shorter than a stall, no judder, and it settles on one clean mechanical stop
+    rather than rocking against compression twice. The difference between the two
+    is the whole information content - the player knows from the sound alone
+    whether the engine stopped because they wanted it to.
+    """
+    dur = 0.70
     n = int(SR * dur)
+    t = np.arange(n) / SR
     buf = np.zeros(n)
 
-    tt, rate = 0.0, 8.0
-    for i in range(4):
-        if tt >= dur - 0.25:
-            break
-        add_at(buf, tt * SR, combustion_event(strength=max(0.12, 0.65 - i * 0.18), thump_f=44.0,
-                                              bark_level=0.20, clack_level=0.16))
-        rate *= 0.58
-        tt += 1.0 / rate
+    fall = np.exp(-t / 0.26)
+    buf += np.sin(2.0 * np.pi * np.cumsum(28.0 * fall + 4.0) / SR) * 0.30 * fall
+    buf += periodic(noise(n), lambda v: lowpass(v, 240.0)) * 0.12 * fall
 
-    add_at(buf, (dur - 0.16) * SR, mechanical_clack(decay=0.018, length=0.12, tone=820.0) * 0.42)
-    return normalize(declick(body(buf, 0.58)), 0.66)
+    add_at(buf, SR * 0.40, mechanical_clack(decay=0.020, length=0.14, tone=700.0) * 0.34)
+
+    return normalize(declick(body(buf, 0.58)), 0.62)
 
 
-# Order is load-bearing: every generator draws from the one module-level RNG, so
-# inserting a sound anywhere but at the end shifts the noise every later sound is
-# built from and silently re-rolls assets that were not meant to change.
+# Order is NOT load-bearing: main() reseeds the RNG per sound from that sound's
+# own name, so adding, removing or reordering an entry cannot silently re-roll the
+# noise any other asset is built from. Each file is reproducible on its own.
 SOUNDS = {
-    "engine_running": engine_running,
-    "engine_cranking": engine_cranking,
-    "engine_fire_attempt": engine_fire_attempt,
+    # The two continuous layers.
+    "engine_mechanical": engine_mechanical,
+    "engine_combustion_loop": engine_combustion_loop,
+    # One charge burning, three ways.
+    "engine_fire_1": engine_fire_1,
+    "engine_fire_2": engine_fire_2,
+    "engine_fire_3": engine_fire_3,
+    # Transitions and the ignition tick.
     "engine_start": engine_start,
     "engine_stall": engine_stall,
     "engine_stop": engine_stop,
     "engine_spark": engine_spark,
 }
 
+# Assets from before the audio was split into layers. Removed here so a rerun
+# cleans up after itself rather than leaving orphans that sounds.json no longer
+# refers to and that nothing would ever play.
+RETIRED = ("engine_running", "engine_cranking", "engine_fire_attempt")
+
 
 def main():
+    global rng
     out = os.path.normpath(OUT)
     os.makedirs(out, exist_ok=True)
+
+    for name in RETIRED:
+        path = os.path.join(out, name + ".ogg")
+        if os.path.exists(path):
+            os.remove(path)
+            print("%-24s removed" % (name + ".ogg"))
+
     for name, fn in SOUNDS.items():
+        rng = np.random.default_rng(zlib.crc32(name.encode()) ^ 0x0C0FFEE)
         data = fn().astype(np.float32)
         path = os.path.join(out, name + ".ogg")
         sf.write(path, data, SR, format="OGG", subtype="VORBIS")
-        print("%-22s %5.2f s  %6d bytes" % (name + ".ogg", len(data) / SR, os.path.getsize(path)))
+        print("%-24s %5.2f s  %6d bytes" % (name + ".ogg", len(data) / SR, os.path.getsize(path)))
 
 
 if __name__ == "__main__":

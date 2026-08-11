@@ -1,7 +1,6 @@
 package dev.engineeredcombustion.client.sound;
 
 import dev.engineeredcombustion.content.engine.EngineTuning;
-import dev.engineeredcombustion.content.engine.LubricationState;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -12,14 +11,15 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * One continuous engine sound, anchored at one engine.
+ * One continuous engine sound layer, anchored at one engine.
  *
  * <h2>It drives itself</h2>
  * Every client tick the instance looks up the crankshaft at its position and
  * decides whether it should still exist, then takes its pitch and volume from
- * that engine's live state. Nothing has to push updates into it, and nothing has
- * to remember to stop it: a broken engine, an unloaded chunk, a dimension change
- * or a phase change all end the loop through the same check.
+ * that engine's live state through its {@link EngineSoundLayer}. Nothing has to
+ * push updates into it, and nothing has to remember to stop it: a broken engine,
+ * an unloaded chunk, a dimension change or a layer falling silent all end the
+ * loop through the same check.
  *
  * <p>A keep-alive timer backs that up. If whatever owns this loop stops
  * refreshing it - the block entity stopped ticking for a reason the self-check
@@ -30,14 +30,14 @@ import net.minecraft.world.phys.Vec3;
  * The volume starts at {@link EngineTuning#SOUND_INITIAL_VOLUME}, not zero.
  * {@code SoundEngine#play} throws away any instance whose volume is zero when it
  * is handed over, and a thrown-away instance is never ticked, so it can never
- * fade in - it is simply gone. That is exactly why the running loop was silent.
+ * fade in - it is simply gone.
  *
  * <p>The instance is positional and mono ({@code relative = false}), so
  * Minecraft applies its normal distance attenuation from the engine's block.
  */
 public class EngineLoopSound extends AbstractTickableSoundInstance {
 
-	private final EngineLoopKind kind;
+	private final EngineSoundLayer layer;
 	private final BlockPos pos;
 	private final ClientLevel level;
 
@@ -47,9 +47,19 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 	private int age;
 	private boolean ticked;
 
-	public EngineLoopSound(EngineLoopKind kind, ClientLevel level, BlockPos pos, float initialPitch) {
-		super(kind.soundEvent(), SoundSource.BLOCKS, SoundInstance.createUnseededRandom());
-		this.kind = kind;
+	/**
+	 * Whether this instance has been told to go away.
+	 *
+	 * <p>Tracked separately from the target volume, because a layer's honest target
+	 * can pass through zero - the mechanical bed of an engine crawling to a halt
+	 * does exactly that - and an instance must not read "quiet right now" as
+	 * "finished".
+	 */
+	private boolean retiring;
+
+	public EngineLoopSound(EngineSoundLayer layer, ClientLevel level, BlockPos pos, float initialPitch) {
+		super(layer.soundEvent(), SoundSource.BLOCKS, SoundInstance.createUnseededRandom());
+		this.layer = layer;
 		this.level = level;
 		this.pos = pos.immutable();
 
@@ -58,19 +68,17 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 		relative = false;
 		// Audible from the very first tick, then ramped up - see the class comment.
 		volume = EngineTuning.SOUND_INITIAL_VOLUME;
-		targetVolume = kind.baseVolume();
+		targetVolume = EngineTuning.SOUND_INITIAL_VOLUME;
 		pitch = initialPitch;
 
+		// The crankcase: bearings, crankshaft and flywheel. The combustion pulses
+		// deliberately come from higher up, at the cylinder head - see CombustionAudio.
 		Vec3 center = Vec3.atCenterOf(pos);
 		x = center.x;
 		y = center.y;
 		z = center.z;
 
 		keepAlive();
-	}
-
-	public EngineLoopKind getKind() {
-		return kind;
 	}
 
 	/** Called every client tick by the engine that owns this loop. Final: the constructor calls it. */
@@ -82,10 +90,7 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 	public void fadeOut() {
 		targetVolume = 0.0F;
 		keepAlive = 0;
-	}
-
-	private boolean isFadingOut() {
-		return targetVolume <= 0.0F;
+		retiring = true;
 	}
 
 	/**
@@ -94,7 +99,7 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 	 * <p>Even with a non-zero starting volume, {@code SoundEngine#play} still drops
 	 * a sound whose whole category is muted, and a dropped instance is never
 	 * ticked. Without this the manager would hold a reference to a sound that is
-	 * not playing, believe the engine already has its loop, and stay silent even
+	 * not playing, believe the engine already has its layer, and stay silent even
 	 * after the player turns the volume back up.
 	 *
 	 * @param graceTicks how long to allow for the first tick before judging
@@ -110,8 +115,8 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 	 * {@link #tick()}. {@link #wasAccepted} asks whether Minecraft ever ticked this
 	 * instance, so an instance that was rejected is exactly the one that never gets
 	 * a tick; aging it there would freeze its age at zero and leave it looking
-	 * "still within its grace period" forever, holding the engine's only loop slot
-	 * and keeping it permanently silent.
+	 * "still within its grace period" forever, holding a slot and keeping the
+	 * engine permanently silent.
 	 */
 	public void age() {
 		if (age < Integer.MAX_VALUE)
@@ -122,20 +127,20 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 	public void tick() {
 		ticked = true;
 
-		if (!isFadingOut())
+		if (!retiring)
 			followEngine();
 
 		if (keepAlive > 0)
 			keepAlive--;
 		else
-			targetVolume = 0.0F;
+			fadeOut();
 
 		if (volume < targetVolume)
 			volume = Math.min(targetVolume, volume + EngineTuning.SOUND_FADE_PER_TICK);
 		else if (volume > targetVolume)
 			volume = Math.max(targetVolume, volume - EngineTuning.SOUND_FADE_PER_TICK);
 
-		if (isFadingOut() && volume <= 0.0F)
+		if (retiring && volume <= 0.0F)
 			stop();
 	}
 
@@ -162,19 +167,14 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 			return;
 		}
 
-		float rpm = crankshaft.getEngineState()
-			.getMechanicalRpm();
-		if (EngineLoopKind.forState(crankshaft.getEngineState()
-			.getPhase(), rpm) != kind) {
-			// The engine moved on - stopped, or swapped cranking for running. The
-			// manager will start whichever loop the new state calls for.
+		float eventRateHz = crankshaft.getCombustionEventRateHz();
+		targetVolume = layer.volumeFor(crankshaft.getEngineState(), eventRateHz);
+		if (targetVolume <= 0.0F) {
+			// This layer has nothing left to say - the engine stopped turning, or its
+			// firing rate dropped back below the aggregation threshold.
 			fadeOut();
 			return;
 		}
-
-		LubricationState lubrication = crankshaft.getEngineState()
-			.getLubrication();
-		pitch = EngineSoundManager.pitchFor(kind, rpm, lubrication, level.getGameTime());
-		targetVolume = kind.baseVolume() * EngineSoundManager.volumeFactor(rpm);
+		pitch = layer.pitchFor(crankshaft.getEngineState(), eventRateHz, level.getGameTime());
 	}
 }

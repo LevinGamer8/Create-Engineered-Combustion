@@ -63,11 +63,17 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	}
 
 	/**
-	 * What Create asks for. Zero whenever the engine is not making its own power,
+	 * What Create asks for. Zero whenever the engine is not actively generating,
 	 * which is exactly what turns this block into an ordinary <i>passive</i> kinetic
-	 * component that a hand crank or any other Create source can motor - see
-	 * {@code GeneratingKineticBlockEntity#applyNewSpeed}, which keeps a generator
-	 * attached to its external source while it generates 0.
+	 * component that a hand crank, another engine, or any other Create source can
+	 * motor - see {@code GeneratingKineticBlockEntity#applyNewSpeed}, which keeps a
+	 * generator attached to its external source while it generates 0.
+	 *
+	 * <p>This is also the first of the two places the free-power exploit is closed.
+	 * {@code KineticNetwork#getActualCapacityOf} is
+	 * {@code sources.get(be) * |be.getGeneratedSpeed()|}, so an engine answering 0
+	 * here contributes exactly 0 SU no matter how fast the network it sits on is
+	 * being spun, and no matter what capacity value the network has cached for it.
 	 *
 	 * <p>The value is latched by the simulation rather than computed live: Create
 	 * calls this during propagation and during its periodic kinetic validation, and
@@ -84,6 +90,68 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 		// with the rotation already present - which matters, because
 		// RotationPropagator destroys blocks on opposing-sign sources.
 		return crankshaft.getGeneratedRpmFor(worldPosition);
+	}
+
+	/**
+	 * Stress Capacity this engine adds to its network, per RPM.
+	 *
+	 * <p>The second of the two places the exploit is closed, and the belt to
+	 * {@link #getGeneratedSpeed()}'s braces. Create caches this value per source in
+	 * {@code KineticNetwork#sources} and only refreshes it when told to, so gating
+	 * it alone would not have been enough - but gating it as well means a dead
+	 * engine cannot contribute capacity even if a future change to Create stopped
+	 * scaling capacity by generated speed.
+	 *
+	 * <p>Zero is returned for anything that is not a genuinely running engine:
+	 * cranking, starting, coasting, stalling, unfuelled, unlit, or simply being
+	 * spun by the engine next door. <b>Turning is not generating.</b>
+	 */
+	@Override
+	public float calculateAddedStressCapacity() {
+		if (!isEngineGenerating()) {
+			lastCapacityProvided = 0.0F;
+			return 0.0F;
+		}
+		return super.calculateAddedStressCapacity();
+	}
+
+	/**
+	 * Load this engine puts <i>on</i> the network, per RPM.
+	 *
+	 * <p>The parasitic cost of turning a dead engine over: compression, bearing
+	 * friction, pumping losses. Real, and worth charging for - motoring a wall of
+	 * unfuelled engines should cost the network that motors them.
+	 *
+	 * <p>Zero while the engine is generating, and that is not an optimisation: a
+	 * running engine already fights exactly this friction inside its own
+	 * simulation, where it is what sets the engine's equilibrium speed. Charging it
+	 * to the network as well would be billing the same drag twice.
+	 *
+	 * <p>Create refreshes this whenever the engine's generated rotation changes -
+	 * {@code GeneratingKineticBlockEntity#updateGeneratedRotation} calls
+	 * {@code updateStressFor}, and {@code applyNewSpeed} does so on the way to zero
+	 * - which is precisely when this answer changes. Nothing extra has to poll it.
+	 */
+	@Override
+	public float calculateStressApplied() {
+		if (isEngineGenerating()) {
+			lastStressApplied = 0.0F;
+			return 0.0F;
+		}
+		return super.calculateStressApplied();
+	}
+
+	/**
+	 * Whether the engine this flywheel belongs to is actively generating.
+	 *
+	 * <p>One question, asked of the one authority
+	 * ({@code EngineState#isActivelyGenerating}). A flywheel with no crankshaft of
+	 * its own - one bolted to a second engine's far end, say - is not generating
+	 * anything by definition.
+	 */
+	private boolean isEngineGenerating() {
+		CrankshaftBlockEntity crankshaft = getAdjacentCrankshaft();
+		return crankshaft != null && crankshaft.isGeneratingFor(worldPosition);
 	}
 
 	/** Called by the crankshaft when the engine's rotational output changed. */

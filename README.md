@@ -136,3 +136,14 @@ for what writes what, why the resolutions differ, and the two model invariants
   the mod playable without Creative and without any other petroleum mod. Fuel and
   lubricant acceptance is tag-driven, so another mod's fluids can join with a
   datapack. See [`docs/milestone-8.md`](docs/milestone-8.md).
+* **Milestone 9** - Engine stability: a game-breaking exploit is closed - an
+  engine that is not burning fuel now contributes zero Stress Capacity however
+  fast a neighbour spins it, gated behind one authoritative
+  `isActivelyGenerating()` predicate and charged a small parasitic load instead;
+  the crankshaft has one momentum rather than two, so an engine driven to 200 RPM
+  by an external network coasts down from 200 when that network is removed instead
+  of snapping back to idle; new engines are placed with the ignition already on;
+  and the audio is rebuilt into a mechanical rotation layer plus one combustion
+  pulse per charge that actually burned, so the engine's rhythm is its real firing
+  rhythm and a fuel-starved engine audibly stops combusting while it is still
+  spinning. See [`docs/milestone-9.md`](docs/milestone-9.md).

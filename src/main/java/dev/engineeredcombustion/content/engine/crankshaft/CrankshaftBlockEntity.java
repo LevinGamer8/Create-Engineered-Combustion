@@ -13,6 +13,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollOp
 import com.simibubi.create.infrastructure.config.AllConfigs;
 
 import dev.engineeredcombustion.client.sound.EngineSoundManager;
+import dev.engineeredcombustion.content.engine.CombustionAudio;
 import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.EngineInputs;
 import dev.engineeredcombustion.content.engine.EnginePhase;
@@ -21,6 +22,7 @@ import dev.engineeredcombustion.content.engine.EngineTuning;
 import dev.engineeredcombustion.content.engine.FuelSupply;
 import dev.engineeredcombustion.content.engine.LubricationState;
 import dev.engineeredcombustion.content.engine.OilSupply;
+import dev.engineeredcombustion.content.engine.RotationSource;
 import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
 import dev.engineeredcombustion.content.engine.control.ControlMode;
 import dev.engineeredcombustion.content.engine.control.EngineControlState;
@@ -60,24 +62,32 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * kinetic relay that puts a working shaft output on <i>both</i> ends of the
  * crankshaft.
  *
- * <p>Per tick, on both sides:
+ * <p>Per tick, on both sides ({@link #tickRotation()}):
  * <ol>
- * <li>read the crankshaft's own <i>actual</i> Create kinetic speed;</li>
- * <li>advance the crank angle by exactly that much.</li>
+ * <li>read the crankshaft's own <i>actual</i> Create kinetic speed, and whether
+ * Create is holding the shaft at it;</li>
+ * <li>reconcile the engine's momentum with that - absorbing an externally
+ * imposed speed, or free-running on stored momentum when nothing is driving the
+ * shaft;</li>
+ * <li>advance the crank angle by whatever the crank is really turning at.</li>
  * </ol>
  * Additionally on the server:
- * <ol start="3">
+ * <ol start="4">
  * <li>resolve the engine's components and, in one place, its control inputs -
  * see {@link #resolveControlState()} - plus the network's load;</li>
- * <li>run combustion, inertia and friction;</li>
+ * <li>run combustion, inertia and friction, and decide - once - whether the
+ * engine is actively generating;</li>
  * <li>if - and only if - the speed the engine wants to generate changed, tell
  * the flywheel to push it into Create.</li>
  * </ol>
  *
- * <p>Because step 1 and 2 use a value Create already synchronises, client and
+ * <p>Steps 1 to 3 read only values Create already synchronises, so client and
  * server derive the same crank angle from the same input without this mod
  * sending a packet per tick. Everything visible (piston, flywheel disc, attached
- * shafts on either end) therefore agrees by construction.
+ * shafts on either end) therefore agrees by construction. The one exception is a
+ * freewheeling engine, which has no Create speed left to read: both sides
+ * integrate the same deterministic spin-down, and the server confirms it every
+ * {@link #COAST_RESYNC_INTERVAL} ticks.
  *
  * <h2>Kinetics: one source, two shaft faces</h2>
  * This block entity is a plain {@link KineticBlockEntity}. It never generates -
@@ -97,6 +107,17 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 	/** Crank-angle resync interval while turning, in ticks. */
 	private static final int RESYNC_INTERVAL = 200;
+
+	/**
+	 * Resync interval while the engine is freewheeling, in ticks.
+	 *
+	 * <p>Much shorter, because this is the only state in which the client is
+	 * integrating the engine's rotation rather than reading a speed Create already
+	 * synchronises for it. A whole spin-down is about eight seconds, so this costs
+	 * on the order of eight block-entity updates per shutdown - and it means any
+	 * divergence at all is corrected long before it could become visible.
+	 */
+	private static final int COAST_RESYNC_INTERVAL = 20;
 
 	/**
 	 * The spark gap, in the Cylinder block's own coordinates: between the centre
@@ -124,6 +145,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private static final String KEY_OIL_WEAR = "OilWear";
 	private static final String KEY_SPARK_EVENT = "SparkEvent";
 	private static final String KEY_COMBUSTION_EVENT = "CombustionEvent";
+	private static final String KEY_GENERATING = "Generating";
 
 	private final EngineState engine = new EngineState();
 
@@ -151,8 +173,21 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * setting, not the engine's state: in a redstone ignition mode the engine may
 	 * be running with this false, and it survives such a mode unchanged, which is
 	 * what makes pulling the module out predictable.
+	 *
+	 * <p><b>A new engine comes with the switch on.</b> The switch is not a start
+	 * button - leaving it on starts nothing, because the engine still needs a valid
+	 * structure, a Spark Plug, gasoline and several successful cranking cycles
+	 * before it can catch - so the only thing an off-by-default switch achieved was
+	 * one mandatory click on every engine a player ever built. Building the machine
+	 * and cranking it is now the whole of starting it.
+	 *
+	 * <p>Off is still a real, sticky choice: a switch the player turned off stays
+	 * off, across chunk reloads and restarts, because {@link #read} only overwrites
+	 * this when the tag it is loading actually carries the key. That is what keeps
+	 * the default a property of <i>new</i> engines rather than of every engine that
+	 * happens to be loading.
 	 */
-	private boolean manualIgnition;
+	private boolean manualIgnition = true;
 
 	/** Whether a Redstone Control Module is plugged into the engine's controls. */
 	private boolean controlModuleInstalled;
@@ -169,6 +204,18 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private boolean clientEventsAdopted;
 	private int lastSparkEventId;
 	private int lastCombustionEventId;
+
+	/**
+	 * Turns this engine's combustion events into sound, and measures how often they
+	 * are arriving.
+	 *
+	 * <p>Only ever driven from client-side code paths, but deliberately built out of
+	 * dist-neutral types so that holding one costs a dedicated server nothing: it
+	 * touches {@code Level}, {@code BlockPos} and the sound registry and nothing
+	 * else, and {@code Level#playLocalSound} is already an empty method outside the
+	 * client.
+	 */
+	private final CombustionAudio combustionAudio = new CombustionAudio();
 
 	/**
 	 * What redstone at this engine is allowed to do. Only consulted while a
@@ -298,15 +345,14 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (level == null)
 			return;
 
-		// The crankshaft's *own* kinetic speed, now that it is a real member of the
-		// network. Identical to the flywheel's while the two are coupled - they are
-		// a 1:1 axis connection - but this also stays correct when the engine is
-		// driven from a Shaft on the crankshaft's far side, and when there is no
-		// flywheel at all.
-		float mechanicalRpm = getSpeed();
-		engine.advanceCrankAngle(mechanicalRpm);
+		tickRotation();
 
 		if (level.isClientSide) {
+			// Spin the flywheel down when nothing on the network is driving it. The
+			// client has to integrate this itself - a coasting engine generates
+			// nothing, so Create has no speed left to synchronise - and it is safe
+			// because the coast is deterministic from a state the server did sync.
+			engine.tickClientCoast();
 			// Run the flash timer down first, then look for new events: a flash that
 			// starts this tick must not be aged on the tick it started.
 			engine.updateClientVisuals();
@@ -347,9 +393,10 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		int sparkEventBefore = engine.getSparkEventId();
 		int combustionEventBefore = engine.getCombustionEventId();
 
+		boolean generatingBefore = engine.isActivelyGenerating();
+
 		EngineInputs inputs = new EngineInputs(tickComponents.isMechanicallyValid(), control.ignitionEnabled(),
-			tickComponents.hasSparkPlug(), flywheel != null && flywheel.hasSource(), control.throttle(),
-			readLoadFactor(), speedLimit());
+			tickComponents.hasSparkPlug(), control.throttle(), readLoadFactor(), speedLimit());
 		boolean generatedSpeedChanged = engine.tickSimulation(inputs, fuelSupply, oilSupply, random);
 
 		if (generatedSpeedChanged && flywheel != null)
@@ -375,11 +422,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			|| phaseBefore != engine.getPhase() || structureValidBefore != engine.isStructureValid()
 			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()
 			|| sparkPlugBefore != engine.isSparkPlugInstalled()
-			|| lubricationBefore != engine.getLubrication()) {
-			sync();
+			|| lubricationBefore != engine.getLubrication()
+			|| generatingBefore != engine.isActivelyGenerating()) {
+			syncAndRearmResync();
 		} else if (engine.getMechanicalRpm() != 0.0F && --resyncCountdown <= 0) {
-			resyncCountdown = RESYNC_INTERVAL;
-			sync();
+			syncAndRearmResync();
 		}
 
 		// The snapshot is valid only for the tick that took it. Dropping it here is
@@ -388,8 +435,56 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	}
 
 	/**
+	 * Reconciles the engine's momentum with the kinetic network, then advances the
+	 * crank. Runs on <b>both</b> sides, from values Create synchronises for us.
+	 *
+	 * <p>Three questions, and the whole of what the engine is told about rotation:
+	 * <ul>
+	 * <li><b>how fast</b> - the crankshaft's own kinetic speed. Identical to the
+	 * flywheel's while the two are coupled, and still correct when the engine is
+	 * driven from a Shaft on the crankshaft's far side or has no flywheel at
+	 * all;</li>
+	 * <li><b>is Create holding the shaft</b> - true whenever it has a speed to
+	 * impose, and deliberately also true at zero on an <i>overstressed</i> network.
+	 * An overstressed network is jammed, not absent: it stops the engine rather
+	 * than releasing it to freewheel, which is why {@code isOverStressed} is asked
+	 * separately from the speed (Create's {@code getSpeed} already reports 0 for
+	 * both cases);</li>
+	 * <li><b>is it somebody else's rotation</b> - whether the flywheel has a kinetic
+	 * source of its own, which is Create's own answer to "this block is being
+	 * driven from elsewhere" and is synchronised for the client.</li>
+	 * </ul>
+	 */
+	private void tickRotation() {
+		float shaftSpeed = getSpeed();
+		boolean shaftDriven = shaftSpeed != 0.0F || isOverStressed();
+		EngineFlywheelBlockEntity flywheel = getFlywheel();
+		engine.tickRotation(shaftSpeed, shaftDriven, flywheel != null && flywheel.hasSource());
+	}
+
+	/**
+	 * Whether the engine is actively generating <i>for the flywheel asking</i>.
+	 *
+	 * <p>The flywheel's single question, and the reason the position check is here
+	 * rather than there: a flywheel this crankshaft is not coupled to - one bolted
+	 * to the far end while another already claims the near one - drives nothing and
+	 * must therefore contribute neither capacity nor drag on this engine's account.
+	 *
+	 * <p>The generation half of the answer comes from
+	 * {@link EngineState#isActivelyGenerating()}, which is the mod's one authority
+	 * on the question. Nothing here re-derives it.
+	 */
+	public boolean isGeneratingFor(BlockPos queryingFlywheelPos) {
+		if (flywheelPos == null)
+			getFlywheel();
+		if (flywheelPos == null || !flywheelPos.equals(queryingFlywheelPos))
+			return false;
+		return engine.isActivelyGenerating();
+	}
+
+	/**
 	 * The engine makes its own noise; Create's generic kinetic hum on top of it
-	 * would just muddy the loop this mod already manages.
+	 * would just muddy the loops this mod already manages.
 	 */
 	@Override
 	protected boolean isNoisy() {
@@ -677,7 +772,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (combustion != lastCombustionEventId) {
 			lastCombustionEventId = combustion;
 			engine.triggerCombustionFlash();
-			playCombustionSound();
+			combustionAudio.onCombustion(level, EngineComponents.cylinderPos(worldPosition), engine);
 		}
 	}
 
@@ -708,24 +803,6 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 				EngineTuning.SOUND_SPARK_VOLUME, 1.0F, false);
 	}
 
-	/**
-	 * The cough of a charge burning while the engine is not yet running.
-	 *
-	 * <p>Silent once the engine is RUNNING, and that includes the charge that
-	 * catches it: a one-shot per revolution on top of the running loop is the
-	 * overlapping mush this deliberately avoids, and the catch has its own sound.
-	 * So a start reads as "puff, puff, BRUMM", with a flash on every one of those
-	 * events including the last.
-	 */
-	@OnlyIn(Dist.CLIENT)
-	private void playCombustionSound() {
-		if (level == null || engine.getPhase() == EnginePhase.RUNNING)
-			return;
-		level.playLocalSound(worldPosition.getX() + 0.5D, worldPosition.getY() + 0.5D, worldPosition.getZ() + 0.5D,
-			ECSounds.ENGINE_FIRE_ATTEMPT.get(), SoundSource.BLOCKS, EngineTuning.SOUND_FIRE_ATTEMPT_VOLUME,
-			EngineTuning.mapMechanicalRpmToCrankingPitch(engine.getMechanicalRpm()), false);
-	}
-
 	// --- audio --------------------------------------------------------------
 
 	/**
@@ -747,9 +824,12 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (phaseBefore == EnginePhase.STARTING && phase == EnginePhase.RUNNING)
 			playSound(ECSounds.ENGINE_START.get(), EngineTuning.SOUND_START_VOLUME, 1.0F);
 
-		// Only a running engine can stop; a start attempt that is simply abandoned
-		// stays silent, and an engine loading in stopped never transitions at all.
-		if (phaseBefore.generatesPower() && phase == EnginePhase.STOPPED) {
+		// Only an engine that actually ran can stop; a start attempt that is simply
+		// abandoned stays silent, and an engine loading in stopped never transitions
+		// at all. Note this is the *phase* question, not the generation question:
+		// an engine that has lost combustion and spun all the way down still
+		// deserves to be heard doing it.
+		if (phaseBefore.hasCaught() && phase == EnginePhase.STOPPED) {
 			boolean wantedToRun = engine.isIgnitionEnabled();
 			playSound(wantedToRun ? ECSounds.ENGINE_STALL.get() : ECSounds.ENGINE_STOP.get(),
 				wantedToRun ? EngineTuning.SOUND_STALL_VOLUME : EngineTuning.SOUND_STOP_VOLUME, 1.0F);
@@ -804,12 +884,19 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * <p>Everything it needs is already synchronised - the phase travels in the
 	 * block entity's update tag, and the speed comes from Create's own kinetic
 	 * sync - so no packet exists purely for sound.
+	 *
+	 * <p>The firing rate is the one figure that is neither synchronised nor
+	 * derived from speed: it is <i>measured</i>, from the intervals between the
+	 * combustion events the server actually sent. That is deliberate - it is the
+	 * only way the audio can be certain it is following combustion rather than an
+	 * assumption about combustion.
 	 */
 	@OnlyIn(Dist.CLIENT)
 	private void tickEngineAudio() {
-		if (level instanceof ClientLevel clientLevel)
-			EngineSoundManager.tick(clientLevel, worldPosition, engine.getPhase(), engine.getMechanicalRpm(),
-				engine.getLubrication());
+		if (!(level instanceof ClientLevel clientLevel))
+			return;
+		combustionAudio.tick(clientLevel.getGameTime());
+		EngineSoundManager.tick(clientLevel, worldPosition, engine, combustionAudio.getEventRateHz());
 	}
 
 	// --- mechanical coupling ------------------------------------------------
@@ -915,6 +1002,17 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		return engine;
 	}
 
+	/**
+	 * How often this engine's combustion events are actually arriving, in events
+	 * per second, as measured on this client.
+	 *
+	 * <p>Measured rather than derived from RPM on purpose. A rate computed from
+	 * speed would be an assumption about firing; this is the firing.
+	 */
+	public float getCombustionEventRateHz() {
+		return combustionAudio.getEventRateHz();
+	}
+
 	public Axis getAxis() {
 		return getBlockState().getValue(CrankshaftBlock.HORIZONTAL_AXIS);
 	}
@@ -947,6 +1045,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		engine.setPhase(EnginePhase.byId(tag.getString(KEY_PHASE)));
 		engine.setSimulatedRpm(tag.getFloat(KEY_SIMULATED_RPM));
 		engine.setPublishedRpm(tag.getFloat(KEY_PUBLISHED_RPM));
+		// The one authoritative answer to "is this engine producing power",
+		// carried rather than recomputed. The client's overlays, its audio and the
+		// rotation rule all read it, and a client-side approximation of the
+		// predicate is exactly the second opinion this milestone removed.
+		engine.setActivelyGenerating(tag.getBoolean(KEY_GENERATING));
 		engine.setIgnitionEnabled(tag.getBoolean(KEY_IGNITION));
 		engine.setStructureValid(tag.getBoolean(KEY_STRUCTURE_VALID));
 		// The ignition switch is a physical switch on the crankcase: it stays where
@@ -956,7 +1059,17 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// start sounds are emitted from phase transitions computed inside a tick, so
 		// an engine that was already running resumes running rather than announcing
 		// a fresh start, and one that was stopped stays stopped until it is cranked.
-		manualIgnition = tag.getBoolean(KEY_MANUAL_IGNITION);
+		//
+		// Read only when the key is actually present. write() always emits it, so
+		// any engine that has ever been saved or synchronised carries its own
+		// answer and gets it back verbatim - including an engine the player
+		// deliberately switched off. A tag without the key is not an engine with the
+		// ignition off; it is not an engine's saved state at all, and the field's
+		// initialiser - on - is the right answer for a fresh one. Reading
+		// unconditionally is what would quietly turn "new engines start switched on"
+		// into "every engine loads switched off".
+		if (tag.contains(KEY_MANUAL_IGNITION))
+			manualIgnition = tag.getBoolean(KEY_MANUAL_IGNITION);
 		controlModuleInstalled = tag.getBoolean(KEY_CONTROL_MODULE);
 		redstoneSignal = tag.getInt(KEY_REDSTONE_SIGNAL);
 		engine.setStartAttempt(tag.getInt(KEY_START_PROGRESS), tag.getInt(KEY_START_REQUIRED));
@@ -984,6 +1097,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.getId());
 		tag.putFloat(KEY_SIMULATED_RPM, engine.getSimulatedRpm());
 		tag.putFloat(KEY_PUBLISHED_RPM, engine.getPublishedRpm());
+		tag.putBoolean(KEY_GENERATING, engine.isActivelyGenerating());
 		tag.putBoolean(KEY_IGNITION, engine.isIgnitionEnabled());
 		tag.putBoolean(KEY_STRUCTURE_VALID, engine.isStructureValid());
 		tag.putBoolean(KEY_MANUAL_IGNITION, manualIgnition);
@@ -1002,6 +1116,26 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 	private void sync() {
 		notifyUpdate();
+	}
+
+	/**
+	 * Syncs, and restarts the resync timer from the interval that fits what the
+	 * engine is doing now.
+	 *
+	 * <p>Rearming on <i>every</i> update, not only on the timed ones, is what makes
+	 * the short coast interval actually apply. A spin-down begins with an
+	 * event-driven update - the engine stopped generating - and if the timer kept
+	 * counting down from wherever the previous interval had left it, the first
+	 * confirmation of a freewheeling engine's speed could easily arrive after the
+	 * whole coast was over.
+	 */
+	private void syncAndRearmResync() {
+		sync();
+		// A freewheeling engine is the one state whose rotation the client integrates
+		// for itself, so it is the one state worth confirming often: about eight
+		// updates over a whole spin-down, against one every ten seconds for an engine
+		// whose speed Create is already synchronising.
+		resyncCountdown = engine.isFreeRotating() ? COAST_RESYNC_INTERVAL : RESYNC_INTERVAL;
 	}
 
 	// --- goggle overlay -----------------------------------------------------
@@ -1042,6 +1176,28 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
+
+		// The line that answers "is this engine paying its way", and the one to read
+		// when checking a multi-engine network: every engine on a shared shaft turns
+		// at the same speed, so speed alone cannot tell a fuelled engine from a dead
+		// one being spun by its neighbour. This can.
+		boolean generating = engine.isActivelyGenerating();
+		ECLang.translate("gui.generation",
+			ECLang.translate(generating ? "gui.value.active" : "gui.value.inactive")
+				.style(generating ? ChatFormatting.GREEN : ChatFormatting.RED)
+				.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+
+		// Only worth a line when it is not simply this engine: an engine generating
+		// its own rotation is the ordinary case and says so on the line above.
+		RotationSource rotationSource = engine.getRotationSource();
+		if (rotationSource != RotationSource.ENGINE && rotationSource != RotationSource.NONE)
+			ECLang.translate("gui.rotation_source", ECLang.translate(rotationSource.translationKey())
+				.style(ChatFormatting.WHITE)
+				.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
 
 		boolean ignition = engine.isIgnitionEnabled();
 		ECLang.translate("gui.ignition",
@@ -1343,6 +1499,15 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.style(ChatFormatting.AQUA));
 		diagnostic(tooltip, "generated_rpm", ECLang.number(engine.getPublishedRpm())
 			.style(ChatFormatting.AQUA));
+		// Zero on any engine that is not actively generating, however fast the
+		// network is spinning it. Together with Generated RPM this is the whole
+		// diagnosis of a multi-engine network: capacity comes from combustion, never
+		// from rotation.
+		diagnostic(tooltip, "generated_capacity",
+			ECLang.number(engine.isActivelyGenerating()
+				? EngineTuning.STRESS_CAPACITY_PER_RPM * engine.getPublishedRpm()
+				: 0.0F)
+				.style(engine.isActivelyGenerating() ? ChatFormatting.AQUA : ChatFormatting.DARK_GRAY));
 		// Network load is deliberately absent. Create already reports stress on the
 		// Flywheel, which is this engine's generator, and repeating it here would be
 		// the HUD clutter this overlay keeps out of the way behind sneak.
