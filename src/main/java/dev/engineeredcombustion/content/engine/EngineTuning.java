@@ -38,8 +38,21 @@ public final class EngineTuning {
 	 */
 	public static final float START_RPM = 24.0F;
 
-	/** Below this the engine stops entirely. */
+	/** Below this the engine can no longer sustain combustion. */
 	public static final float STALL_RPM = 10.0F;
+
+	/**
+	 * Below this the crankshaft counts as standing still.
+	 *
+	 * <p>Deliberately far below {@link #STALL_RPM}, and a different question from
+	 * it. Stalling is about <i>combustion</i>: below 10 RPM a charge can no longer
+	 * carry the engine to the next one. Coming to rest is about <i>rotation</i>: a
+	 * flywheel that has stopped firing keeps turning on its stored momentum long
+	 * after it can no longer run, and the phase must not declare it stopped - and
+	 * zero its speed - while it is visibly still turning. That zeroing is what used
+	 * to make a spun-down engine snap the last 10 RPM to a halt.
+	 */
+	public static final float REST_RPM = 1.0F;
 
 	/**
 	 * Free-running equilibrium speed at <b>0 % throttle</b>.
@@ -67,6 +80,20 @@ public final class EngineTuning {
 	 * says at runtime - see {@code CrankshaftBlockEntity#speedLimit()}.
 	 */
 	public static final float MAX_RPM = 208.0F;
+
+	/**
+	 * Sanity bound on any speed loaded from disk or synchronised in.
+	 *
+	 * <p>Deliberately far above {@link #MAX_RPM}, because it guards a different
+	 * thing. {@code MAX_RPM} is what the <i>engine</i> may drive itself to; this is
+	 * only a defence against corrupt NBT. An engine may legitimately be turning far
+	 * faster than it could ever drive itself - a fast external network can impose
+	 * any speed Create's {@code maxRotationSpeed} allows, and that config has a
+	 * minimum but no maximum - and clamping such an engine to its own limit would
+	 * have reintroduced exactly the snap this milestone removed, in the one place a
+	 * chunk reload could still hide it.
+	 */
+	public static final float ABSOLUTE_MAX_RPM = 4096.0F;
 
 	// --- rotational dynamics ------------------------------------------------
 
@@ -289,23 +316,80 @@ public final class EngineTuning {
 	 */
 	public static final int START_ATTEMPT_TIMEOUT_TICKS = 30;
 
+	// --- active generation --------------------------------------------------
+
+	/**
+	 * How many revolutions the engine may go without a combustion event before it
+	 * stops counting as actively generating.
+	 *
+	 * <p>Measured in revolutions rather than ticks because the firing interval is
+	 * a property of speed: one revolution is 18.75 ticks at idle and 6.25 at full
+	 * throttle, so a fixed tick budget would be far too tight at the bottom of the
+	 * range and far too slack at the top.
+	 *
+	 * <p>2.5 tolerates a single missed firing - a momentary fuel hiccup, or a
+	 * revolution that crossed the firing angle on a tick boundary - without ever
+	 * tolerating an engine that has genuinely stopped burning.
+	 */
+	public static final float GENERATION_COMBUSTION_REVOLUTIONS = 2.5F;
+
+	/**
+	 * Hard ceiling on that allowance, in ticks. A crawling engine must not be able
+	 * to claim it is generating for minutes on the strength of one old firing.
+	 */
+	public static final int GENERATION_COMBUSTION_LIMIT_TICKS = 60;
+
 	// --- stress -------------------------------------------------------------
 
 	/** Capacity per RPM, Create's convention. 32 * 64 RPM = 2048 SU at idle. */
 	public static final double STRESS_CAPACITY_PER_RPM = 32.0D;
 
+	/**
+	 * Parasitic load an engine imposes while it is <i>not</i> generating, per RPM.
+	 *
+	 * <p>Compression, bearing friction and pumping losses: turning a dead engine
+	 * over costs real work, and this is what that costs the network doing the
+	 * turning. Applied only while the engine is not actively generating - a running
+	 * engine fights its own friction inside the simulation and must not also be
+	 * billed for it on the network it is feeding.
+	 *
+	 * <p>1/32nd of the capacity a running engine provides, so motoring a dead
+	 * engine is felt without being punitive: at 64 RPM one dead engine costs 64 SU
+	 * against the 2048 SU a single running engine supplies. Ten of them cost 640 SU
+	 * - noticeable, still affordable, and exactly the discouragement a wall of
+	 * unfuelled engines should get.
+	 */
+	public static final double PASSIVE_DRAG_STRESS_PER_RPM = 1.0D;
+
 	// --- sound --------------------------------------------------------------
+	//
+	// The engine's audio is deliberately in two layers, because the machine makes
+	// two different kinds of noise and they follow two different clocks:
+	//
+	//   MECHANICAL  a continuous loop - crankshaft, bearings, flywheel, the piston
+	//               pumping against compression. It follows MECHANICAL RPM and
+	//               plays whenever the crank turns, including while the engine is
+	//               being cranked, coasting, or motored by another Create source.
+	//               It contains no combustion whatsoever.
+	//
+	//   COMBUSTION  one short positional pulse per charge that actually burned,
+	//               fired from the authoritative combustion counter. This is what
+	//               carries the engine's rhythm, and it is the reason nothing here
+	//               tries to fake a firing rate by pitching a loop up.
+	//
+	// A single-cylinder engine fires once per revolution: 1.07 times a second at
+	// idle, 3.2 at full throttle. At those rates the ear resolves every event, so
+	// the correct sound is a train of distinct pulses over a mechanical bed - not
+	// a smooth engine loop.
 
 	/**
-	 * Speed at which {@code engine_running.ogg} plays back unshifted.
+	 * Speed at which {@code engine_mechanical.ogg} plays back unshifted.
 	 *
 	 * <p>The asset was synthesised at the engine's idle character, so idle is by
 	 * definition pitch 1.0 and the mapping only has to describe the deviation.
 	 */
 	public static final float SOUND_REFERENCE_RPM = IDLE_RPM;
 
-	/** Cranking speed at which {@code engine_cranking.ogg} plays unshifted, matching Create's Hand Crank. */
-	public static final float SOUND_CRANKING_REFERENCE_RPM = 32.0F;
 
 	/**
 	 * How strongly speed is allowed to bend pitch, as an exponent on the speed
@@ -337,12 +421,86 @@ public final class EngineTuning {
 	public static final float SOUND_INITIAL_VOLUME = 0.05F;
 
 	/** Volumes are Minecraft attenuation units; blocks fall off over roughly 16 * volume blocks. */
-	public static final float SOUND_RUNNING_VOLUME = 0.55F;
-	public static final float SOUND_CRANKING_VOLUME = 0.40F;
-	public static final float SOUND_FIRE_ATTEMPT_VOLUME = 0.45F;
+
+	/**
+	 * The mechanical layer while the engine is being turned over and not firing -
+	 * cranking, or motored by another Create source. This is the whole of what such
+	 * an engine sounds like, so it carries the sound.
+	 */
+	public static final float SOUND_MECHANICAL_CRANKING_VOLUME = 0.42F;
+
+	/**
+	 * The mechanical layer underneath a running engine. Quieter, because here it is
+	 * a <i>bed</i>: the combustion pulses are the engine's voice and the mechanical
+	 * layer must not compete with them or the rhythm turns to mush.
+	 */
+	public static final float SOUND_MECHANICAL_RUNNING_VOLUME = 0.26F;
+
+	/**
+	 * The mechanical layer of a flywheel spinning down with no combustion in it.
+	 * Between the other two: louder than the running bed - nothing is masking it
+	 * now - and quieter than cranking, because nothing is driving it either.
+	 *
+	 * <p>Hearing this alone, with the pulses gone but the engine still turning, is
+	 * the whole point of splitting the layers.
+	 */
+	public static final float SOUND_MECHANICAL_COASTING_VOLUME = 0.34F;
+
+	/** One charge burning in a running engine. The engine's voice. */
+	public static final float SOUND_COMBUSTION_VOLUME = 0.55F;
+
+	/**
+	 * The same charge burning in an engine that has not caught yet. Duller and
+	 * quieter: it is the same event, in a cylinder that is barely turning and has
+	 * no momentum behind it.
+	 */
+	public static final float SOUND_COMBUSTION_STARTING_VOLUME = 0.40F;
+
+	/**
+	 * Pitch of a combustion pulse at {@link #SOUND_REFERENCE_RPM}, and how far
+	 * speed is allowed to move it.
+	 *
+	 * <p>Deliberately shallow, and deliberately <i>not</i> how the firing rate is
+	 * communicated: the rate comes from the events themselves. This only makes a
+	 * hard-working engine sound a little tighter than an idling one.
+	 */
+	public static final float SOUND_COMBUSTION_PITCH_RANGE = 0.10F;
+
+	/**
+	 * Random spread applied to every pulse, so a steady engine does not sound like
+	 * one sample on a metronome. Kept small - this is a real engine's
+	 * cycle-to-cycle variation, not a random pitch generator.
+	 */
+	public static final float SOUND_COMBUSTION_PITCH_JITTER = 0.045F;
+	public static final float SOUND_COMBUSTION_VOLUME_JITTER = 0.10F;
+
+	/**
+	 * Firing rate, in events per second, above which individual pulses stop being
+	 * played one for one.
+	 *
+	 * <p>The current engine cannot reach this: one cylinder firing once per
+	 * revolution tops out at 3.2 Hz at {@link #FULL_THROTTLE_RPM}. It exists so
+	 * that the audio scheduler does not <i>have</i> to be rewritten when a faster
+	 * engine, a four-stroke, or a second cylinder arrives - see
+	 * {@code EngineCombustionAudio}, which decimates pulses and fades in a
+	 * continuous combustion layer above this rate instead of machine-gunning
+	 * one-shots.
+	 *
+	 * <p>12 Hz is roughly where a human ear stops resolving separate impacts and
+	 * starts hearing a pitch, which is exactly where discrete pulses stop being the
+	 * right representation.
+	 */
+	public static final float SOUND_COMBUSTION_PULSE_MAX_RATE_HZ = 12.0F;
+
+	/** Firing rate at which the continuous combustion layer reaches full volume. */
+	public static final float SOUND_COMBUSTION_BLEND_FULL_RATE_HZ = 24.0F;
+
+	/** Volume of that continuous layer once it has fully faded in. */
+	public static final float SOUND_COMBUSTION_LOOP_VOLUME = 0.45F;
+
 	/**
 	 * The ignition tick. Quiet on purpose - it is a coil discharging, not an
-	 * event, and it has to stay well under the cough that may follow it or the
+	 * event, and it has to stay well under the pulse that may follow it or the
 	 * two stop being distinguishable.
 	 */
 	public static final float SOUND_SPARK_VOLUME = 0.16F;
@@ -473,40 +631,91 @@ public final class EngineTuning {
 	}
 
 	/**
-	 * Playback pitch for the running engine loop at a given mechanical speed.
+	 * Playback pitch of the <b>mechanical</b> layer at a given mechanical speed.
 	 *
-	 * <p>This is the single place engine speed becomes audio pitch. It is
-	 * deliberately <i>not</i> proportional: pitch follows the speed ratio raised to
+	 * <p>This is the single place engine speed becomes loop pitch, and it is the
+	 * only layer that has any business being pitched by speed: it is a rotating
+	 * object, so its sound genuinely is a function of how fast it rotates. The
+	 * firing rhythm is <i>not</i> here - it comes from the combustion events
+	 * themselves.
+	 *
+	 * <p>Deliberately not proportional: pitch follows the speed ratio raised to
 	 * {@link #SOUND_PITCH_EXPONENT}, then clamps. Over the engine's whole range
-	 * (stall to {@link #MAX_RPM}) that spans 0.80x to about 1.26x - audibly
+	 * (rest to {@link #MAX_RPM}) that spans 0.80x to about 1.26x - audibly
 	 * responsive across the throttle, never silly.
 	 *
-	 * <p>Because this is a pure function of speed, sweeping the throttle only
-	 * ever changes the pitch of the loop that is already playing. Loop identity
-	 * is decided by {@code EngineLoopKind}, which depends on the engine's phase
-	 * alone, so no throttle movement can start a second loop.
+	 * <p>One reference speed for every state, so cranking, running and coasting are
+	 * one continuous curve: a hand crank sits at 0.87x, idle at exactly 1.0x, full
+	 * throttle at 1.25x, and no state change can make the pitch jump.
 	 *
 	 * <p>Safe to call with any value, including zero and negatives; the engine is
 	 * turned backwards often enough that this must not produce NaN.
 	 */
-	public static float mapMechanicalRpmToEnginePitch(float rpm) {
-		return mapSpeedRatioToPitch(rpm, SOUND_REFERENCE_RPM);
-	}
-
-	/** The same curve for the cranking loop, referenced to hand-crank speed instead of idle. */
-	public static float mapMechanicalRpmToCrankingPitch(float rpm) {
-		return mapSpeedRatioToPitch(rpm, SOUND_CRANKING_REFERENCE_RPM);
-	}
-
-	private static float mapSpeedRatioToPitch(float rpm, float referenceRpm) {
-		float ratio = Math.abs(rpm) / referenceRpm;
+	public static float mechanicalLayerPitch(float rpm) {
+		float ratio = Math.abs(rpm) / SOUND_REFERENCE_RPM;
 		if (ratio <= 0.0F)
 			return SOUND_MIN_PITCH;
 		return clampPitch((float) Math.pow(ratio, SOUND_PITCH_EXPONENT));
 	}
 
+	/**
+	 * Pitch of one combustion pulse, before its random jitter.
+	 *
+	 * <p>Bends by at most {@link #SOUND_COMBUSTION_PITCH_RANGE} across the entire
+	 * speed range, and that shallowness is the point: <b>pitch must never be used
+	 * to imply a firing rate</b>. The rate the player hears is the rate the engine
+	 * actually fired at, because every pulse is one real combustion event.
+	 */
+	public static float combustionPulsePitch(float rpm) {
+		float ratio = Math.abs(rpm) / SOUND_REFERENCE_RPM;
+		if (ratio <= 0.0F)
+			return 1.0F - SOUND_COMBUSTION_PITCH_RANGE;
+		// log2 of the speed ratio: one octave of speed moves the pulse by the full
+		// range, which over idle-to-full-throttle (a ratio of 3) is about +0.16.
+		float octaves = (float) (Math.log(ratio) / Math.log(2.0));
+		return clampPitch(1.0F + SOUND_COMBUSTION_PITCH_RANGE * clamp(octaves, -1.5F, 1.5F));
+	}
+
+	/**
+	 * How far the continuous combustion layer has faded in at a given firing rate:
+	 * 0 while individual pulses still carry the engine, 1 once they cannot.
+	 *
+	 * <p>Always 0 for the current engine, whose fastest firing rate is 3.2 Hz. This
+	 * is the seam a faster engine, a four-stroke or a second cylinder crosses, and
+	 * it exists now so that crossing it later is a tuning change rather than an
+	 * audio rewrite.
+	 */
+	public static float combustionLoopBlend(float rateHz) {
+		if (rateHz <= SOUND_COMBUSTION_PULSE_MAX_RATE_HZ)
+			return 0.0F;
+		float span = SOUND_COMBUSTION_BLEND_FULL_RATE_HZ - SOUND_COMBUSTION_PULSE_MAX_RATE_HZ;
+		return clamp01((rateHz - SOUND_COMBUSTION_PULSE_MAX_RATE_HZ) / span);
+	}
+
+	/**
+	 * How long the engine may go without a combustion event, at a given speed, and
+	 * still count as actively generating.
+	 *
+	 * <p>Scaled by the firing interval - see
+	 * {@link #GENERATION_COMBUSTION_REVOLUTIONS} - and hard-capped, so it is
+	 * neither too tight at idle nor open-ended on a crawling engine.
+	 */
+	public static int generationCombustionAllowanceTicks(float rpm) {
+		float speed = Math.abs(rpm);
+		if (speed < REST_RPM)
+			return GENERATION_COMBUSTION_LIMIT_TICKS;
+		// 1200 = 60 s/min * 20 ticks/s, so this is ticks per revolution.
+		float ticksPerRevolution = 1200.0F / speed;
+		int allowance = Math.round(GENERATION_COMBUSTION_REVOLUTIONS * ticksPerRevolution) + 2;
+		return Math.min(allowance, GENERATION_COMBUSTION_LIMIT_TICKS);
+	}
+
 	private static float clampPitch(float pitch) {
 		return pitch < SOUND_MIN_PITCH ? SOUND_MIN_PITCH : Math.min(pitch, SOUND_MAX_PITCH);
+	}
+
+	private static float clamp(float value, float min, float max) {
+		return value < min ? min : Math.min(value, max);
 	}
 
 	/**

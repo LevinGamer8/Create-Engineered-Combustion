@@ -111,11 +111,21 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<C
 		super.createBlockStateDefinition(builder);
 	}
 
+	/**
+	 * Places the crankcase along the direction the player is facing, with the
+	 * ignition tell-tale already lit.
+	 *
+	 * <p>Lit, because a fresh engine's ignition switch is on - see
+	 * {@code CrankshaftBlockEntity#manualIgnition}. Setting it here rather than
+	 * leaving the first server tick to notice is only tidiness: it saves a block
+	 * update on the tick after placement, and it means the engine never appears,
+	 * for a frame, to disagree with its own switch.
+	 */
 	@Override
 	public BlockState getStateForPlacement(BlockPlaceContext context) {
 		return defaultBlockState().setValue(HORIZONTAL_AXIS, context.getHorizontalDirection()
 			.getAxis())
-			.setValue(LIT, false);
+			.setValue(LIT, true);
 	}
 
 	/**

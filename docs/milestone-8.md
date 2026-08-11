@@ -350,10 +350,13 @@ faster and would otherwise appear to spark "more".
 
 ```
 javac -d /tmp/ec-sim $(ls src/main/java/dev/engineeredcombustion/content/engine/*.java \
-                        | grep -v EngineComponents)
+                        | grep -v EngineComponents | grep -v CombustionAudio)
 javac -cp /tmp/ec-sim -d /tmp/ec-sim tools/SparkPlugTests.java
 java  -cp /tmp/ec-sim SparkPlugTests
 ```
+
+(`CombustionAudio` joined the exclusion list in milestone 9; it is the second
+class in that package that touches Minecraft.)
 
 ## 8. Balance is explicitly not final
 

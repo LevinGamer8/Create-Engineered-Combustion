@@ -1,9 +1,35 @@
 {
-  "engine_cranking": {
-    "subtitle": "subtitles.engineered_combustion.engine_cranking",
+  "engine_mechanical": {
+    "subtitle": "subtitles.engineered_combustion.engine_mechanical",
     "sounds": [
       {
-        "name": "engineered_combustion:engine_cranking",
+        "name": "engineered_combustion:engine_mechanical",
+        "stream": false
+      }
+    ]
+  },
+  "engine_fire": {
+    "subtitle": "subtitles.engineered_combustion.engine_fire",
+    "sounds": [
+      {
+        "name": "engineered_combustion:engine_fire_1",
+        "stream": false
+      },
+      {
+        "name": "engineered_combustion:engine_fire_2",
+        "stream": false
+      },
+      {
+        "name": "engineered_combustion:engine_fire_3",
+        "stream": false
+      }
+    ]
+  },
+  "engine_combustion_loop": {
+    "subtitle": "subtitles.engineered_combustion.engine_combustion_loop",
+    "sounds": [
+      {
+        "name": "engineered_combustion:engine_combustion_loop",
         "stream": false
       }
     ]
@@ -17,29 +43,11 @@
       }
     ]
   },
-  "engine_fire_attempt": {
-    "subtitle": "subtitles.engineered_combustion.engine_fire_attempt",
-    "sounds": [
-      {
-        "name": "engineered_combustion:engine_fire_attempt",
-        "stream": false
-      }
-    ]
-  },
   "engine_start": {
     "subtitle": "subtitles.engineered_combustion.engine_start",
     "sounds": [
       {
         "name": "engineered_combustion:engine_start",
-        "stream": false
-      }
-    ]
-  },
-  "engine_running": {
-    "subtitle": "subtitles.engineered_combustion.engine_running",
-    "sounds": [
-      {
-        "name": "engineered_combustion:engine_running",
         "stream": false
       }
     ]
