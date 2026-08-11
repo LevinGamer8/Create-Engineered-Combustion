@@ -226,7 +226,37 @@ def check_chamber():
         if lo[0] < BORE_MIN - EPS or hi[0] > BORE_MAX + EPS \
                 or lo[2] < BORE_MIN - EPS or hi[2] > BORE_MAX + EPS:
             problems.append(f"combustion_flash.json: {lo}->{hi} reaches outside the bore")
+
+    problems += check_sideways_reach()
     return problems, tdc_crown
+
+
+# Blocks whose geometry may only leave their own cube *vertically*, and why.
+# The engine is a stack, so a part reaching up or down lands inside the next
+# block of the same machine and reads as one assembly. A part reaching sideways
+# lands in whatever the player happened to build next to it - usually nothing -
+# and hangs in the air beside the engine, which is precisely how the spark plug
+# came to look like it was floating outside the cylinder.
+#
+# The Crankshaft is exempt on purpose: its main journals deliberately reach a
+# unit into the Flywheel and into whatever Shaft is bolted to the far end, which
+# is what makes the output side read as one continuous shaft.
+STACKED_ONLY_VERTICALLY = ["cylinder.json", "carburetor.json", "oil_sump.json"]
+
+
+def check_sideways_reach():
+    problems = []
+    for name in STACKED_ONLY_VERTICALLY:
+        for element in json.loads((ROOT / name).read_text())["elements"]:
+            lo, hi = box(element)
+            for axis, label in ((0, "x"), (2, "z")):
+                if lo[axis] < -EPS or hi[axis] > 16.0 + EPS:
+                    problems.append(
+                        f"{name}: {lo}->{hi} reaches out of the block sideways "
+                        f"({label} {lo[axis]:.2f}..{hi[axis]:.2f}) - it will hang "
+                        "in the air beside the engine")
+                    break
+    return problems
 
 
 def check_references():

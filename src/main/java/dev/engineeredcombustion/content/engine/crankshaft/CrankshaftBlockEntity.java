@@ -105,7 +105,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * {@code tools/generate_engine_models.py} - it is the point that model leaves
 	 * the gap at, and a spark that misses it would be worse than no spark at all.
 	 */
-	private static final Vec3 SPARK_PLUG_ELECTRODE = new Vec3(11.95D / 16.0D, 13.79D / 16.0D, 8.0D / 16.0D);
+	private static final Vec3 SPARK_PLUG_ELECTRODE = new Vec3(11.90D / 16.0D, 13.79D / 16.0D, 8.0D / 16.0D);
 
 	private static final String KEY_CRANK_ANGLE = "CrankAngle";
 	private static final String KEY_PHASE = "Phase";
