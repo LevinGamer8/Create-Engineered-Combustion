@@ -162,6 +162,9 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private static final String KEY_COMBUSTION_EVENT = "CombustionEvent";
 	private static final String KEY_GENERATING = "Generating";
 	private static final String KEY_COMBUSTION_AGE = "TicksSinceCombustion";
+	private static final String KEY_CYLINDER_INDEX = "CylinderIndex";
+	private static final String KEY_CYLINDER_COUNT = "CylinderCount";
+	private static final String KEY_SPARK_PLUG_MASK = "SparkPlugMask";
 
 	private final EngineState engine = new EngineState();
 
@@ -218,8 +221,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * happened while the player was somewhere else.
 	 */
 	private boolean clientEventsAdopted;
-	private int lastSparkEventId;
-	private int lastCombustionEventId;
+	private final int[] lastSparkEventIds = new int[EngineTuning.MAX_CYLINDERS];
+	private final int[] lastCombustionEventIds = new int[EngineTuning.MAX_CYLINDERS];
 
 	/**
 	 * Turns this engine's combustion events into sound, and measures how often they
@@ -297,6 +300,40 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * be republished at once rather than waiting out a reconciliation interval.
 	 */
 	private boolean wasExternallyDriven;
+
+	/**
+	 * This section's place along its engine's crank axis, and how many sections the
+	 * engine has.
+	 *
+	 * <p>Both are re-derived from the world every server tick and synchronised, and
+	 * between them they are the whole of what a crankshaft section needs to know
+	 * about being part of a bigger engine:
+	 * <ul>
+	 * <li>{@code cylinderIndex == 0} means this section is the <b>controller</b> -
+	 * the one block entity that simulates, owns the master crank angle, holds the
+	 * controls and talks to Create;</li>
+	 * <li>the index fixes this section's crank phase, so its throw, its piston and
+	 * its combustion all happen at
+	 * {@code masterCrankAngle + i * 360 / cylinderCount};</li>
+	 * <li>and it locates the controller by arithmetic alone -
+	 * {@code worldPosition.relative(negative, cylinderIndex)} - so a follower never
+	 * has to search for the engine it belongs to, on either side.</li>
+	 * </ul>
+	 *
+	 * <p>Persisted so that the first tick after a world load compares the layout it
+	 * derives against the layout the engine actually had, rather than against a
+	 * default that would look like the player had just rebuilt the engine.
+	 */
+	private int cylinderIndex;
+	private int cylinderCount = 1;
+
+	/**
+	 * Which cylinders have a Spark Plug, as a bitmask. Controller-only state, kept
+	 * here purely so it can be synchronised: the client's overlays and its
+	 * per-cylinder spark effects need it, and the Cylinder block entities that own
+	 * the truth may be blocks the client has not been told about yet.
+	 */
+	private int sparkPlugMask;
 
 	/**
 	 * Bridges the simulation to the carburetor. EngineState never learns what a
@@ -389,6 +426,20 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (level == null)
 			return;
 
+		// Where this section sits in its engine, re-derived from the world before
+		// anything is decided on the strength of it. On the client the same two
+		// numbers arrive synchronised.
+		if (!level.isClientSide)
+			updateEnginePlacement();
+
+		// EVERY section runs Create's kinetic bookkeeping above, and nothing else.
+		// A follower has no simulation of its own: it contributes a cylinder to the
+		// controller's engine and reads that engine's state back for its throw, its
+		// overlay and its controls. That is the difference between an inline-4 and
+		// four engines bolted together, and it is enforced here.
+		if (!isEngineController())
+			return;
+
 		tickRotation();
 
 		if (level.isClientSide) {
@@ -421,13 +472,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			&& postLoadWaitTicks++ < EngineTuning.POST_LOAD_RECONCILE_WAIT_TICKS)
 			return;
 
-		EngineFlywheelBlockEntity flywheel = getFlywheel();
-
 		// Resolved once per server tick and held only for the duration of that tick.
 		// The fuel and oil supplies read it, so combustion, fuel draw and lubrication
 		// all act on one consistent snapshot - and it is the same call the overlay
 		// makes, which is what keeps the HUD from ever contradicting the simulation.
 		tickComponents = resolveComponents();
+		EngineFlywheelBlockEntity flywheel = tickComponents.flywheel();
+		sparkPlugMask = tickComponents.sparkPlugMask();
 		// Skipped on the reconciliation tick: that already republishes
 		// unconditionally, and from the engine's real state rather than from the
 		// provisional value this safety net would push.
@@ -454,13 +505,14 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		boolean fuelBefore = engine.isFuelAvailable();
 		boolean sparkPlugBefore = engine.isSparkPlugInstalled();
 		LubricationState lubricationBefore = engine.getLubrication();
-		int sparkEventBefore = engine.getSparkEventId();
-		int combustionEventBefore = engine.getCombustionEventId();
+		int firingBefore = engine.getFiringCylinderCount();
+		int[] sparkEventsBefore = engine.copyOfSparkEventIds();
+		int[] combustionEventsBefore = engine.copyOfCombustionEventIds();
 
 		boolean generatingBefore = engine.isActivelyGenerating();
 
 		EngineInputs inputs = new EngineInputs(tickComponents.isMechanicallyValid(), control.ignitionEnabled(),
-			tickComponents.hasSparkPlug(), control.throttle(), readLoadFactor(), speedLimit());
+			tickComponents.cylinderCount(), sparkPlugMask, control.throttle(), readLoadFactor(), speedLimit());
 		boolean generatedSpeedChanged = engine.tickSimulation(inputs, fuelSupply, oilSupply, random);
 
 		// This tick is the engine's first since the world was loaded, and the
@@ -483,8 +535,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// by the counters moving, so a delayed update would be a delayed effect.
 		// This is at most one update per revolution - about three a second at full
 		// throttle - and it is the only per-event traffic the engine generates.
-		boolean eventFired = sparkEventBefore != engine.getSparkEventId()
-			|| combustionEventBefore != engine.getCombustionEventId();
+		boolean eventFired = !java.util.Arrays.equals(sparkEventsBefore, engine.copyOfSparkEventIds())
+			|| !java.util.Arrays.equals(combustionEventsBefore, engine.copyOfCombustionEventIds());
 
 		// Anything the client displays has to trigger a block update, not just the
 		// things that change the engine's rotation. Toggling redstone on a stopped
@@ -495,6 +547,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()
 			|| sparkPlugBefore != engine.isSparkPlugInstalled()
 			|| lubricationBefore != engine.getLubrication()
+			|| firingBefore != engine.getFiringCylinderCount()
 			|| generatingBefore != engine.isActivelyGenerating()) {
 			syncAndRearmResync();
 		} else if (engine.getMechanicalRpm() != 0.0F && --resyncCountdown <= 0) {
@@ -547,11 +600,36 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * on the question. Nothing here re-derives it.
 	 */
 	public boolean isGeneratingFor(BlockPos queryingFlywheelPos) {
+		if (!drivesFlywheelAt(queryingFlywheelPos))
+			return false;
+		return getEngineState().isActivelyGenerating();
+	}
+
+	/**
+	 * How many of this engine's cylinders are genuinely firing, for the flywheel
+	 * asking. Zero for any flywheel this engine does not drive.
+	 *
+	 * <p>What Stress Capacity is scaled by, so an inline-4 supplies four times what
+	 * a single does - and an inline-4 with a dead plug three quarters of that.
+	 */
+	public int getFiringCylinderCountFor(BlockPos queryingFlywheelPos) {
+		if (!drivesFlywheelAt(queryingFlywheelPos))
+			return 0;
+		return getEngineState().getFiringCylinderCount();
+	}
+
+	/**
+	 * Whether the flywheel at this position is the one this whole engine drives.
+	 *
+	 * <p>The position check that stops a flywheel bolted to a second engine's far
+	 * end - or either of a pair, one at each end - from being paid on this engine's
+	 * account. Asked of the engine's resolved assembly, so on an inline-4 it is the
+	 * flywheel beyond the run rather than beyond this particular section.
+	 */
+	private boolean drivesFlywheelAt(BlockPos queryingFlywheelPos) {
 		if (flywheelPos == null)
 			getFlywheel();
-		if (flywheelPos == null || !flywheelPos.equals(queryingFlywheelPos))
-			return false;
-		return engine.isActivelyGenerating();
+		return flywheelPos != null && flywheelPos.equals(queryingFlywheelPos);
 	}
 
 	/**
@@ -576,6 +654,14 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		BlockPos previous = flywheelPos;
 		cachedFlywheel = null;
 		flywheelPos = null;
+		// A part fitted anywhere on the engine is a change to the whole engine, so
+		// the section that actually runs it has to hear about it too - the Cylinder
+		// three along notifies the section below itself, which may be a follower.
+		if (level != null && !level.isClientSide && cylinderIndex != 0) {
+			CrankshaftBlockEntity controller = getEngineController();
+			if (controller != this)
+				controller.onSurroundingsChanged();
+		}
 		if (previous == null || level == null || level.isClientSide)
 			return;
 
@@ -596,18 +682,165 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			stale.onEngineOutputChanged();
 	}
 
-	/** Called from {@code CrankshaftBlock#onRemove} before the block entity dies. */
+	/**
+	 * Called from {@code CrankshaftBlock#onRemove} before the block entity dies.
+	 *
+	 * <p>Mining any section of a multi-cylinder engine takes that engine apart, so
+	 * the whole thing has to be brought down here rather than only the block that
+	 * was hit. The surviving sections re-derive their new, shorter layout on their
+	 * next tick and stop themselves - see {@link #updateEnginePlacement} - but the
+	 * generator has to be told <i>now</i>, while this block entity can still name
+	 * it, or a flywheel would be left turning the network on a speed nobody will
+	 * ever revise.
+	 */
 	public void onEngineRemoved() {
 		BlockPos previousFlywheel = flywheelPos;
 		tickComponents = null;
+		CrankshaftBlockEntity controller = getEngineController();
+		if (controller != this && !controller.isRemoved()) {
+			controller.onEngineRemoved();
+			return;
+		}
 		engine.setPhase(EnginePhase.STOPPED);
 		engine.setSimulatedRpm(0.0F);
 		engine.setPublishedRpm(0.0F);
+		engine.setActivelyGenerating(false);
+		engine.setTicksSinceCombustion(-1);
 		flywheelPos = null;
 		cachedFlywheel = null;
 		if (previousFlywheel != null && level != null && !level.isClientSide && level.isLoaded(previousFlywheel)
 			&& level.getBlockEntity(previousFlywheel) instanceof EngineFlywheelBlockEntity flywheel)
-			flywheel.onEngineOutputChanged();
+			// reconcile rather than merely update: this also forces the cached Stress
+			// Capacity to zero, so an engine cannot leave a ghost of its own power
+			// behind on a network by being taken apart.
+			flywheel.reconcileEngineOutput();
+	}
+
+	// --- engine assembly ----------------------------------------------------
+
+	/**
+	 * Re-derives this section's place in its engine, and reacts when it changed.
+	 *
+	 * <p>Server side, once per tick, from block states alone - see
+	 * {@link EngineComponents#locate}. Deriving it every tick rather than caching
+	 * it is what makes adding or removing a crankcase section take effect
+	 * immediately with nothing to invalidate.
+	 *
+	 * <p><b>A change of shape stops the engine.</b> Cutting an inline-4 in half
+	 * leaves two engines that were never started, one of them run by a block entity
+	 * that has spent its life as a follower with no simulation in it; resuming
+	 * either from whatever happened to be in its fields would be arbitrary at best.
+	 * So both stop, hand Create a generated speed of zero, and wait to be cranked
+	 * again - which is the behaviour a player can predict, and the one that cannot
+	 * leave ghost Stress Capacity on a network.
+	 *
+	 * <p>The layout is persisted, so a world load compares against the layout the
+	 * engine really had rather than against a default - otherwise every reload
+	 * would look like the player had just rebuilt the engine and would stop it.
+	 */
+	private void updateEnginePlacement() {
+		if (level == null)
+			return;
+		EngineComponents.Placement placement = EngineComponents.locate(level, worldPosition, getAxis());
+		if (placement.index() == cylinderIndex && placement.count() == cylinderCount)
+			return;
+
+		boolean wasRunning = engine.getPhase() != EnginePhase.STOPPED || engine.getPublishedRpm() != 0.0F;
+		cylinderIndex = placement.index();
+		cylinderCount = placement.count();
+		engine.setLayout(cylinderCount, sparkPlugMask);
+
+		// The engine this block entity was simulating no longer exists in the shape
+		// it was simulating. Stop it here, before anything downstream can act on a
+		// state that describes a machine that has been taken apart.
+		if (wasRunning)
+			stopForRebuild();
+		setChanged();
+		sync();
+	}
+
+	/**
+	 * Brings this section's engine to a halt because its structure changed, and
+	 * makes sure Create hears about it.
+	 */
+	private void stopForRebuild() {
+		engine.setPhase(EnginePhase.STOPPED);
+		engine.setSimulatedRpm(0.0F);
+		engine.setActivelyGenerating(false);
+		engine.setTicksSinceCombustion(-1);
+		engine.setPublishedRpm(0.0F);
+		engine.requestGeneratedRepublish();
+		// Whatever flywheel this section's old engine drove has to be told, or it
+		// would keep the network turning on a generated speed nobody will revise.
+		if (level != null && !level.isClientSide) {
+			EngineFlywheelBlockEntity flywheel = resolveComponents().flywheel();
+			if (flywheel != null)
+				flywheel.reconcileEngineOutput();
+		}
+	}
+
+	/**
+	 * Whether this section is the one that runs the engine.
+	 *
+	 * <p>Exactly one section of any engine answers true - the one at the negative
+	 * end of the run - so there is exactly one simulation, one crank angle, one
+	 * throttle and one kinetic source however many cylinders are bolted together.
+	 */
+	public boolean isEngineController() {
+		return cylinderIndex == 0;
+	}
+
+	/** This section's 0-based place along the crank axis, and its cylinder's index. */
+	public int getCylinderIndex() {
+		return cylinderIndex;
+	}
+
+	/** How many cylinders this section's engine has. */
+	public int getCylinderCount() {
+		return cylinderCount;
+	}
+
+	/**
+	 * The crank phase this section's throw runs at, in degrees.
+	 *
+	 * <p>0, 90, 180 or 270 on an inline-4. The same number the simulation fires
+	 * this cylinder at, which is what puts the crank pin the player can see through
+	 * the crankcase window under the rod that combustion actually pushed.
+	 */
+	public float getPhaseOffsetDegrees() {
+		return EngineTuning.cylinderPhaseOffsetDegrees(cylinderIndex, cylinderCount);
+	}
+
+	/** Where the section that runs this engine is. Arithmetic, never a search. */
+	public BlockPos getControllerPos() {
+		return cylinderIndex == 0 ? worldPosition
+			: worldPosition.relative(Direction.get(Direction.AxisDirection.NEGATIVE, getAxis()), cylinderIndex);
+	}
+
+	/**
+	 * The block entity that runs this engine, or {@code this} when the controller
+	 * cannot be reached.
+	 *
+	 * <p>Falling back to itself is deliberate: a follower whose controller is in a
+	 * chunk the client has not received yet must still answer questions about
+	 * itself - its axis, its block state, its position - without a null check at
+	 * every call site. What it will report is a stopped engine, which is the
+	 * honest answer when the engine cannot be seen.
+	 */
+	public CrankshaftBlockEntity getEngineController() {
+		if (cylinderIndex == 0 || level == null)
+			return this;
+		BlockPos controllerPos = getControllerPos();
+		if (!level.isLoaded(controllerPos))
+			return this;
+		if (!(level.getBlockEntity(controllerPos) instanceof CrankshaftBlockEntity controller))
+			return this;
+		// It must actually BE a controller. The index this position was derived from
+		// is at most one tick old, and a section that has just been cut off from its
+		// engine would otherwise hand out a block entity that is itself a follower -
+		// and every delegating method here would follow the chain again. Requiring
+		// index 0 makes the hop exactly one deep, always.
+		return controller.cylinderIndex == 0 ? controller : this;
 	}
 
 	// --- post-load reconciliation -------------------------------------------
@@ -658,14 +891,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * missing Carburetor - this cannot make an incomplete engine wait for ever.
 	 */
 	private boolean engineNeighbourhoodLoaded() {
-		if (level == null)
-			return false;
-		BlockPos pos = worldPosition;
-		Axis axis = getAxis();
-		return level.isLoaded(EngineComponents.cylinderPos(pos)) && level.isLoaded(EngineComponents.carburetorPos(pos))
-			&& level.isLoaded(EngineComponents.oilSumpPos(pos))
-			&& level.isLoaded(EngineComponents.flywheelCandidatePos(pos, axis, Direction.AxisDirection.POSITIVE))
-			&& level.isLoaded(EngineComponents.flywheelCandidatePos(pos, axis, Direction.AxisDirection.NEGATIVE));
+		return level != null && resolveComponents().chunksLoaded();
 	}
 
 	/**
@@ -698,6 +924,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * the overlay resolves exactly what the simulation resolved.
 	 */
 	public EngineControlState resolveControlState() {
+		// One engine, one set of controls. A follower resolves its controller's,
+		// which is why clicking any crankcase of an inline-4 works the same switch
+		// and why all four tell-tales agree.
+		CrankshaftBlockEntity controller = getEngineController();
+		if (controller != this)
+			return controller.resolveControlState();
+
 		ControlMode mode = getControlMode();
 		int signal = mode.usesRedstone() ? redstoneSignal : 0;
 		boolean ignition = mode.controlsIgnition() ? signal > 0 : manualIgnition;
@@ -744,12 +977,29 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * removing the module always reverts to manual control immediately.
 	 */
 	public ControlMode getControlMode() {
+		CrankshaftBlockEntity controller = getEngineController();
+		if (controller != this)
+			return controller.getControlMode();
 		return controlModuleInstalled && controlMode != null ? ControlMode.byOrdinal(controlMode.getValue())
 			: ControlMode.MANUAL;
 	}
 
+	/**
+	 * Whether <i>this section</i> is the one carrying the module.
+	 *
+	 * <p>Deliberately the local field and not the engine's answer. It gates the
+	 * value box, which belongs to the block the module is plugged into, and it is
+	 * what {@code onRemove} asks before dropping the item - and an engine-wide
+	 * answer there would have every section of an inline-4 drop a module the player
+	 * only ever crafted one of.
+	 */
 	public boolean hasControlModule() {
 		return controlModuleInstalled;
+	}
+
+	/** Whether this section's engine has a module installed, wherever it sits. */
+	public boolean engineHasControlModule() {
+		return getEngineController().controlModuleInstalled;
 	}
 
 	/**
@@ -761,6 +1011,9 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * engine simply will not catch.
 	 */
 	public boolean toggleManualIgnition() {
+		CrankshaftBlockEntity controller = getEngineController();
+		if (controller != this)
+			return controller.toggleManualIgnition();
 		setManualIgnition(!manualIgnition);
 		return manualIgnition;
 	}
@@ -785,6 +1038,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	}
 
 	public void setManualIgnition(boolean on) {
+		CrankshaftBlockEntity controller = getEngineController();
+		if (controller != this) {
+			controller.setManualIgnition(on);
+			return;
+		}
 		if (manualIgnition == on)
 			return;
 		manualIgnition = on;
@@ -797,6 +1055,12 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 	/** @return false when a module is already installed. */
 	public boolean installControlModule() {
+		CrankshaftBlockEntity controller = getEngineController();
+		if (controller != this)
+			// One engine, one module: it always goes into the section that runs the
+			// engine, wherever the player clicked, so the value box that configures
+			// it is never on a crankcase that has no say in anything.
+			return controller.installControlModule();
 		if (controlModuleInstalled)
 			return false;
 		controlModuleInstalled = true;
@@ -813,6 +1077,9 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 *         absent, because {@link #getControlMode()} answers MANUAL.
 	 */
 	public boolean removeControlModule() {
+		CrankshaftBlockEntity controller = getEngineController();
+		if (controller != this)
+			return controller.removeControlModule();
 		if (!controlModuleInstalled)
 			return false;
 		controlModuleInstalled = false;
@@ -866,8 +1133,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * them.
 	 *
 	 * <p>This is the whole of the ignition feedback, and it hangs off nothing but
-	 * {@link EngineState#getSparkEventId()} and
-	 * {@link EngineState#getCombustionEventId()} moving. A spark is the coil
+	 * {@link EngineState#getSparkEventId(int)} and
+	 * {@link EngineState#getCombustionEventId(int)} moving, per cylinder. A spark is the coil
 	 * firing - it happens with or without fuel. A combustion is a charge that was
 	 * actually paid for and burned, so the chamber flash and the firing sound
 	 * cannot appear for a revolution that produced no torque, and cannot land on a
@@ -884,26 +1151,42 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 */
 	@OnlyIn(Dist.CLIENT)
 	private void playSyncedEvents() {
-		int spark = engine.getSparkEventId();
-		int combustion = engine.getCombustionEventId();
+		boolean adopting = !clientEventsAdopted;
+		clientEventsAdopted = true;
 
-		if (!clientEventsAdopted) {
-			clientEventsAdopted = true;
-			lastSparkEventId = spark;
-			lastCombustionEventId = combustion;
-			return;
-		}
+		for (int cylinder = 0; cylinder < engine.getCylinderCount(); cylinder++) {
+			int spark = engine.getSparkEventId(cylinder);
+			int combustion = engine.getCombustionEventId(cylinder);
 
-		if (spark != lastSparkEventId) {
-			lastSparkEventId = spark;
-			emitSpark();
-		}
+			if (adopting) {
+				lastSparkEventIds[cylinder] = spark;
+				lastCombustionEventIds[cylinder] = combustion;
+				continue;
+			}
 
-		if (combustion != lastCombustionEventId) {
-			lastCombustionEventId = combustion;
-			engine.triggerCombustionFlash();
-			combustionAudio.onCombustion(level, EngineComponents.cylinderPos(worldPosition), engine);
+			// Which cylinder fired decides where every one of these happens: the
+			// spark at that plug's electrode, the flash in that bore, the bang from
+			// that chamber. An inline-4 firing in sequence is four effects walking
+			// down the engine, which is exactly what it should look and sound like.
+			BlockPos cylinderPos = cylinderPosition(cylinder);
+
+			if (spark != lastSparkEventIds[cylinder]) {
+				lastSparkEventIds[cylinder] = spark;
+				emitSpark(cylinderPos);
+			}
+
+			if (combustion != lastCombustionEventIds[cylinder]) {
+				lastCombustionEventIds[cylinder] = combustion;
+				engine.triggerCombustionFlash(cylinder);
+				combustionAudio.onCombustion(level, cylinderPos, engine);
+			}
 		}
+	}
+
+	/** Where cylinder {@code i} of this engine is, by arithmetic along the crank axis. */
+	private BlockPos cylinderPosition(int cylinder) {
+		return EngineComponents.cylinderPos(
+			worldPosition.relative(Direction.get(Direction.AxisDirection.POSITIVE, getAxis()), cylinder));
 	}
 
 	/**
@@ -918,10 +1201,9 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * diagnosis.
 	 */
 	@OnlyIn(Dist.CLIENT)
-	private void emitSpark() {
+	private void emitSpark(BlockPos cylinderPos) {
 		if (level == null)
 			return;
-		BlockPos cylinderPos = EngineComponents.cylinderPos(worldPosition);
 		double x = cylinderPos.getX() + SPARK_PLUG_ELECTRODE.x;
 		double y = cylinderPos.getY() + SPARK_PLUG_ELECTRODE.y;
 		double z = cylinderPos.getZ() + SPARK_PLUG_ELECTRODE.z;
@@ -983,13 +1265,21 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private void updateIgnitionIndicator() {
 		if (level == null || level.isClientSide)
 			return;
-		BlockState state = getBlockState();
-		if (!state.hasProperty(CrankshaftBlock.LIT))
-			return;
 		boolean ignition = engine.isIgnitionEnabled();
-		if (state.getValue(CrankshaftBlock.LIT) == ignition)
+		// Every crankcase section of the engine, not only this one. The engine has
+		// one ignition, and a four-cylinder engine whose tell-tales disagreed with
+		// each other would be reporting something that does not exist.
+		for (EngineComponents.Cylinder cylinder : engineComponents().cylinders())
+			setIgnitionIndicatorAt(cylinder.crankshaftPos(), ignition);
+	}
+
+	private void setIgnitionIndicatorAt(BlockPos pos, boolean ignition) {
+		if (level == null || !level.isLoaded(pos))
 			return;
-		level.setBlock(worldPosition, state.setValue(CrankshaftBlock.LIT, ignition),
+		BlockState state = level.getBlockState(pos);
+		if (!state.hasProperty(CrankshaftBlock.LIT) || state.getValue(CrankshaftBlock.LIT) == ignition)
+			return;
+		level.setBlock(pos, state.setValue(CrankshaftBlock.LIT, ignition),
 			Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE);
 	}
 
@@ -1032,8 +1322,12 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	// --- mechanical coupling ------------------------------------------------
 
 	/**
-	 * The adjacent flywheel along the crankshaft's axis - at either end - and
+	 * The flywheel beyond either end of this <i>engine's whole crank run</i>, and
 	 * independent of whether the engine is structurally complete.
+	 *
+	 * <p>The run, not this section: an inline-4's flywheel is three blocks away
+	 * from its controller, and every section of that engine has to name the same
+	 * one or the four of them would disagree about who generates.
 	 *
 	 * <p>Null when there is a flywheel at <i>both</i> ends. That is what makes the
 	 * unsupported twin-flywheel build inert rather than arbitrary: with no coupling,
@@ -1049,7 +1343,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (level == null)
 			return null;
 
-		BlockPos candidate = EngineComponents.findFlywheel(level, worldPosition, getAxis())
+		// Block states only, so this stays cheap enough to be asked on every client
+		// frame: where the run begins and ends, then the two candidate positions.
+		EngineComponents.Placement placement = EngineComponents.locate(level, worldPosition, getAxis());
+		Direction positive = Direction.get(Direction.AxisDirection.POSITIVE, getAxis());
+		BlockPos lastSection = placement.controllerPos()
+			.relative(positive, placement.count() - 1);
+		BlockPos candidate = EngineComponents.findFlywheel(level, placement.controllerPos(), lastSection, getAxis())
 			.pos();
 		if (candidate == null)
 			return null;
@@ -1087,12 +1387,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * so no block entity reference here can outlive the block it belongs to.
 	 */
 	private EngineComponents resolveComponents() {
-		BlockPos pos = worldPosition;
-		return level == null
-			? new EngineComponents(pos, getAxis(), EngineComponents.cylinderPos(pos), null,
-				EngineComponents.FlywheelPlacement.NONE, null, null, EngineComponents.carburetorPos(pos), null,
-				EngineComponents.oilSumpPos(pos), null)
-			: EngineComponents.resolve(level, pos, getAxis());
+		return level == null ? EngineComponents.detached(worldPosition, getAxis())
+			: EngineComponents.resolve(level, worldPosition, getAxis());
 	}
 
 	/**
@@ -1121,15 +1417,22 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * arbitrary times and must never see a value that drifts every tick.
 	 */
 	public float getGeneratedRpmFor(BlockPos queryingFlywheelPos) {
-		if (flywheelPos == null)
-			getFlywheel();
-		if (flywheelPos == null || !flywheelPos.equals(queryingFlywheelPos))
+		if (!drivesFlywheelAt(queryingFlywheelPos))
 			return 0.0F;
-		return engine.getPublishedRpm();
+		return getEngineState().getPublishedRpm();
 	}
 
+	/**
+	 * <b>The</b> engine this section belongs to.
+	 *
+	 * <p>A follower has an {@code EngineState} field of its own - every block
+	 * entity does - but it is never ticked and never read: this hands out the
+	 * controller's, so an inline-4's four sections, its four cylinders, its
+	 * overlays and its renderers are all looking at one simulation. That is what
+	 * makes "one engine, four cylinders" true rather than merely intended.
+	 */
 	public EngineState getEngineState() {
-		return engine;
+		return getEngineController().engine;
 	}
 
 	/**
@@ -1180,6 +1483,15 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// - is a representation of this number and is rebuilt from it below.
 		engine.setSimulatedRpm(tag.getFloat(KEY_SIMULATED_RPM));
 
+		// The engine's shape. Restored rather than re-derived only so that the first
+		// tick back has something to compare its own derivation against: a reload
+		// that found the default single cylinder where an inline-4 stood would read
+		// as the player having just rebuilt the engine, and would stop it.
+		cylinderIndex = Math.min(Math.max(tag.getInt(KEY_CYLINDER_INDEX), 0), EngineTuning.MAX_CYLINDERS - 1);
+		cylinderCount = Math.min(Math.max(tag.getInt(KEY_CYLINDER_COUNT), 1), EngineTuning.MAX_CYLINDERS);
+		sparkPlugMask = tag.getInt(KEY_SPARK_PLUG_MASK);
+		engine.setLayout(cylinderCount, sparkPlugMask);
+
 		if (clientPacket) {
 			// The client is shown what the server decided, never a second opinion:
 			// the published speed for the diagnostics, and the one authoritative
@@ -1192,7 +1504,12 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			// bookkeeping: it is the condition an external source cannot fake, and
 			// dropping it used to make a saved running engine disown its own kinetic
 			// network for a tick before claiming it back.
-			engine.setTicksSinceCombustion(tag.getInt(KEY_COMBUSTION_AGE));
+			int[] combustionAges = tag.getIntArray(KEY_COMBUSTION_AGE);
+			if (combustionAges.length > 0)
+				engine.setTicksSinceCombustion(combustionAges);
+			else
+				// A save from before this engine had cylinders to count separately.
+				engine.setTicksSinceCombustion(tag.getInt(KEY_COMBUSTION_AGE));
 			// The published speed is deliberately NOT restored - it is a cached
 			// derivative of the momentum above, so it is reconstructed from that
 			// momentum instead, and the first reconciled server tick then replaces
@@ -1239,7 +1556,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// The event channel. Carried in the same block entity data as everything
 		// else, so a spark or a combustion arrives together with the phase and the
 		// speed that describe it - see playSyncedEvents.
-		engine.setEventIds(tag.getInt(KEY_SPARK_EVENT), tag.getInt(KEY_COMBUSTION_EVENT));
+		engine.setEventIds(tag.getIntArray(KEY_SPARK_EVENT), tag.getIntArray(KEY_COMBUSTION_EVENT));
 	}
 
 	@Override
@@ -1257,7 +1574,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (clientPacket)
 			tag.putFloat(KEY_PUBLISHED_RPM, engine.getPublishedRpm());
 		else
-			tag.putInt(KEY_COMBUSTION_AGE, engine.getTicksSinceCombustion());
+			tag.putIntArray(KEY_COMBUSTION_AGE, engine.copyOfTicksSinceCombustion());
 		tag.putBoolean(KEY_GENERATING, engine.isActivelyGenerating());
 		tag.putBoolean(KEY_IGNITION, engine.isIgnitionEnabled());
 		tag.putBoolean(KEY_STRUCTURE_VALID, engine.isStructureValid());
@@ -1271,8 +1588,14 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		tag.putString(KEY_LUBRICATION, engine.getLubrication()
 			.getId());
 		tag.putInt(KEY_OIL_WEAR, engine.getCombustionEventsSinceOilDraw());
-		tag.putInt(KEY_SPARK_EVENT, engine.getSparkEventId());
-		tag.putInt(KEY_COMBUSTION_EVENT, engine.getCombustionEventId());
+		// Four small counters rather than one, because a spark and a bang happen at
+		// a place: which cylinder fired is what the client needs to put the effect
+		// in the right bore. They still travel in the data the engine already sends.
+		tag.putIntArray(KEY_SPARK_EVENT, engine.copyOfSparkEventIds());
+		tag.putIntArray(KEY_COMBUSTION_EVENT, engine.copyOfCombustionEventIds());
+		tag.putInt(KEY_CYLINDER_INDEX, cylinderIndex);
+		tag.putInt(KEY_CYLINDER_COUNT, cylinderCount);
+		tag.putInt(KEY_SPARK_PLUG_MASK, sparkPlugMask);
 	}
 
 	private void sync() {
@@ -1315,7 +1638,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 */
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
-		EnginePhase phase = engine.getPhase();
+		// The engine, not this block: on a follower crankcase every reading below
+		// belongs to the controller three blocks away, and the player looking at an
+		// inline-4's second cylinder is asking about the engine it is part of.
+		EngineState state = getEngineState();
+		EnginePhase phase = state.getPhase();
 
 		ECLang.translate("gui.engine")
 			.style(ChatFormatting.WHITE)
@@ -1323,7 +1650,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 		// A coasting engine that has run dry reads as "Stalling" - same phase, but
 		// the player cares about the reason, not the internal name.
-		String phaseKey = phase == EnginePhase.COASTING && !engine.isFuelAvailable()
+		String phaseKey = phase == EnginePhase.COASTING && !state.isFuelAvailable()
 			? "gui.phase.stalling"
 			: phase.translationKey();
 		ECLang.translate("gui.state", ECLang.translate(phaseKey)
@@ -1332,7 +1659,17 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
-		ECLang.translate("gui.speed", ECLang.number(engine.getMechanicalRpm())
+		// One line, and only on an engine that has more than one cylinder: a single
+		// saying "Cylinders: 1" is noise on the overlay of every engine ever built.
+		int cylinders = state.getCylinderCount();
+		if (cylinders > 1)
+			ECLang.translate("gui.cylinders", ECLang.number(cylinders)
+				.style(ChatFormatting.AQUA)
+				.component())
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
+
+		ECLang.translate("gui.speed", ECLang.number(state.getMechanicalRpm())
 			.style(ChatFormatting.AQUA)
 			.component())
 			.style(ChatFormatting.GRAY)
@@ -1342,7 +1679,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// when checking a multi-engine network: every engine on a shared shaft turns
 		// at the same speed, so speed alone cannot tell a fuelled engine from a dead
 		// one being spun by its neighbour. This can.
-		boolean generating = engine.isActivelyGenerating();
+		boolean generating = state.isActivelyGenerating();
 		ECLang.translate("gui.generation",
 			ECLang.translate(generating ? "gui.value.active" : "gui.value.inactive")
 				.style(generating ? ChatFormatting.GREEN : ChatFormatting.RED)
@@ -1352,7 +1689,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 		// Only worth a line when it is not simply this engine: an engine generating
 		// its own rotation is the ordinary case and says so on the line above.
-		RotationSource rotationSource = engine.getRotationSource();
+		RotationSource rotationSource = state.getRotationSource();
 		if (rotationSource != RotationSource.ENGINE && rotationSource != RotationSource.NONE)
 			ECLang.translate("gui.rotation_source", ECLang.translate(rotationSource.translationKey())
 				.style(ChatFormatting.WHITE)
@@ -1360,7 +1697,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 				.style(ChatFormatting.GRAY)
 				.forGoggles(tooltip, 1);
 
-		boolean ignition = engine.isIgnitionEnabled();
+		boolean ignition = state.isIgnitionEnabled();
 		ECLang.translate("gui.ignition",
 			ECLang.translate(ignition ? "gui.value.enabled" : "gui.value.disabled")
 				.style(ignition ? ChatFormatting.GREEN : ChatFormatting.RED)
@@ -1383,10 +1720,10 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 		if (phase == EnginePhase.STARTING)
 			ECLang.translate("gui.start_progress",
-				ECLang.number(engine.getStartProgress())
+				ECLang.number(state.getStartProgress())
 					.style(ChatFormatting.GOLD)
 					.component(),
-				ECLang.number(engine.getRequiredStartCycles())
+				ECLang.number(state.getRequiredStartCycles())
 					.style(ChatFormatting.DARK_GRAY)
 					.component())
 				.style(ChatFormatting.GRAY)
@@ -1407,7 +1744,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * one the HUD should stay quiet about.
 	 */
 	private void addControlModuleBlock(List<Component> tooltip) {
-		if (!controlModuleInstalled)
+		if (!engineHasControlModule())
 			return;
 
 		ECLang.translate("gui.control_module")
@@ -1439,8 +1776,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// - otherwise it is the same number twice. This is the line that says the
 		// manual throttle is being borrowed, not overwritten.
 		if (control.mode()
-			.controlsThrottle() && control.throttlePercent() != manualThrottlePercent())
-			ECLang.translate("gui.manual_throttle", ECLang.number(manualThrottlePercent())
+			.controlsThrottle() && control.throttlePercent() != getEngineController().manualThrottlePercent())
+			ECLang.translate("gui.manual_throttle", ECLang.number(getEngineController().manualThrottlePercent())
 				.style(ChatFormatting.DARK_GRAY)
 				.component())
 				.style(ChatFormatting.DARK_GRAY)
@@ -1509,11 +1846,19 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * with no cylinder is the less useful of the two facts.
 	 */
 	private void addSparkPlugWarning(List<Component> tooltip, EngineComponents components) {
-		if (components.cylinder() == null || components.hasSparkPlug())
+		if (components.hasSparkPlug())
 			return;
-		ECLang.translate("gui.spark_plug", ECLang.translate("gui.value.missing")
-			.style(ChatFormatting.RED)
-			.component())
+		// How many are missing, not merely that one is: on an inline-4 "3 / 4" tells
+		// the player the engine will run, roughly, and which fault to look for.
+		int fitted = components.sparkPlugCount();
+		int total = components.cylinderCount();
+		ECLang.translate("gui.spark_plug", (total > 1 ? ECLang.translate("gui.value.fraction",
+			ECLang.number(fitted)
+				.component(),
+			ECLang.number(total)
+				.component())
+			: ECLang.translate("gui.value.missing")).style(ChatFormatting.RED)
+				.component())
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 	}
@@ -1610,6 +1955,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 	/** Sneak-only diagnostics, so the normal overlay stays readable. */
 	private void addDiagnostics(List<Component> tooltip) {
+		EngineState state = getEngineState();
 		ECLang.translate("gui.diagnostics")
 			.style(ChatFormatting.DARK_GRAY)
 			.forGoggles(tooltip);
@@ -1622,7 +1968,29 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		diagnostic(tooltip, "structure", ECLang
 			.translate(valid ? "gui.value.valid" : "gui.value.invalid")
 			.style(valid ? ChatFormatting.GREEN : ChatFormatting.RED));
-		diagnostic(tooltip, "rotation_source", ECLang.translate(engine.getRotationSource()
+		// What the player built, named: Inline-1 through Inline-4. Resolved from the
+		// world, so it is the layout the engine will run as on the next tick.
+		diagnostic(tooltip, "engine_layout", ECLang.translate("gui.layout.inline",
+			ECLang.number(components.cylinderCount())
+				.component())
+			.style(components.oversized() ? ChatFormatting.RED : ChatFormatting.WHITE));
+		// How many of them are genuinely burning fuel right now. THE line for a
+		// multi-cylinder engine: capacity is scaled by this, so an inline-4 reading
+		// "3 / 4" is an engine down a cylinder and down a quarter of its power.
+		int firing = state.getFiringCylinderCount();
+		diagnostic(tooltip, "active_cylinders", ECLang.translate("gui.value.fraction",
+			ECLang.number(firing)
+				.component(),
+			ECLang.number(components.cylinderCount())
+				.component())
+			.style(firing == components.cylinderCount() ? ChatFormatting.GREEN
+				: firing == 0 ? ChatFormatting.DARK_GRAY : ChatFormatting.GOLD));
+		if (components.oversized())
+			ECLang.translate("gui.too_many_cylinders", ECLang.number(EngineTuning.MAX_CYLINDERS)
+				.component())
+				.style(ChatFormatting.RED)
+				.forGoggles(tooltip, 1);
+		diagnostic(tooltip, "rotation_source", ECLang.translate(state.getRotationSource()
 			.translationKey())
 			.style(ChatFormatting.WHITE));
 		// Which end of the crank axis the flywheel is on. Purely informational - both
@@ -1634,20 +2002,26 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// synchronised simulation flag, so it is the same answer the server will
 		// use on its next tick rather than the one it used on its last.
 		boolean sparkPlug = components.hasSparkPlug();
-		diagnostic(tooltip, "spark_plug", ECLang
-			.translate(sparkPlug ? "gui.value.installed" : "gui.value.missing")
-			.style(sparkPlug ? ChatFormatting.GREEN : ChatFormatting.RED));
+		diagnostic(tooltip, "spark_plug", (sparkPlug ? ECLang.translate("gui.value.installed")
+			.style(ChatFormatting.GREEN)
+			: ECLang.translate("gui.value.fraction", ECLang.number(components.sparkPlugCount())
+				.component(),
+				ECLang.number(components.cylinderCount())
+					.component())
+				.style(ChatFormatting.RED)));
+		boolean module = engineHasControlModule();
 		diagnostic(tooltip, "control_module", ECLang
-			.translate(controlModuleInstalled ? "gui.value.installed" : "gui.value.missing")
-			.style(controlModuleInstalled ? ChatFormatting.GREEN : ChatFormatting.DARK_GRAY));
+			.translate(module ? "gui.value.installed" : "gui.value.missing")
+			.style(module ? ChatFormatting.GREEN : ChatFormatting.DARK_GRAY));
 		// The switch position, which is not the same thing as the live ignition while
 		// a redstone ignition mode is driving the engine.
+		boolean switchOn = getEngineController().manualIgnition;
 		diagnostic(tooltip, "ignition_switch", ECLang
-			.translate(manualIgnition ? "gui.value.enabled" : "gui.value.disabled")
-			.style(manualIgnition ? ChatFormatting.GREEN : ChatFormatting.RED));
-		diagnostic(tooltip, "crank_angle", ECLang.number(engine.getCrankAngleDegrees())
+			.translate(switchOn ? "gui.value.enabled" : "gui.value.disabled")
+			.style(switchOn ? ChatFormatting.GREEN : ChatFormatting.RED));
+		diagnostic(tooltip, "crank_angle", ECLang.number(state.getCrankAngleDegrees())
 			.style(ChatFormatting.AQUA));
-		diagnostic(tooltip, "simulated_rpm", ECLang.number(engine.getSimulatedRpm())
+		diagnostic(tooltip, "simulated_rpm", ECLang.number(state.getSimulatedRpm())
 			.style(ChatFormatting.AQUA));
 		// Derived from the resolved control state rather than from the simulation's
 		// own copy of the throttle: that copy is only ever written on the server, so
@@ -1658,17 +2032,17 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		diagnostic(tooltip, "target_rpm", ECLang.number(EngineTuning.targetRpmForThrottle(resolveControlState()
 			.throttle()))
 			.style(ChatFormatting.AQUA));
-		diagnostic(tooltip, "generated_rpm", ECLang.number(engine.getPublishedRpm())
+		diagnostic(tooltip, "generated_rpm", ECLang.number(state.getPublishedRpm())
 			.style(ChatFormatting.AQUA));
 		// Zero on any engine that is not actively generating, however fast the
 		// network is spinning it. Together with Generated RPM this is the whole
 		// diagnosis of a multi-engine network: capacity comes from combustion, never
 		// from rotation.
 		diagnostic(tooltip, "generated_capacity",
-			ECLang.number(engine.isActivelyGenerating()
-				? EngineTuning.STRESS_CAPACITY_PER_RPM * engine.getPublishedRpm()
+			ECLang.number(state.isActivelyGenerating()
+				? EngineTuning.STRESS_CAPACITY_PER_RPM * state.getPublishedRpm() * firing
 				: 0.0F)
-				.style(engine.isActivelyGenerating() ? ChatFormatting.AQUA : ChatFormatting.DARK_GRAY));
+				.style(state.isActivelyGenerating() ? ChatFormatting.AQUA : ChatFormatting.DARK_GRAY));
 		// Network load is deliberately absent. Create already reports stress on the
 		// Flywheel, which is this engine's generator, and repeating it here would be
 		// the HUD clutter this overlay keeps out of the way behind sneak.
@@ -1733,16 +2107,18 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (player == null || GogglesItem.isWearingGoggles(player))
 			return false;
 
+		EngineState state = getEngineState();
+
 		ECLang.translate("gui.engine")
 			.style(ChatFormatting.WHITE)
 			.forGoggles(tooltip);
 
-		EnginePhase phase = engine.getPhase();
+		EnginePhase phase = state.getPhase();
 		ECLang.translate(observedStateKey(phase))
 			.style(phaseColor(phase))
 			.forGoggles(tooltip, 1);
 
-		boolean ignition = engine.isIgnitionEnabled();
+		boolean ignition = state.isIgnitionEnabled();
 		ECLang.translate("gui.ignition",
 			ECLang.translate(ignition ? "gui.value.enabled" : "gui.value.disabled")
 				.style(ignition ? ChatFormatting.GREEN : ChatFormatting.RED)
@@ -1795,8 +2171,9 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * exactly when it has lost combustion and is coasting down.
 	 */
 	private String observedStateKey(EnginePhase phase) {
+		EngineState state = getEngineState();
 		return switch (phase) {
-			case RUNNING -> engine.getLubrication() == LubricationState.NORMAL
+			case RUNNING -> state.getLubrication() == LubricationState.NORMAL
 				? "gui.observed.running_smoothly"
 				: "gui.observed.running_rough";
 			case COASTING -> "gui.observed.stalling";

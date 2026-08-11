@@ -118,18 +118,40 @@ public final class EngineState {
 	 */
 	private boolean activelyGenerating;
 
+	// --- layout -------------------------------------------------------------
+
+	/**
+	 * How many cylinders this one engine has, 1 to
+	 * {@link EngineTuning#MAX_CYLINDERS}.
+	 *
+	 * <p><b>One engine, several cylinders</b> - never several engines. There is one
+	 * crankshaft, one master crank angle, one throttle, one momentum and one
+	 * kinetic source however many cylinders are bolted to it; the cylinders differ
+	 * only in the phase at which they take their turn. Re-read from the resolved
+	 * assembly every tick, so adding or removing a section is picked up without
+	 * anything here caching a layout.
+	 */
+	private int cylinderCount = 1;
+
+	/**
+	 * Bit {@code i} set when cylinder {@code i} has a Spark Plug in its head.
+	 *
+	 * <p>A bitmask rather than a boolean, because a plug is a <i>per-cylinder</i>
+	 * component: an inline-4 with one plug missing is a real machine that runs on
+	 * three cylinders, down on power and lumpy, and telling the player that by
+	 * simply letting the dead cylinder not fire is far better than declaring the
+	 * whole engine broken.
+	 *
+	 * <p>The coil has somewhere to discharge only where this bit is set. It is what
+	 * separates "the ignition is switched on" from "a spark can happen", and it is
+	 * deliberately independent of {@link #structureValid}: an engine with no plugs
+	 * at all turns over perfectly.
+	 */
+	private int sparkPlugMask;
+
 	// --- conditions ---------------------------------------------------------
 	private boolean structureValid;
 	private boolean ignitionEnabled;
-	/**
-	 * Whether the cylinder head has a Spark Plug in it.
-	 *
-	 * <p>The coil has somewhere to discharge only if this is true. It is what
-	 * separates "the ignition is switched on" from "a spark can happen", and it is
-	 * deliberately independent of {@link #structureValid}: an engine with no plug
-	 * turns over perfectly.
-	 */
-	private boolean sparkPlugInstalled;
 	private boolean externallyDriven;
 
 	/** Main throttle opening, {@code [0, 1]}. Re-read from the carburetor each tick. */
@@ -146,16 +168,23 @@ public final class EngineState {
 	 */
 	private float targetRpm = EngineTuning.IDLE_RPM;
 
-	// --- combustion ---------------------------------------------------------
-	private boolean firedThisRevolution;
-	private boolean powerStrokeActive;
+	// --- combustion, per cylinder -------------------------------------------
+	//
+	// Every array here is MAX_CYLINDERS long and indexed by cylinder, so nothing
+	// allocates when the engine's layout changes and an engine with fewer
+	// cylinders simply leaves the tail alone.
+
+	private final boolean[] firedThisRevolution = new boolean[EngineTuning.MAX_CYLINDERS];
+	private final boolean[] powerStrokeActive = new boolean[EngineTuning.MAX_CYLINDERS];
 	/** 1 while running, a fraction of that for a pre-start kick. */
 	private float powerStrokeStrength;
-	private int ticksSinceCombustion = -1;
+	/** Ticks since each cylinder last burned a charge, or -1 if it never has. */
+	private final int[] ticksSinceCombustion = newAges();
 	private boolean fuelAvailable;
 
 	/**
-	 * Counts ignition coil firings, and counts charges that actually burned.
+	 * Counts ignition coil firings, and counts charges that actually burned, for
+	 * each cylinder separately.
 	 *
 	 * <p><b>These two are the engine's event channel.</b> Both are incremented on
 	 * the server, at exactly the point the thing they name happens, and both are
@@ -169,18 +198,24 @@ public final class EngineState {
 	 * mechanisms and could land a tick or two apart. A counter cannot disagree
 	 * with the event it counts.
 	 *
+	 * <p>Per cylinder rather than per engine, because the spark, the flash and the
+	 * bang all happen at a <i>place</i>: cylinder 3 firing has to light cylinder 3
+	 * and be heard from cylinder 3. Four small counters carry that without a packet
+	 * of their own - they travel in the block entity data the engine already sends.
+	 *
 	 * <p>Wrapping is fine and overflow is irrelevant: only inequality is ever
 	 * tested, so any change means "one or more happened since you last looked".
 	 */
-	private int sparkEventId;
-	private int combustionEventId;
+	private final int[] sparkEventIds = new int[EngineTuning.MAX_CYLINDERS];
+	private final int[] combustionEventIds = new int[EngineTuning.MAX_CYLINDERS];
 
 	/**
-	 * Ticks left on the visible flash inside the combustion chamber. Client-side
-	 * bookkeeping, started by {@link #triggerCombustionFlash()} when the
-	 * combustion counter moves and run down by {@link #updateClientVisuals()}.
+	 * Ticks left on the visible flash inside each combustion chamber. Client-side
+	 * bookkeeping, started by {@link #triggerCombustionFlash(int)} when that
+	 * cylinder's combustion counter moves and run down by
+	 * {@link #updateClientVisuals()}.
 	 */
-	private int combustionFlashTicks;
+	private final int[] combustionFlashTicks = new int[EngineTuning.MAX_CYLINDERS];
 
 	// --- lubrication --------------------------------------------------------
 	private LubricationState lubrication = LubricationState.DRY;
@@ -284,10 +319,13 @@ public final class EngineState {
 	 * tick or two apart.
 	 */
 	public void updateClientVisuals() {
-		powerStrokeActive = phase.isFiring() && isWithinPowerStroke();
+		boolean firing = phase.isFiring();
+		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
+			powerStrokeActive[cylinder] = firing && isWithinPowerStroke(localCrankAngleDegrees(cylinder));
 
-		if (combustionFlashTicks > 0)
-			combustionFlashTicks--;
+		for (int cylinder = 0; cylinder < combustionFlashTicks.length; cylinder++)
+			if (combustionFlashTicks[cylinder] > 0)
+				combustionFlashTicks[cylinder]--;
 	}
 
 	/**
@@ -305,7 +343,13 @@ public final class EngineState {
 	public void tickClientCoast() {
 		if (!freeRotation || simulatedRpm == 0.0F)
 			return;
-		integrate(0.0F, 0.0F);
+		// No combustion and no load - a freewheeling engine is by definition on no
+		// network - but compression is very much still there, and it is the same sum
+		// the server computes: every input to it (the crank angle, the cylinder
+		// count, whether the engine is assembled) is synchronised, so both sides
+		// trace the same curve, right down to a single-cylinder engine's last few
+		// revolutions visibly labouring over each compression.
+		integrate(0.0F, compressionTorqueSum(), 0.0F);
 	}
 
 	/**
@@ -315,8 +359,9 @@ public final class EngineState {
 	 * exactly once per charge that really burned - the same event that consumed
 	 * the fuel, delivered the torque and advanced the start attempt.
 	 */
-	public void triggerCombustionFlash() {
-		combustionFlashTicks = EngineTuning.COMBUSTION_FLASH_TICKS;
+	public void triggerCombustionFlash(int cylinder) {
+		if (cylinder >= 0 && cylinder < combustionFlashTicks.length)
+			combustionFlashTicks[cylinder] = EngineTuning.COMBUSTION_FLASH_TICKS;
 	}
 
 	// ------------------------------------------------------------------------
@@ -333,7 +378,8 @@ public final class EngineState {
 	public boolean tickSimulation(EngineInputs inputs, FuelSupply fuel, OilSupply oil, java.util.Random random) {
 		this.structureValid = inputs.structureValid();
 		this.ignitionEnabled = inputs.ignitionEnabled();
-		this.sparkPlugInstalled = inputs.sparkPlugInstalled();
+		this.cylinderCount = inputs.cylinderCount();
+		this.sparkPlugMask = inputs.sparkPlugMask();
 		this.throttle = inputs.throttle();
 		this.loadFactor = inputs.loadFactor();
 		this.speedLimitRpm = inputs.speedLimitRpm();
@@ -344,8 +390,6 @@ public final class EngineState {
 		// revalidation interval.
 		this.lubrication = oil.lubrication();
 
-		if (ticksSinceCombustion >= 0 && ticksSinceCombustion < Integer.MAX_VALUE)
-			ticksSinceCombustion++;
 		if (ticksSincePublish < Integer.MAX_VALUE)
 			ticksSincePublish++;
 
@@ -353,70 +397,94 @@ public final class EngineState {
 		// did that, before the crank angle was advanced and on both sides, so by the
 		// time the simulation runs there is exactly one momentum to integrate.
 
-		// THE TWO GATES, in the order the machine imposes them.
-		//
-		// A spark needs an assembled engine, a live ignition and somewhere for the
-		// coil to discharge - a Spark Plug. Fuel has nothing to do with it: the
-		// coil is wired to the crank, not to the fuel system, so a plug fires
-		// whether or not there is gasoline to light. That is the mechanically
-		// honest model and it is the useful one, because it makes the two failures
-		// distinguishable by looking: a plug that visibly sparks while the engine
-		// refuses to catch says the problem is fuel, a plug that stays dark says it
-		// is ignition, and no plug at all says so on the overlay.
-		//
-		// Combustion needs a spark AND a charge to light. Nothing may reorder these
-		// two: fuel must never be what decides whether the plug sparks.
-		boolean sparkPossible = structureValid && ignitionEnabled && sparkPlugInstalled;
-		boolean combustionPossible = sparkPossible && fuelAvailable;
+		// Forward rotation only, and fast enough to carry a charge to the next one.
+		// Cranking the engine backwards never ignites it.
 		float requiredRpm = phase == EnginePhase.RUNNING ? EngineTuning.STALL_RPM : EngineTuning.START_RPM;
-		// Forward rotation only. Cranking the engine backwards never ignites it.
-		boolean mayIgnite = combustionPossible && lastAngleDeltaDegrees > 0.0F && simulatedRpm >= requiredRpm;
-
-		boolean firingAngleCrossed = crossedFiringAngle();
-
-		if (firingAngleCrossed && sparkPossible && lastAngleDeltaDegrees > 0.0F && simulatedRpm >= requiredRpm)
-			sparkEventId++;
-
-		boolean ignitedThisTick = false;
-		if (firingAngleCrossed) {
-			// Fuel is drawn per firing event, never per tick, and only if the whole
-			// charge is actually available - a partial draw must not produce power.
-			if (mayIgnite && fuel.consume(EngineTuning.FUEL_PER_COMBUSTION_MB)) {
-				firedThisRevolution = true;
-				ignitedThisTick = true;
-				ticksSinceCombustion = 0;
-				ticksSinceStartActivity = 0;
-				// One increment, here, at the single point where a charge is paid for
-				// and burns. Everything downstream of a combustion - the torque, the
-				// start cycle, the oil wear, and on the client the chamber flash and
-				// the firing sound - is therefore describing this same event.
-				combustionEventId++;
-				if (phase != EnginePhase.RUNNING)
-					registerStartCycle(random);
-				else
-					// Only a running engine wears oil. Start attempts are deliberately
-					// free, so a hard-to-start engine is not also an oil sink.
-					drawOilForCombustion(oil);
-			} else {
-				firedThisRevolution = false;
-			}
-		}
-
-		// The crank must actually be turning forwards for a power stroke to push.
-		// firedThisRevolution only changes when the firing angle is crossed, so on a
-		// stalled crank it would otherwise stay latched and deliver free torque
-		// every tick forever. This also makes an overstressed network - where
-		// Create reports speed 0 - correctly produce no combustion torque.
-		powerStrokeActive = firedThisRevolution && combustionPossible && lastAngleDeltaDegrees > 0.0F
-			&& isWithinPowerStroke();
+		boolean turningForwards = lastAngleDeltaDegrees > 0.0F && simulatedRpm >= requiredRpm;
 		powerStrokeStrength = phase == EnginePhase.RUNNING ? 1.0F : EngineTuning.START_KICK_TORQUE_FACTOR;
 
-		integrate(powerStrokeActive
-			? EngineTuning.combustionTorqueAt(simulatedRpm, targetRpm) * powerStrokeStrength
-			: 0.0F, EngineTuning.loadDragTorque(loadFactor));
+		// ONE PASS OVER THE CYLINDERS, and the whole of what makes this a
+		// multi-cylinder engine rather than several engines on a shared shaft.
+		// Every cylinder is offered its own firing opportunity, at its own crank
+		// phase, and pays for its own charge; what they all feed is the single
+		// crankshaft integrated once at the bottom.
+		boolean anyCombustionPossible = false;
+		boolean ignitedThisTick = false;
+		float combustionTorque = 0.0F;
 
-		expireStaleStartAttempt(mayIgnite);
-		advancePhase(combustionPossible, ignitedThisTick);
+		for (int cylinder = 0; cylinder < cylinderCount; cylinder++) {
+			float localAngle = localCrankAngleDegrees(cylinder);
+
+			// THE TWO GATES, in the order the machine imposes them.
+			//
+			// A spark needs an assembled engine, a live ignition and somewhere for
+			// the coil to discharge - a Spark Plug in THIS cylinder. Fuel has nothing
+			// to do with it: the coil is wired to the crank, not to the fuel system,
+			// so a plug fires whether or not there is gasoline to light. That is the
+			// mechanically honest model and it is the useful one, because it makes
+			// the two failures distinguishable by looking: a plug that visibly sparks
+			// while the engine refuses to catch says the problem is fuel, a plug that
+			// stays dark says it is ignition, and no plug at all says so on the
+			// overlay.
+			//
+			// Combustion needs a spark AND a charge to light. Nothing may reorder
+			// these two: fuel must never be what decides whether the plug sparks.
+			boolean sparkPossible = structureValid && ignitionEnabled && hasSparkPlug(cylinder);
+			boolean combustionPossible = sparkPossible && fuelAvailable;
+			anyCombustionPossible |= combustionPossible;
+
+			if (ticksSinceCombustion[cylinder] >= 0 && ticksSinceCombustion[cylinder] < Integer.MAX_VALUE)
+				ticksSinceCombustion[cylinder]++;
+
+			if (crossedFiringAngle(localAngle)) {
+				if (sparkPossible && turningForwards)
+					sparkEventIds[cylinder]++;
+
+				// Fuel is drawn per firing event, never per tick, and only if the
+				// whole charge is actually available - a partial draw must not
+				// produce power. Four cylinders therefore draw four charges per
+				// revolution, which is exactly why an inline-4 burns four times the
+				// gasoline of a single at the same speed.
+				if (combustionPossible && turningForwards && fuel.consume(EngineTuning.FUEL_PER_COMBUSTION_MB)) {
+					firedThisRevolution[cylinder] = true;
+					ignitedThisTick = true;
+					ticksSinceCombustion[cylinder] = 0;
+					ticksSinceStartActivity = 0;
+					// One increment, here, at the single point where a charge is paid
+					// for and burns in this cylinder. Everything downstream of it -
+					// the torque, the start cycle, the oil wear, and on the client the
+					// chamber flash and the firing sound at this cylinder's own
+					// position - is therefore describing this same event.
+					combustionEventIds[cylinder]++;
+					if (phase != EnginePhase.RUNNING)
+						registerStartCycle(random);
+					else
+						// Only a running engine wears oil. Start attempts are
+						// deliberately free, so a hard-to-start engine is not also an
+						// oil sink.
+						drawOilForCombustion(oil);
+				} else {
+					firedThisRevolution[cylinder] = false;
+				}
+			}
+
+			// The crank must actually be turning forwards for a power stroke to push.
+			// firedThisRevolution only changes when the firing angle is crossed, so
+			// on a stalled crank it would otherwise stay latched and deliver free
+			// torque every tick forever. This also makes an overstressed network -
+			// where Create reports speed 0 - correctly produce no combustion torque.
+			powerStrokeActive[cylinder] = firedThisRevolution[cylinder] && combustionPossible
+				&& lastAngleDeltaDegrees > 0.0F && isWithinPowerStroke(localAngle);
+			if (powerStrokeActive[cylinder])
+				combustionTorque +=
+					EngineTuning.combustionTorqueAt(simulatedRpm, targetRpm, cylinderCount) * powerStrokeStrength;
+
+		}
+
+		integrate(combustionTorque, compressionTorqueSum(), EngineTuning.loadDragTorque(loadFactor));
+
+		expireStaleStartAttempt(anyCombustionPossible && turningForwards);
+		advancePhase(anyCombustionPossible, ignitedThisTick);
 
 		// Deliberately last, and deliberately after the phase has settled: this is
 		// the one evaluation of "is this engine producing power", and everything
@@ -436,9 +504,16 @@ public final class EngineState {
 	 * this is meant to avoid.
 	 */
 	private void registerStartCycle(java.util.Random random) {
-		if (requiredStartCycles <= 0)
-			requiredStartCycles = EngineTuning.MIN_START_CYCLES
+		if (requiredStartCycles <= 0) {
+			int rolled = EngineTuning.MIN_START_CYCLES
 				+ random.nextInt(EngineTuning.MAX_START_CYCLES - EngineTuning.MIN_START_CYCLES + 1);
+			// Scaled by the cylinder count, because progress counts engine-wide
+			// firing events and an inline-4 produces four of those per revolution.
+			// Sub-linearly, so more cylinders still catch sooner - which is true of
+			// real engines - without a four-cylinder engine starting the instant it
+			// is touched.
+			requiredStartCycles = EngineTuning.requiredStartCycles(rolled, cylinderCount);
+		}
 		startProgress++;
 	}
 
@@ -479,8 +554,8 @@ public final class EngineState {
 	private void resetStartAttempt() {
 		startProgress = 0;
 		requiredStartCycles = 0;
-		firedThisRevolution = false;
-		powerStrokeActive = false;
+		java.util.Arrays.fill(firedThisRevolution, false);
+		java.util.Arrays.fill(powerStrokeActive, false);
 	}
 
 	/**
@@ -495,12 +570,18 @@ public final class EngineState {
 	 * against friction and flywheel inertia, exactly as it did before the
 	 * throttle existed.
 	 */
-	private void integrate(float combustionTorque, float loadDragTorque) {
+	private void integrate(float combustionTorque, float compressionTorque, float loadDragTorque) {
 		// Friction always opposes the current direction of rotation, and is exactly
 		// zero at rest so it can never push a stationary engine into motion. The
 		// kinetic load Create has hung on the engine is drag of the same kind.
+		//
+		// Compression is not drag and is deliberately not added to it: it has a sign
+		// of its own, resisting on the way up to top dead centre and pushing on the
+		// way back down, and it takes out over a revolution exactly what it puts in.
+		// That is why it can make a single-cylinder engine lumpy and an inline-4
+		// smooth without moving either one's equilibrium speed.
 		float drag = EngineTuning.frictionTorqueAt(simulatedRpm, lubrication) + loadDragTorque;
-		float netTorque = combustionTorque - Math.signum(simulatedRpm) * drag;
+		float netTorque = combustionTorque + compressionTorque - Math.signum(simulatedRpm) * drag;
 
 		float next = simulatedRpm + netTorque / EngineTuning.FLYWHEEL_INERTIA;
 
@@ -589,9 +670,10 @@ public final class EngineState {
 	private void stop() {
 		phase = EnginePhase.STOPPED;
 		simulatedRpm = 0.0F;
-		firedThisRevolution = false;
-		powerStrokeActive = false;
 		activelyGenerating = false;
+		// Every cylinder forgets that it ever fired, so a stopped engine's firing
+		// count - and therefore its Stress Capacity - is zero from this instant.
+		java.util.Arrays.fill(ticksSinceCombustion, -1);
 		resetStartAttempt();
 	}
 
@@ -600,27 +682,84 @@ public final class EngineState {
 	// ------------------------------------------------------------------------
 
 	/**
-	 * Detects that the crank passed the firing angle during the tick that just
+	 * The crank angle <i>this cylinder</i> sees.
+	 *
+	 * <pre>
+	 * localAngle = normalize(masterCrankAngle + phaseOffset(index))
+	 * </pre>
+	 *
+	 * <p>There is exactly one crank angle in this engine and it is
+	 * {@link #crankAngleDegrees}. A cylinder does not have an angle of its own that
+	 * could drift from the others - it has an <b>offset</b>, fixed by where its
+	 * throw sits on the shaft, and every question about that cylinder (has it
+	 * crossed its firing angle, is it on its power stroke, where is its piston,
+	 * where is its crank pin) is asked of this function. That is what makes four
+	 * pistons mechanically synchronised by construction rather than by four
+	 * counters happening to agree.
+	 */
+	public float localCrankAngleDegrees(int cylinder) {
+		return normalizeDegrees(
+			crankAngleDegrees + EngineTuning.cylinderPhaseOffsetDegrees(cylinder, cylinderCount));
+	}
+
+	/** The same angle interpolated into the current frame, for renderers. */
+	public float getLocalRenderCrankAngleDegrees(int cylinder, float partialTicks) {
+		return normalizeDegrees(crankAngleDegrees + lastAngleDeltaDegrees * partialTicks
+			+ EngineTuning.cylinderPhaseOffsetDegrees(cylinder, cylinderCount));
+	}
+
+	/**
+	 * Detects that a cylinder passed its firing angle during the tick that just
 	 * happened, rather than testing the angle for equality - ticks routinely skip
 	 * right over any exact value. Because the test is a crossing it can fire at
-	 * most once per revolution by construction.
+	 * most once per revolution per cylinder by construction.
 	 *
 	 * <p>Only forward rotation counts.
+	 *
+	 * @param localAngle this cylinder's angle <i>after</i> the tick's advance
 	 */
-	private boolean crossedFiringAngle() {
+	private boolean crossedFiringAngle(float localAngle) {
 		float delta = lastAngleDeltaDegrees;
 		if (delta <= 0.0F)
 			return false;
 		if (delta >= 360.0F)
 			return true;
-		float travelledPastFiringAngle =
-			normalizeDegrees(crankAngleDegrees - delta - EngineTuning.FIRING_ANGLE_DEGREES);
+		float travelledPastFiringAngle = normalizeDegrees(localAngle - delta - EngineTuning.FIRING_ANGLE_DEGREES);
 		return travelledPastFiringAngle + delta >= 360.0F;
 	}
 
-	private boolean isWithinPowerStroke() {
-		return normalizeDegrees(crankAngleDegrees - EngineTuning.FIRING_ANGLE_DEGREES)
-			< EngineTuning.POWER_STROKE_DEGREES;
+	private boolean isWithinPowerStroke(float localAngle) {
+		return normalizeDegrees(localAngle - EngineTuning.FIRING_ANGLE_DEGREES) < EngineTuning.POWER_STROKE_DEGREES;
+	}
+
+	/**
+	 * The engine's total compression torque right now: every cylinder's own gas
+	 * spring, at its own phase, added up.
+	 *
+	 * <p>Compression is a property of a bore with a piston in it, not of
+	 * combustion: a cylinder with no plug and no fuel still has to be pushed up to
+	 * top dead centre and still hands the energy back afterwards. So this is
+	 * summed for every cylinder the engine has, whether or not any of them are
+	 * firing - which is what makes motoring a dead engine feel like turning an
+	 * engine over.
+	 *
+	 * <p>Two suppressions, both narrow. An engine with no pistons has nothing to
+	 * compress with; and a crank that has genuinely stopped must not be nudged off
+	 * its rest position by a spring with nothing left to push against.
+	 *
+	 * <p><b>Where multi-cylinder smoothness comes from.</b> Each term is the same
+	 * curve shifted by that cylinder's phase, so on an inline-1 the sum is one lump
+	 * per revolution and on an inline-4 it is four lumps 90 degrees apart that
+	 * very nearly cancel. Nothing anywhere says "four cylinders are smoother" - it
+	 * falls out of adding them up.
+	 */
+	private float compressionTorqueSum() {
+		if (!structureValid || Math.abs(simulatedRpm) < EngineTuning.REST_RPM)
+			return 0.0F;
+		float total = 0.0F;
+		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
+			total += EngineTuning.compressionTorqueAt(localCrankAngleDegrees(cylinder));
+		return total;
 	}
 
 	// ------------------------------------------------------------------------
@@ -657,20 +796,37 @@ public final class EngineState {
 	 * disqualifying - producing no combustion is.
 	 */
 	private boolean evaluateActiveGeneration() {
-		return phase.mayGenerate() && structureValid && ignitionEnabled && sparkPlugInstalled && fuelAvailable
-			&& simulatedRpm >= EngineTuning.STALL_RPM && combustionIsCurrent();
+		return phase.mayGenerate() && structureValid && ignitionEnabled && fuelAvailable
+			&& simulatedRpm >= EngineTuning.STALL_RPM && getFiringCylinderCount() > 0;
 	}
 
 	/**
-	 * Whether a charge burned recently enough that the engine is still, in any
-	 * meaningful sense, running on combustion.
+	 * How many of this engine's cylinders burned a charge recently enough to count
+	 * as genuinely firing right now.
 	 *
-	 * <p>Scaled by speed, because the firing interval is: see
-	 * {@link EngineTuning#generationCombustionAllowanceTicks}.
+	 * <p><b>The engine's real output, counted one cylinder at a time.</b> Stress
+	 * Capacity is scaled by this, so an inline-4 supplies four times what a single
+	 * does - and an inline-4 with a dead Spark Plug supplies three quarters of
+	 * that, because the dead cylinder is not in this count. Capacity therefore
+	 * follows combustion rather than cylinder count, which is what stops a wall of
+	 * cylinders from being free power.
+	 *
+	 * <p>Nothing an external source does can raise it. Being spun fast is not
+	 * burning fuel, so a motored engine counts zero however quickly its pistons are
+	 * moving - the same rule that closed the multi-engine exploit, now per cylinder.
+	 *
+	 * <p>"Recently enough" is scaled by speed, because the firing interval is: see
+	 * {@link EngineTuning#generationCombustionAllowanceTicks}. Each cylinder fires
+	 * once per revolution, so the allowance is the same one a single-cylinder
+	 * engine used.
 	 */
-	private boolean combustionIsCurrent() {
-		return ticksSinceCombustion >= 0
-			&& ticksSinceCombustion <= EngineTuning.generationCombustionAllowanceTicks(simulatedRpm);
+	public int getFiringCylinderCount() {
+		int allowance = EngineTuning.generationCombustionAllowanceTicks(simulatedRpm);
+		int firing = 0;
+		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
+			if (ticksSinceCombustion[cylinder] >= 0 && ticksSinceCombustion[cylinder] <= allowance)
+				firing++;
+		return firing;
 	}
 
 	/**
@@ -877,8 +1033,36 @@ public final class EngineState {
 		return phase;
 	}
 
+	/** Whether any cylinder is being pushed by a burning charge right now. */
 	public boolean isPowerStrokeActive() {
-		return powerStrokeActive;
+		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
+			if (powerStrokeActive[cylinder])
+				return true;
+		return false;
+	}
+
+	public boolean isPowerStrokeActive(int cylinder) {
+		return cylinder >= 0 && cylinder < cylinderCount && powerStrokeActive[cylinder];
+	}
+
+	/** How many cylinders this engine has, 1 to {@link EngineTuning#MAX_CYLINDERS}. */
+	public int getCylinderCount() {
+		return cylinderCount;
+	}
+
+	/** Whether cylinder {@code index} has a Spark Plug in its head. */
+	public boolean hasSparkPlug(int cylinder) {
+		return cylinder >= 0 && cylinder < cylinderCount && (sparkPlugMask & (1 << cylinder)) != 0;
+	}
+
+	/** How many of this engine's cylinders have a Spark Plug fitted. */
+	public int getSparkPlugCount() {
+		return Integer.bitCount(sparkPlugMask & ((1 << cylinderCount) - 1));
+	}
+
+	/** This cylinder's crank phase, in degrees - 0, 90, 180, 270 for an inline-4. */
+	public float getPhaseOffsetDegrees(int cylinder) {
+		return EngineTuning.cylinderPhaseOffsetDegrees(cylinder, cylinderCount);
 	}
 
 	/** Main throttle opening on the last simulated tick, {@code [0, 1]}. */
@@ -897,33 +1081,33 @@ public final class EngineState {
 	}
 
 	/**
-	 * Ignition firings so far. Compare against a remembered value to detect that
-	 * the coil fired; never interpret the number itself.
+	 * Ignition firings in one cylinder so far. Compare against a remembered value
+	 * to detect that the coil fired; never interpret the number itself.
 	 */
-	public int getSparkEventId() {
-		return sparkEventId;
+	public int getSparkEventId(int cylinder) {
+		return cylinder >= 0 && cylinder < sparkEventIds.length ? sparkEventIds[cylinder] : 0;
 	}
 
-	/** Charges burned so far. Same contract as {@link #getSparkEventId()}. */
-	public int getCombustionEventId() {
-		return combustionEventId;
+	/** Charges burned in one cylinder. Same contract as {@link #getSparkEventId(int)}. */
+	public int getCombustionEventId(int cylinder) {
+		return cylinder >= 0 && cylinder < combustionEventIds.length ? combustionEventIds[cylinder] : 0;
 	}
 
-	/** Whether the combustion chamber should be drawn lit this frame. */
-	public boolean isCombustionFlashActive() {
-		return combustionFlashTicks > 0;
+	/** Whether this cylinder's combustion chamber should be drawn lit this frame. */
+	public boolean isCombustionFlashActive(int cylinder) {
+		return cylinder >= 0 && cylinder < combustionFlashTicks.length && combustionFlashTicks[cylinder] > 0;
 	}
 
 	/**
-	 * Flash brightness, 1 on the tick it fired and fading to 0.
+	 * Flash brightness in one cylinder, 1 on the tick it fired and fading to 0.
 	 *
 	 * @param partialTicks interpolation into the current frame, so the fade is
 	 *                     smooth rather than stepping once per tick
 	 */
-	public float getCombustionFlashIntensity(float partialTicks) {
-		if (combustionFlashTicks <= 0)
+	public float getCombustionFlashIntensity(int cylinder, float partialTicks) {
+		if (!isCombustionFlashActive(cylinder))
 			return 0.0F;
-		float remaining = combustionFlashTicks - partialTicks;
+		float remaining = combustionFlashTicks[cylinder] - partialTicks;
 		if (remaining <= 0.0F)
 			return 0.0F;
 		return remaining / EngineTuning.COMBUSTION_FLASH_TICKS;
@@ -949,13 +1133,15 @@ public final class EngineState {
 	}
 
 	/**
-	 * Whether a Spark Plug was fitted on the last simulated tick.
+	 * Whether <i>every</i> cylinder had a Spark Plug on the last simulated tick.
 	 *
 	 * <p>Synchronised so the client-side overlays can explain a dead engine
-	 * without re-reading the world.
+	 * without re-reading the world. False on an inline-4 missing one plug, which
+	 * is what the overlay's warning is for; how many are missing, and which, is
+	 * {@link #getSparkPlugCount()} and {@link #hasSparkPlug(int)}.
 	 */
 	public boolean isSparkPlugInstalled() {
-		return sparkPlugInstalled;
+		return getSparkPlugCount() == cylinderCount;
 	}
 
 	/** How well lubricated the engine was on the last simulated tick. */
@@ -972,9 +1158,22 @@ public final class EngineState {
 		return structureValid;
 	}
 
-	/** Ticks since the last combustion event, or -1 if it has never fired. */
+	/**
+	 * Ticks since <i>any</i> cylinder last burned a charge, or -1 if none ever has.
+	 */
 	public int getTicksSinceCombustion() {
-		return ticksSinceCombustion;
+		int youngest = -1;
+		for (int cylinder = 0; cylinder < cylinderCount; cylinder++) {
+			int age = ticksSinceCombustion[cylinder];
+			if (age >= 0 && (youngest < 0 || age < youngest))
+				youngest = age;
+		}
+		return youngest;
+	}
+
+	/** Ticks since one cylinder burned a charge, or -1 if it never has. */
+	public int getTicksSinceCombustion(int cylinder) {
+		return cylinder >= 0 && cylinder < ticksSinceCombustion.length ? ticksSinceCombustion[cylinder] : -1;
 	}
 
 	/**
@@ -1094,8 +1293,40 @@ public final class EngineState {
 	 * <p>Time spent unloaded does not count against it. The engine was not turning
 	 * while the world was closed, so no firing opportunities were missed.
 	 */
+	public void setTicksSinceCombustion(int[] ticks) {
+		copyInto(ticks, ticksSinceCombustion);
+		for (int cylinder = 0; cylinder < ticksSinceCombustion.length; cylinder++)
+			ticksSinceCombustion[cylinder] = Math.max(-1, ticksSinceCombustion[cylinder]);
+	}
+
+	/** The same, for every cylinder at once. */
 	public void setTicksSinceCombustion(int ticks) {
-		this.ticksSinceCombustion = Math.max(-1, ticks);
+		java.util.Arrays.fill(ticksSinceCombustion, Math.max(-1, ticks));
+	}
+
+	/**
+	 * Restores the engine's layout, so the very first tick back after a world load
+	 * already knows how many cylinders it is reconciling.
+	 *
+	 * <p>Overwritten from the resolved assembly on that tick - the world, not the
+	 * tag, decides how many cylinders an engine has - but having it right for one
+	 * tick keeps the reconstructed generated speed and the phase offsets the
+	 * renderers ask for from being briefly wrong on a four-cylinder engine.
+	 */
+	public void setLayout(int cylinderCount, int sparkPlugMask) {
+		this.cylinderCount = Math.min(Math.max(cylinderCount, 1), EngineTuning.MAX_CYLINDERS);
+		this.sparkPlugMask = sparkPlugMask & ((1 << this.cylinderCount) - 1);
+	}
+
+	/** Copies as much of {@code from} as fits into {@code into}, leaving the rest. */
+	private static void copyInto(int[] from, int[] into) {
+		System.arraycopy(from, 0, into, 0, Math.min(from.length, into.length));
+	}
+
+	private static int[] newAges() {
+		int[] ages = new int[EngineTuning.MAX_CYLINDERS];
+		java.util.Arrays.fill(ages, -1);
+		return ages;
 	}
 
 	/**
@@ -1118,12 +1349,33 @@ public final class EngineState {
 	}
 
 	/**
-	 * Adopts the server's event counters. Client side, from the synchronised
-	 * block entity data; the values are never interpreted, only compared.
+	 * Adopts the server's per-cylinder event counters. Client side, from the
+	 * synchronised block entity data; the values are never interpreted, only
+	 * compared.
+	 *
+	 * <p>Either array may be shorter than {@link EngineTuning#MAX_CYLINDERS} - an
+	 * engine that grew a cylinder since the tag was written, or a tag from before
+	 * multi-cylinder engines existed - and the missing entries simply stay as they
+	 * are.
 	 */
-	public void setEventIds(int sparkEventId, int combustionEventId) {
-		this.sparkEventId = sparkEventId;
-		this.combustionEventId = combustionEventId;
+	public void setEventIds(int[] sparkEventIds, int[] combustionEventIds) {
+		copyInto(sparkEventIds, this.sparkEventIds);
+		copyInto(combustionEventIds, this.combustionEventIds);
+	}
+
+	/** The per-cylinder spark counters, as a copy safe to hand to NBT. */
+	public int[] copyOfSparkEventIds() {
+		return sparkEventIds.clone();
+	}
+
+	/** The per-cylinder combustion counters, as a copy safe to hand to NBT. */
+	public int[] copyOfCombustionEventIds() {
+		return combustionEventIds.clone();
+	}
+
+	/** The per-cylinder combustion ages, as a copy safe to hand to NBT. */
+	public int[] copyOfTicksSinceCombustion() {
+		return ticksSinceCombustion.clone();
 	}
 
 	public void setLubrication(LubricationState lubrication) {
@@ -1139,8 +1391,12 @@ public final class EngineState {
 		this.ignitionEnabled = ignitionEnabled;
 	}
 
+	/**
+	 * Client-side convenience for a tag that only carries "are all the plugs in".
+	 * The authoritative per-cylinder answer arrives through {@link #setLayout}.
+	 */
 	public void setSparkPlugInstalled(boolean sparkPlugInstalled) {
-		this.sparkPlugInstalled = sparkPlugInstalled;
+		this.sparkPlugMask = sparkPlugInstalled ? (1 << cylinderCount) - 1 : 0;
 	}
 
 	public void setStructureValid(boolean structureValid) {

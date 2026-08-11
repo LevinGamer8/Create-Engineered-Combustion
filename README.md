@@ -158,3 +158,15 @@ for what writes what, why the resolutions differ, and the two model invariants
   plus a rate limit rather than a deadband, so combustion ripple still never
   reaches the kinetic network but a small error can no longer persist for ever.
   See [`docs/milestone-10.md`](docs/milestone-10.md).
+* **Milestone 11** - modular inline engines: extending the crankshaft along its
+  own axis builds an Inline-1, -2, -3 or -4, and it is **one** engine - one
+  simulation, one master crank angle, one throttle, one Flywheel, one kinetic
+  source - with each cylinder taking its turn at `i * 360 / n` degrees. Every
+  cylinder gets its own combustion, its own charge of gasoline, its own spark and
+  flash and bang at its own bore, and its own phase-shifted compression, so an
+  inline-4 burns four times the fuel, supplies four times the Stress Capacity and
+  runs visibly and audibly smoother than a single - and an inline-4 with one dead
+  Spark Plug runs on three cylinders, down on power. Capacity is scaled by the
+  cylinders that are actually burning fuel, never by how many exist, so a motored
+  dry inline-4 still supplies exactly nothing. See
+  [`docs/milestone-11.md`](docs/milestone-11.md).

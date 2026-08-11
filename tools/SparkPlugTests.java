@@ -59,8 +59,8 @@ public class SparkPlugTests {
 	 */
 	static Run crank(EngineState engine, boolean sparkPlug, boolean ignition, FuelSupply fuel,
 		float crankRpm, int ticks) {
-		int sparks0 = engine.getSparkEventId();
-		int combustions0 = engine.getCombustionEventId();
+		int sparks0 = engine.getSparkEventId(0);
+		int combustions0 = engine.getCombustionEventId(0);
 		java.util.Random random = new java.util.Random(1234);
 		double degrees = 0.0;
 		for (int i = 0; i < ticks; i++) {
@@ -72,8 +72,8 @@ public class SparkPlugTests {
 			engine.tickSimulation(new EngineInputs(true, ignition, sparkPlug,
 				1.0F, 0.0F, EngineTuning.MAX_RPM), fuel, OIL, random);
 		}
-		return new Run(engine.getSparkEventId() - sparks0,
-			engine.getCombustionEventId() - combustions0, engine.getPhase(),
+		return new Run(engine.getSparkEventId(0) - sparks0,
+			engine.getCombustionEventId(0) - combustions0, engine.getPhase(),
 			engine.getCrankAngleDegrees(), engine.getSimulatedRpm(), degrees / 360.0);
 	}
 

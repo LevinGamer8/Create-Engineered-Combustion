@@ -134,8 +134,15 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	 */
 	public float getCrankAngleForRender(float partialTicks) {
 		CrankshaftBlockEntity crankshaft = getCrankshaft();
-		return crankshaft == null ? 0.0F : crankshaft.getEngineState()
-			.getRenderCrankAngleDegrees(partialTicks);
+		if (crankshaft == null)
+			return 0.0F;
+		// This cylinder's own angle: the engine's one master crank angle plus the
+		// phase its throw sits at. On an inline-4 that is what puts cylinder 1 near
+		// top dead centre while cylinder 3 is near the bottom - four pistons moving
+		// from one number, so they can never drift out of step with each other or
+		// with the crank webs the player can see turning underneath them.
+		return crankshaft.getEngineState()
+			.getLocalRenderCrankAngleDegrees(crankshaft.getCylinderIndex(), partialTicks);
 	}
 
 	/**
@@ -150,7 +157,7 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		CrankshaftBlockEntity crankshaft = getCrankshaft();
 		return crankshaft == null ? 0.0F
 			: crankshaft.getEngineState()
-				.getCombustionFlashIntensity(partialTicks);
+				.getCombustionFlashIntensity(crankshaft.getCylinderIndex(), partialTicks);
 	}
 
 	/**
@@ -162,6 +169,18 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	public Direction.Axis getEngineAxisForRender() {
 		CrankshaftBlockEntity crankshaft = getCrankshaft();
 		return crankshaft == null ? Direction.Axis.X : crankshaft.getAxis();
+	}
+
+	/** This cylinder's place in its engine, counting from 1 for the player. */
+	public int getCylinderNumber() {
+		CrankshaftBlockEntity crankshaft = getCrankshaft();
+		return crankshaft == null ? 1 : crankshaft.getCylinderIndex() + 1;
+	}
+
+	/** How many cylinders this cylinder's engine has. */
+	public int getEngineCylinderCount() {
+		CrankshaftBlockEntity crankshaft = getCrankshaft();
+		return crankshaft == null ? 1 : crankshaft.getCylinderCount();
 	}
 
 	@Nullable
@@ -216,9 +235,18 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	 */
 	@Override
 	public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
-		ECLang.translate("gui.cylinder")
-			.style(ChatFormatting.WHITE)
-			.forGoggles(tooltip);
+		// Which cylinder of which engine, so a player working along an inline-4 can
+		// tell at a glance which bore they are looking into. Numbered from 1 and in
+		// crank-axis order, which is the order the phases and later the firing order
+		// are defined in - "Cylinder 2 / 4" is a position on the shaft, not a label.
+		int number = getCylinderNumber();
+		int total = getEngineCylinderCount();
+		(total > 1 ? ECLang.translate("gui.cylinder_number", ECLang.number(number)
+			.component(),
+			ECLang.number(total)
+				.component())
+			: ECLang.translate("gui.cylinder")).style(ChatFormatting.WHITE)
+				.forGoggles(tooltip);
 
 		ECLang.translate("gui.piston",
 			ECLang.translate(pistonInstalled ? "gui.value.installed"

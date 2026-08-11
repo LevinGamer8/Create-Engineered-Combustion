@@ -108,11 +108,24 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	 */
 	@Override
 	public float calculateAddedStressCapacity() {
-		if (!isEngineGenerating()) {
+		// Scaled by the number of cylinders that are GENUINELY FIRING, which is the
+		// whole of how a bigger engine is a more powerful one. An inline-4 supplies
+		// four times what a single does because four charges burn per revolution
+		// instead of one; an inline-4 with a dead Spark Plug supplies three quarters
+		// of that; and a dry engine being spun by a neighbour supplies nothing at
+		// all, however many cylinders it has, because none of them are burning.
+		//
+		// Cylinder count alone is deliberately never the multiplier. That would make
+		// a wall of unfuelled crankcases free power - the exploit this mod already
+		// closed once, at four times the scale.
+		int firing = firingCylinders();
+		if (firing <= 0) {
 			lastCapacityProvided = 0.0F;
 			return 0.0F;
 		}
-		return super.calculateAddedStressCapacity();
+		float capacity = super.calculateAddedStressCapacity() * firing;
+		lastCapacityProvided = capacity;
+		return capacity;
 	}
 
 	/**
@@ -152,6 +165,20 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	private boolean isEngineGenerating() {
 		CrankshaftBlockEntity crankshaft = getAdjacentCrankshaft();
 		return crankshaft != null && crankshaft.isGeneratingFor(worldPosition);
+	}
+
+	/**
+	 * How many cylinders of the engine on the other side of this flywheel are
+	 * actually burning fuel. Zero for a flywheel with no engine of its own.
+	 *
+	 * <p>The crankshaft this flywheel touches may be a follower of a four-cylinder
+	 * engine; it answers for the whole engine, not for its own bore.
+	 */
+	private int firingCylinders() {
+		if (!isEngineGenerating())
+			return 0;
+		CrankshaftBlockEntity crankshaft = getAdjacentCrankshaft();
+		return crankshaft == null ? 0 : crankshaft.getFiringCylinderCountFor(worldPosition);
 	}
 
 	/** Called by the crankshaft when the engine's rotational output changed. */

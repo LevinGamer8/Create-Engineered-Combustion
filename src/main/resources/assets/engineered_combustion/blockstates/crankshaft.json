@@ -1,17 +1,31 @@
 {
   "variants": {
-    "axis=x,lit=false": {
+    "axis=x,lit=false,joined=false": {
       "model": "engineered_combustion:block/crankshaft"
     },
-    "axis=x,lit=true": {
+    "axis=x,lit=false,joined=true": {
+      "model": "engineered_combustion:block/crankshaft_joined"
+    },
+    "axis=x,lit=true,joined=false": {
       "model": "engineered_combustion:block/crankshaft_lit"
     },
-    "axis=z,lit=false": {
+    "axis=x,lit=true,joined=true": {
+      "model": "engineered_combustion:block/crankshaft_joined_lit"
+    },
+    "axis=z,lit=false,joined=false": {
       "model": "engineered_combustion:block/crankshaft",
       "y": 90
     },
-    "axis=z,lit=true": {
+    "axis=z,lit=false,joined=true": {
+      "model": "engineered_combustion:block/crankshaft_joined",
+      "y": 90
+    },
+    "axis=z,lit=true,joined=false": {
       "model": "engineered_combustion:block/crankshaft_lit",
+      "y": 90
+    },
+    "axis=z,lit=true,joined=true": {
+      "model": "engineered_combustion:block/crankshaft_joined_lit",
       "y": 90
     }
   }
