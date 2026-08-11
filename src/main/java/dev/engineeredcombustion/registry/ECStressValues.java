@@ -38,6 +38,15 @@ public class ECStressValues {
 		BlockStressValues.CAPACITIES.register(ECBlocks.FLYWHEEL.get(),
 			() -> EngineTuning.STRESS_CAPACITY_PER_RPM);
 
+		// The parasitic cost of turning a dead engine over. Registered
+		// unconditionally, because Create's registry is per *block*; which of the
+		// two values actually applies at any moment is decided per block entity in
+		// EngineFlywheelBlockEntity, where the one authority on whether the engine
+		// is generating already lives. A generating engine reports 0 impact and its
+		// full capacity; a dead one reports 0 capacity and this impact.
+		BlockStressValues.IMPACTS.register(ECBlocks.FLYWHEEL.get(),
+			() -> EngineTuning.PASSIVE_DRAG_STRESS_PER_RPM);
+
 		// Informational only; drives Create's "Generated Speed" tooltip. The engine
 		// genuinely may generate less than idle while starting or coasting.
 		BlockStressValues.RPM.register(ECBlocks.FLYWHEEL.get(),
