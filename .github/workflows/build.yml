@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # So the full build can be run against a branch before there is a pull
+  # request for it. `verify` needs no Maven host and will run anywhere, but
+  # `build` needs Minecraft, NeoForge and Create - which means the only way to
+  # find out whether a change compiles at all can otherwise be to open a pull
+  # request and see.
+  workflow_dispatch:
 
 # A new push to a branch makes the run already in flight for it pointless.
 concurrency:
