@@ -14,6 +14,7 @@ import com.simibubi.create.infrastructure.config.AllConfigs;
 
 import dev.engineeredcombustion.client.sound.EngineSoundManager;
 import dev.engineeredcombustion.content.engine.CombustionAudio;
+import dev.engineeredcombustion.content.engine.EngineAssemblyStatus;
 import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.EngineInputs;
 import dev.engineeredcombustion.content.engine.EnginePhase;
