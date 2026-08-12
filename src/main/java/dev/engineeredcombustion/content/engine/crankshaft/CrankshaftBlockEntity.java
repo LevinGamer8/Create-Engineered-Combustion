@@ -30,6 +30,7 @@ import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
 import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
+import dev.engineeredcombustion.network.EngineCombustionEventsPayload;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECItems;
 import dev.engineeredcombustion.registry.ECSounds;
@@ -44,11 +45,13 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
@@ -56,6 +59,7 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.fluids.FluidStack;
+import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Engine controller, host of the authoritative engine simulation, and the
@@ -211,19 +215,6 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 	/** Whether a Redstone Control Module is plugged into the engine's controls. */
 	private boolean controlModuleInstalled;
-
-	/**
-	 * The event counters this client has already played out, and whether it has
-	 * seen any at all yet.
-	 *
-	 * <p>Client-side only, and never written to NBT: they are this client's memory
-	 * of what it has already shown, not part of the engine. The flag is what stops
-	 * a freshly loaded chunk from firing a spark and a flash for events that
-	 * happened while the player was somewhere else.
-	 */
-	private boolean clientEventsAdopted;
-	private final int[] lastSparkEventIds = new int[EngineTuning.MAX_CYLINDERS];
-	private final int[] lastCombustionEventIds = new int[EngineTuning.MAX_CYLINDERS];
 
 	/**
 	 * Turns this engine's combustion events into sound, and measures how often they
@@ -480,10 +471,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			// nothing, so Create has no speed left to synchronise - and it is safe
 			// because the coast is deterministic from a state the server did sync.
 			engine.tickClientCoast();
-			// Run the flash timer down first, then look for new events: a flash that
-			// starts this tick must not be aged on the tick it started.
+			// Ages the chamber flashes. New ones are started by playCombustionEvents
+			// when an event payload arrives, which is a separate path from this tick -
+			// a flash that starts this tick is therefore never aged on the tick it
+			// started, whichever order the two happen in.
 			engine.updateClientVisuals();
-			playSyncedEvents();
 			tickEngineAudio();
 			return;
 		}
@@ -599,19 +591,19 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		playTransitionSounds(phaseBefore);
 		updateIgnitionIndicator();
 
-		// A spark or a combustion this tick has to reach the client on this tick:
-		// the spark, the chamber flash and the firing sound are all triggered there
-		// by the counters moving, so a delayed update would be a delayed effect.
-		// This is at most one update per revolution - about three a second at full
-		// throttle - and it is the only per-event traffic the engine generates.
-		boolean eventFired = !java.util.Arrays.equals(sparkEventsBefore, engine.copyOfSparkEventIds())
-			|| !java.util.Arrays.equals(combustionEventsBefore, engine.copyOfCombustionEventIds());
+		// This tick's sparks and combustions, as one small packet rather than as a
+		// full block entity synchronisation per event - see
+		// EngineCombustionEventsPayload. The counters themselves are untouched and
+		// still persisted: they are the engine's own record of what happened, and the
+		// goggle diagnostics and the post-load comparison still read them. What they
+		// no longer do is force the whole engine onto the wire eight times a second.
+		dispatchCombustionEvents(sparkEventsBefore, combustionEventsBefore);
 
 		// Anything the client displays has to trigger a block update, not just the
 		// things that change the engine's rotation. Toggling redstone on a stopped
 		// engine changes no speed and no phase, so without this the client would
 		// keep showing the ignition state it was last told about.
-		if (generatedSpeedChanged || eventFired || reconciled || signalBefore != redstoneSignal
+		if (generatedSpeedChanged || reconciled || signalBefore != redstoneSignal
 			|| phaseBefore != engine.getPhase() || structureValidBefore != engine.isStructureValid()
 			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()
 			|| sparkPlugBefore != engine.isSparkPlugInstalled()
@@ -1384,34 +1376,62 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * on a slow client - the player gets one flash and one puff rather than a
 	 * double bang. Reproducing the missed one would be worse, not better.
 	 */
-	@OnlyIn(Dist.CLIENT)
-	private void playSyncedEvents() {
-		boolean adopting = !clientEventsAdopted;
-		clientEventsAdopted = true;
+	private void dispatchCombustionEvents(int[] sparkEventsBefore, int[] combustionEventsBefore) {
+		if (!(level instanceof ServerLevel serverLevel))
+			return;
 
+		int sparkMask = 0;
+		int combustionMask = 0;
 		for (int cylinder = 0; cylinder < engine.getCylinderCount(); cylinder++) {
-			int spark = engine.getSparkEventId(cylinder);
-			int combustion = engine.getCombustionEventId(cylinder);
+			if (engine.getSparkEventId(cylinder) != sparkEventsBefore[cylinder])
+				sparkMask |= 1 << cylinder;
+			if (engine.getCombustionEventId(cylinder) != combustionEventsBefore[cylinder])
+				combustionMask |= 1 << cylinder;
+		}
+		if ((sparkMask | combustionMask) == 0)
+			return;
 
-			if (adopting) {
-				lastSparkEventIds[cylinder] = spark;
-				lastCombustionEventIds[cylinder] = combustion;
+		// Every cylinder that did anything this tick, in one packet. An inline-4 at
+		// full throttle therefore costs exactly what an inline-1 does: at most one
+		// packet per tick, whatever is happening inside it.
+		//
+		// Addressed to the players tracking the CONTROLLER's chunk. That is the block
+		// entity that owns the engine and the position the payload names, so it is
+		// also the chunk a client must have in order to resolve the engine at all.
+		PacketDistributor.sendToPlayersTrackingChunk(serverLevel, new ChunkPos(worldPosition),
+			new EngineCombustionEventsPayload(worldPosition, (byte) sparkMask, (byte) combustionMask));
+	}
+
+	/**
+	 * Plays out one tick's events on the client, one bit per cylinder.
+	 *
+	 * <p>Called from {@code ClientEngineEvents} when a payload arrives, and nowhere
+	 * else. There is deliberately no client-side prediction anywhere near this: the
+	 * client cannot know whether the server's fuel draw succeeded, so it is told
+	 * rather than left to guess, and the flash and the bang are two reactions to one
+	 * bit instead of two mechanisms that could land a tick apart.
+	 *
+	 * @param sparkMask      bit {@code i} set when cylinder {@code i}'s coil fired
+	 * @param combustionMask bit {@code i} set when cylinder {@code i} burned a charge
+	 */
+	@OnlyIn(Dist.CLIENT)
+	public void playCombustionEvents(byte sparkMask, byte combustionMask) {
+		if (level == null)
+			return;
+		for (int cylinder = 0; cylinder < engine.getCylinderCount(); cylinder++) {
+			boolean sparked = (sparkMask & (1 << cylinder)) != 0;
+			boolean burned = (combustionMask & (1 << cylinder)) != 0;
+			if (!sparked && !burned)
 				continue;
-			}
 
-			// Which cylinder fired decides where every one of these happens: the
-			// spark at that plug's electrode, the flash in that bore, the bang from
-			// that chamber. An inline-4 firing in sequence is four effects walking
-			// down the engine, which is exactly what it should look and sound like.
+			// Which cylinder fired decides where every one of these happens: the spark
+			// at that plug's electrode, the flash in that bore, the bang from that
+			// chamber. An inline-4 firing in sequence is four effects walking down the
+			// engine, which is exactly what it should look and sound like.
 			BlockPos cylinderPos = cylinderPosition(cylinder);
-
-			if (spark != lastSparkEventIds[cylinder]) {
-				lastSparkEventIds[cylinder] = spark;
+			if (sparked)
 				emitSpark(cylinderPos);
-			}
-
-			if (combustion != lastCombustionEventIds[cylinder]) {
-				lastCombustionEventIds[cylinder] = combustion;
+			if (burned) {
 				engine.triggerCombustionFlash(cylinder);
 				combustionAudio.onCombustion(level, cylinderPos, engine);
 			}
@@ -1798,9 +1818,10 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// Persisted so a chunk reload does not hand the player free oil by
 		// discarding the revolutions already banked towards the next draw.
 		engine.setCombustionEventsSinceOilDraw(tag.getInt(KEY_OIL_WEAR));
-		// The event channel. Carried in the same block entity data as everything
-		// else, so a spark or a combustion arrives together with the phase and the
-		// speed that describe it - see playSyncedEvents.
+		// The engine's own record of how many times each cylinder has sparked and
+		// burned. No longer the event channel - EngineCombustionEventsPayload is -
+		// but still real state: it is what the server diffs each tick to decide which
+		// bits to set, so it has to survive a reload rather than restart from zero.
 		engine.setEventIds(tag.getIntArray(KEY_SPARK_EVENT), tag.getIntArray(KEY_COMBUSTION_EVENT));
 	}
 
@@ -1833,9 +1854,12 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		tag.putString(KEY_LUBRICATION, engine.getLubrication()
 			.getId());
 		tag.putInt(KEY_OIL_WEAR, engine.getCombustionEventsSinceOilDraw());
-		// Four small counters rather than one, because a spark and a bang happen at
-		// a place: which cylinder fired is what the client needs to put the effect
-		// in the right bore. They still travel in the data the engine already sends.
+		// One counter per cylinder, because a spark and a bang happen at a PLACE. They
+		// are the server's running tally, not the wire format: the live events reach
+		// the client through EngineCombustionEventsPayload, and these are what the
+		// server diffs each tick to work out which of its bits to set. Saved so that
+		// diff has something to compare against after a reload; carried in the client
+		// packet too, for the goggle diagnostics.
 		tag.putIntArray(KEY_SPARK_EVENT, engine.copyOfSparkEventIds());
 		tag.putIntArray(KEY_COMBUSTION_EVENT, engine.copyOfCombustionEventIds());
 		tag.putInt(KEY_CYLINDER_INDEX, cylinderIndex);

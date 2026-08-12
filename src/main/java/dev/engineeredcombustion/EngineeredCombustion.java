@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
+import dev.engineeredcombustion.network.ECPackets;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECBlocks;
 import dev.engineeredcombustion.registry.ECCreativeTabs;
@@ -45,6 +46,10 @@ public class EngineeredCombustion {
 
 		modEventBus.addListener(EngineeredCombustion::commonSetup);
 		modEventBus.addListener(EngineeredCombustion::registerCapabilities);
+		// Clientbound, but registered on both sides: a server has to have a payload in
+		// its registry before it is allowed to send it. The handler behind it is
+		// dist-guarded - see ECPackets.
+		modEventBus.addListener(ECPackets::register);
 	}
 
 	private static void commonSetup(FMLCommonSetupEvent event) {

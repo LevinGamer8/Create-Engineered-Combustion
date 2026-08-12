@@ -213,25 +213,29 @@ public final class EngineState {
 	 * Counts ignition coil firings, and counts charges that actually burned, for
 	 * each cylinder separately.
 	 *
-	 * <p><b>These two are the engine's event channel.</b> Both are incremented on
-	 * the server, at exactly the point the thing they name happens, and both are
-	 * synchronised as plain numbers. The client does not decide when a spark or a
-	 * combustion occurred - it notices that a counter moved and reacts.
+	 * <p><b>The server's running tally of what really happened.</b> Both are
+	 * incremented at exactly the point the thing they name occurs, so a counter can
+	 * never disagree with the event it counts.
 	 *
-	 * <p>That replaces re-deriving the events on the client from the crank angle,
-	 * which was cheap but only <i>approximately</i> right: the client cannot know
-	 * whether the server's fuel draw succeeded, so a dry engine still flashed for
-	 * a revolution, and the flash and the firing sound came from two different
-	 * mechanisms and could land a tick or two apart. A counter cannot disagree
-	 * with the event it counts.
+	 * <p>They are the <i>source</i> of the engine's event channel rather than the
+	 * channel itself. {@code CrankshaftBlockEntity} diffs them across each simulated
+	 * tick and sends the difference as two bitmasks in an
+	 * {@code EngineCombustionEventsPayload}; that packet is what the client reacts
+	 * to. Sending the counters themselves meant a full block entity synchronisation
+	 * for every spark and every bang, which an inline-4 produces four times as often
+	 * as an inline-1.
+	 *
+	 * <p>The client still never re-derives an event from the crank angle. It cannot
+	 * know whether the server's fuel draw succeeded, so a dry engine would go on
+	 * flashing for a revolution, and the flash and the firing sound would come from
+	 * two different mechanisms that could land a tick or two apart.
 	 *
 	 * <p>Per cylinder rather than per engine, because the spark, the flash and the
 	 * bang all happen at a <i>place</i>: cylinder 3 firing has to light cylinder 3
-	 * and be heard from cylinder 3. Four small counters carry that without a packet
-	 * of their own - they travel in the block entity data the engine already sends.
+	 * and be heard from cylinder 3.
 	 *
 	 * <p>Wrapping is fine and overflow is irrelevant: only inequality is ever
-	 * tested, so any change means "one or more happened since you last looked".
+	 * tested, so any change means "this happened since the previous tick".
 	 */
 	private final int[] sparkEventIds = new int[EngineTuning.MAX_CYLINDERS];
 	private final int[] combustionEventIds = new int[EngineTuning.MAX_CYLINDERS];
