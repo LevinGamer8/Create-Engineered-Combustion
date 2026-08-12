@@ -508,7 +508,9 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// see. Fail closed: no combustion, no fuel or oil drawn, no start progress, and
 		// no capacity derived from the fraction of the structure that happens to be
 		// visible.
-		if (setAssemblySuspended(!tickComponents.chunksLoaded())) {
+		boolean cannotVerifyAssembly = !tickComponents.chunksLoaded();
+		setAssemblySuspended(cannotVerifyAssembly);
+		if (cannotVerifyAssembly) {
 			tickComponents = null;
 			return;
 		}
@@ -872,12 +874,10 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * <p>Deliberately <i>not</i> part of {@link #isEngineController()}. A controller
 	 * that suspended itself has to keep being the controller, or nothing would ever
 	 * run the check that releases it again.
-	 *
-	 * @return true when the engine is suspended and must not be simulated this tick
 	 */
-	private boolean setAssemblySuspended(boolean suspended) {
+	private void setAssemblySuspended(boolean suspended) {
 		if (suspended == assemblySuspended)
-			return suspended;
+			return;
 		assemblySuspended = suspended;
 		if (suspended) {
 			stopForRebuild();
@@ -893,7 +893,6 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		}
 		setChanged();
 		sync();
-		return suspended;
 	}
 
 	/**
