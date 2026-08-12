@@ -1986,6 +1986,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		EngineControlState control = resolveControlState();
 		addThrottleLine(tooltip, components.carburetor(), control);
 		addControlLines(tooltip, control);
+		addLayoutWarning(tooltip, components);
 		addFlywheelWarning(tooltip, components);
 		addSparkPlugWarning(tooltip, components);
 		addFuelLines(tooltip, components.carburetor());
@@ -2096,6 +2097,42 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * each end looks extremely finished. Everything else that can be missing - the
 	 * piston, the flywheel, the carburetor - already has its own line.
 	 */
+	/**
+	 * Why a build that looks finished is not running, when the reason is its shape.
+	 *
+	 * <p>Both cases here are ones a player cannot diagnose by looking, which is
+	 * exactly when the overlay has to speak up:
+	 * <ul>
+	 * <li><b>too long</b> - a fifth crankcase makes the whole run unsupported rather
+	 * than making a bigger engine, and nothing about the blocks shows that. The limit
+	 * is named in the message rather than left to be guessed;</li>
+	 * <li><b>suspended</b> - part of the engine is in a chunk that is not loaded, so
+	 * it has been stopped rather than re-derived from the visible fraction. Worth
+	 * saying plainly, because otherwise a player at the edge of the loaded area sees
+	 * an engine that stops for no visible reason.</li>
+	 * </ul>
+	 *
+	 * <p>On the main overlay rather than behind sneak: the sneak diagnostics also
+	 * report the layout, but a player whose engine will not run should not have to
+	 * know to look there.
+	 */
+	private void addLayoutWarning(List<Component> tooltip, EngineComponents components) {
+		if (components.oversized()) {
+			ECLang.translate("gui.unsupported_layout")
+				.style(ChatFormatting.RED)
+				.forGoggles(tooltip, 1);
+			ECLang.translate("gui.unsupported_layout_hint", ECLang.number(EngineTuning.MAX_CYLINDERS)
+				.component())
+				.style(ChatFormatting.DARK_GRAY)
+				.forGoggles(tooltip, 1);
+			return;
+		}
+		if (!components.isLayoutComplete() || !components.chunksLoaded())
+			ECLang.translate("gui.assembly_suspended")
+				.style(ChatFormatting.GOLD)
+				.forGoggles(tooltip, 1);
+	}
+
 	private void addFlywheelWarning(List<Component> tooltip, EngineComponents components) {
 		if (!components.hasFlywheelConflict())
 			return;
@@ -2390,6 +2427,20 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		ECLang.translate(observedStateKey(phase))
 			.style(phaseColor(phase))
 			.forGoggles(tooltip, 1);
+
+		// A run that is too long is the one structural fault a player cannot see and
+		// cannot guess at - the blocks look exactly like a working engine, only more
+		// of them - so it is worth a line even without goggles.
+		if (isOversized()) {
+			ECLang.translate("gui.unsupported_layout")
+				.style(ChatFormatting.RED)
+				.forGoggles(tooltip, 1);
+			ECLang.translate("gui.unsupported_layout_hint", ECLang.number(EngineTuning.MAX_CYLINDERS)
+				.component())
+				.style(ChatFormatting.DARK_GRAY)
+				.forGoggles(tooltip, 1);
+			return true;
+		}
 
 		boolean ignition = state.isIgnitionEnabled();
 		ECLang.translate("gui.ignition",
