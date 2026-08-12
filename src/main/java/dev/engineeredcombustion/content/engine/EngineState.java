@@ -176,8 +176,35 @@ public final class EngineState {
 
 	private final boolean[] firedThisRevolution = new boolean[EngineTuning.MAX_CYLINDERS];
 	private final boolean[] powerStrokeActive = new boolean[EngineTuning.MAX_CYLINDERS];
-	/** 1 while running, a fraction of that for a pre-start kick. */
-	private float powerStrokeStrength;
+
+	/**
+	 * The torque multiplier each cylinder's <i>currently burning</i> charge was
+	 * bought at: 1 for a charge lit in a running engine, a fraction of that for a
+	 * pre-start kick.
+	 *
+	 * <p><b>Per cylinder and latched at ignition</b>, not a single engine-wide value
+	 * recomputed every tick from the current phase. A charge is paid for and lit at
+	 * one instant, and what it is worth was decided then; letting the phase change
+	 * underneath it meant a kick lit during a start attempt silently became a full
+	 * power stroke the moment the engine caught, and a charge lit while running lost
+	 * two thirds of its torque if the engine dropped out of RUNNING behind it.
+	 *
+	 * <p>Zero when that cylinder has no charge burning.
+	 */
+	private final float[] powerStrokeStrength = new float[EngineTuning.MAX_CYLINDERS];
+
+	/**
+	 * Whether any cylinder was still being pushed by a paid-for charge on the last
+	 * simulated tick.
+	 *
+	 * <p>Read by {@link #evaluateActiveGeneration()} and by {@link #advancePhase},
+	 * and it is what closes the gap between "the tank is empty" and "the engine has
+	 * stopped producing torque". Those are not the same instant: the charge already
+	 * in the cylinder goes on pushing until the crank reaches the end of its stroke,
+	 * and Create must not be told the engine generates nothing while it demonstrably
+	 * still does.
+	 */
+	private boolean powerStrokeInProgress;
 	/** Ticks since each cylinder last burned a charge, or -1 if it never has. */
 	private final int[] ticksSinceCombustion = newAges();
 	private boolean fuelAvailable;
@@ -186,25 +213,29 @@ public final class EngineState {
 	 * Counts ignition coil firings, and counts charges that actually burned, for
 	 * each cylinder separately.
 	 *
-	 * <p><b>These two are the engine's event channel.</b> Both are incremented on
-	 * the server, at exactly the point the thing they name happens, and both are
-	 * synchronised as plain numbers. The client does not decide when a spark or a
-	 * combustion occurred - it notices that a counter moved and reacts.
+	 * <p><b>The server's running tally of what really happened.</b> Both are
+	 * incremented at exactly the point the thing they name occurs, so a counter can
+	 * never disagree with the event it counts.
 	 *
-	 * <p>That replaces re-deriving the events on the client from the crank angle,
-	 * which was cheap but only <i>approximately</i> right: the client cannot know
-	 * whether the server's fuel draw succeeded, so a dry engine still flashed for
-	 * a revolution, and the flash and the firing sound came from two different
-	 * mechanisms and could land a tick or two apart. A counter cannot disagree
-	 * with the event it counts.
+	 * <p>They are the <i>source</i> of the engine's event channel rather than the
+	 * channel itself. {@code CrankshaftBlockEntity} diffs them across each simulated
+	 * tick and sends the difference as two bitmasks in an
+	 * {@code EngineCombustionEventsPayload}; that packet is what the client reacts
+	 * to. Sending the counters themselves meant a full block entity synchronisation
+	 * for every spark and every bang, which an inline-4 produces four times as often
+	 * as an inline-1.
+	 *
+	 * <p>The client still never re-derives an event from the crank angle. It cannot
+	 * know whether the server's fuel draw succeeded, so a dry engine would go on
+	 * flashing for a revolution, and the flash and the firing sound would come from
+	 * two different mechanisms that could land a tick or two apart.
 	 *
 	 * <p>Per cylinder rather than per engine, because the spark, the flash and the
 	 * bang all happen at a <i>place</i>: cylinder 3 firing has to light cylinder 3
-	 * and be heard from cylinder 3. Four small counters carry that without a packet
-	 * of their own - they travel in the block entity data the engine already sends.
+	 * and be heard from cylinder 3.
 	 *
 	 * <p>Wrapping is fine and overflow is irrelevant: only inequality is ever
-	 * tested, so any change means "one or more happened since you last looked".
+	 * tested, so any change means "this happened since the previous tick".
 	 */
 	private final int[] sparkEventIds = new int[EngineTuning.MAX_CYLINDERS];
 	private final int[] combustionEventIds = new int[EngineTuning.MAX_CYLINDERS];
@@ -401,14 +432,19 @@ public final class EngineState {
 		// Cranking the engine backwards never ignites it.
 		float requiredRpm = phase == EnginePhase.RUNNING ? EngineTuning.STALL_RPM : EngineTuning.START_RPM;
 		boolean turningForwards = lastAngleDeltaDegrees > 0.0F && simulatedRpm >= requiredRpm;
-		powerStrokeStrength = phase == EnginePhase.RUNNING ? 1.0F : EngineTuning.START_KICK_TORQUE_FACTOR;
+		// What a charge lit on THIS tick is worth. Latched into powerStrokeStrength[i]
+		// at the moment that cylinder's charge is paid for, so a later phase change
+		// cannot retroactively revalue a charge that is already burning.
+		float strengthForNewCharges =
+			phase == EnginePhase.RUNNING ? 1.0F : EngineTuning.START_KICK_TORQUE_FACTOR;
 
 		// ONE PASS OVER THE CYLINDERS, and the whole of what makes this a
 		// multi-cylinder engine rather than several engines on a shared shaft.
 		// Every cylinder is offered its own firing opportunity, at its own crank
 		// phase, and pays for its own charge; what they all feed is the single
 		// crankshaft integrated once at the bottom.
-		boolean anyCombustionPossible = false;
+		boolean anyChargeIgnitable = false;
+		boolean anyPowerStrokeActive = false;
 		boolean ignitedThisTick = false;
 		float combustionTorque = 0.0F;
 
@@ -429,9 +465,14 @@ public final class EngineState {
 			//
 			// Combustion needs a spark AND a charge to light. Nothing may reorder
 			// these two: fuel must never be what decides whether the plug sparks.
+			//
+			// THE NAME MATTERS. This is permission to light a NEW charge, and nothing
+			// else. It is deliberately never asked about a charge that is already
+			// burning: fuel decides whether the next bang can happen, never whether the
+			// one already in the cylinder is allowed to finish pushing.
 			boolean sparkPossible = structureValid && ignitionEnabled && hasSparkPlug(cylinder);
-			boolean combustionPossible = sparkPossible && fuelAvailable;
-			anyCombustionPossible |= combustionPossible;
+			boolean canIgniteNewCharge = sparkPossible && fuelAvailable;
+			anyChargeIgnitable |= canIgniteNewCharge;
 
 			if (ticksSinceCombustion[cylinder] >= 0 && ticksSinceCombustion[cylinder] < Integer.MAX_VALUE)
 				ticksSinceCombustion[cylinder]++;
@@ -445,8 +486,11 @@ public final class EngineState {
 				// produce power. Four cylinders therefore draw four charges per
 				// revolution, which is exactly why an inline-4 burns four times the
 				// gasoline of a single at the same speed.
-				if (combustionPossible && turningForwards && fuel.consume(EngineTuning.FUEL_PER_COMBUSTION_MB)) {
+				if (canIgniteNewCharge && turningForwards && fuel.consume(EngineTuning.FUEL_PER_COMBUSTION_MB)) {
 					firedThisRevolution[cylinder] = true;
+					// Bought and paid for at this tick's price. Nothing may revalue it
+					// afterwards - see powerStrokeStrength.
+					powerStrokeStrength[cylinder] = strengthForNewCharges;
 					ignitedThisTick = true;
 					ticksSinceCombustion[cylinder] = 0;
 					ticksSinceStartActivity = 0;
@@ -464,27 +508,45 @@ public final class EngineState {
 						// oil sink.
 						drawOilForCombustion(oil);
 				} else {
+					// This cylinder's firing opportunity came round and produced nothing,
+					// so whatever it was burning is done with.
 					firedThisRevolution[cylinder] = false;
+					powerStrokeStrength[cylinder] = 0.0F;
 				}
 			}
 
-			// The crank must actually be turning forwards for a power stroke to push.
-			// firedThisRevolution only changes when the firing angle is crossed, so
-			// on a stalled crank it would otherwise stay latched and deliver free
-			// torque every tick forever. This also makes an overstressed network -
-			// where Create reports speed 0 - correctly produce no combustion torque.
-			powerStrokeActive[cylinder] = firedThisRevolution[cylinder] && combustionPossible
+			// THE POWER STROKE OF A CHARGE THAT HAS ALREADY BEEN PAID FOR.
+			//
+			// Fuel is deliberately absent from this condition, and that absence is the
+			// whole of FIX 6. The charge is in the cylinder, the millibucket has been
+			// drawn and the crank is being pushed; an empty tank cannot reach back into
+			// the bore and put the fire out. Testing fuel here meant the last charge of
+			// a run truncated its stroke the moment the tank hit zero, so the engine
+			// lost the torque it had already bought.
+			//
+			// What DOES still end a stroke immediately, and must:
+			//   structureValid          - the engine was taken apart under it;
+			//   lastAngleDeltaDegrees   - the crank is not turning forwards, which
+			//                             covers a stall and an overstressed network
+			//                             (Create reports speed 0 for both). Without it
+			//                             a stalled crank would stay latched and deliver
+			//                             free torque every tick for ever;
+			//   isWithinPowerStroke     - the crank has reached the end of the stroke.
+			powerStrokeActive[cylinder] = firedThisRevolution[cylinder] && structureValid
 				&& lastAngleDeltaDegrees > 0.0F && isWithinPowerStroke(localAngle);
-			if (powerStrokeActive[cylinder])
-				combustionTorque +=
-					EngineTuning.combustionTorqueAt(simulatedRpm, targetRpm, cylinderCount) * powerStrokeStrength;
-
+			if (powerStrokeActive[cylinder]) {
+				combustionTorque += EngineTuning.combustionTorqueAt(simulatedRpm, targetRpm, cylinderCount)
+					* powerStrokeStrength[cylinder];
+				anyPowerStrokeActive = true;
+			}
 		}
+
+		powerStrokeInProgress = anyPowerStrokeActive;
 
 		integrate(combustionTorque, compressionTorqueSum(), EngineTuning.loadDragTorque(loadFactor));
 
-		expireStaleStartAttempt(anyCombustionPossible && turningForwards);
-		advancePhase(anyCombustionPossible, ignitedThisTick);
+		expireStaleStartAttempt(anyChargeIgnitable && turningForwards);
+		advancePhase(anyChargeIgnitable, anyPowerStrokeActive, ignitedThisTick);
 
 		// Deliberately last, and deliberately after the phase has settled: this is
 		// the one evaluation of "is this engine producing power", and everything
@@ -556,6 +618,11 @@ public final class EngineState {
 		requiredStartCycles = 0;
 		java.util.Arrays.fill(firedThisRevolution, false);
 		java.util.Arrays.fill(powerStrokeActive, false);
+		// No charge is burning any more, so none of them is worth anything. Leaving a
+		// stale strength behind would let the next latched stroke start at the wrong
+		// price.
+		java.util.Arrays.fill(powerStrokeStrength, 0.0F);
+		powerStrokeInProgress = false;
 	}
 
 	/**
@@ -580,7 +647,7 @@ public final class EngineState {
 		// way back down, and it takes out over a revolution exactly what it puts in.
 		// That is why it can make a single-cylinder engine lumpy and an inline-4
 		// smooth without moving either one's equilibrium speed.
-		float drag = EngineTuning.frictionTorqueAt(simulatedRpm, lubrication) + loadDragTorque;
+		float drag = EngineTuning.frictionTorqueAt(simulatedRpm, lubrication) + loadDragTorque + coastDragTorque();
 		float netTorque = combustionTorque + compressionTorque - Math.signum(simulatedRpm) * drag;
 
 		float next = simulatedRpm + netTorque / EngineTuning.FLYWHEEL_INERTIA;
@@ -602,7 +669,50 @@ public final class EngineState {
 		simulatedRpm = clamp(next, -ceiling, ceiling);
 	}
 
-	private void advancePhase(boolean combustionPossible, boolean ignitedThisTick) {
+	/**
+	 * The extra drag of an engine that is turning without firing - pumping losses
+	 * and the heavier friction of a motored engine. Zero for a firing one.
+	 *
+	 * <p>Three gates, and each of them is a way this drag would be wrong:
+	 * <ul>
+	 * <li><b>only while free-running.</b> An engine Create is holding at a speed does
+	 * not integrate its own momentum - it takes that speed on - so subtracting drag
+	 * from it would corrupt the one number that is supposed to equal the shaft's, and
+	 * it would be charging the same losses twice: motoring a dead engine is already
+	 * billed to the network through
+	 * {@link EngineTuning#PASSIVE_DRAG_STRESS_PER_RPM}. This drag is for an engine
+	 * nothing is driving;</li>
+	 * <li><b>not while RUNNING</b>, so every equilibrium the governor solved for is
+	 * exactly where it was: idle stays 64 RPM and full throttle stays 192;</li>
+	 * <li><b>not while STARTING</b>, which is what keeps a hand crank able to start
+	 * the engine - a start attempt spends most of its ticks between firing kicks, and
+	 * charging it coast drag in those gaps would smother the attempt - and not while
+	 * a paid-for charge is still pushing, so the last stroke of a run finishes
+	 * against running friction rather than against the drag of an engine that has
+	 * already stopped burning.</li>
+	 * </ul>
+	 *
+	 * <p>Identical on both sides. Every input is either synchronised (the phase) or
+	 * derived identically by {@link #tickRotation} (free rotation) or provably false
+	 * while coasting (a power stroke - RUNNING cannot be left while one is live), so
+	 * the client's spin-down traces the server's curve exactly.
+	 */
+	private float coastDragTorque() {
+		if (!freeRotation || phase.isFiring() || powerStrokeInProgress)
+			return 0.0F;
+		return EngineTuning.coastDragTorqueAt(simulatedRpm, lubrication);
+	}
+
+	/**
+	 * @param canIgniteNewCharge  any cylinder could light a fresh charge this tick
+	 * @param powerStrokeActive   any cylinder is still being pushed by a charge that
+	 *                            was already paid for. Keeps a running engine in
+	 *                            RUNNING until its last bought charge has finished
+	 *                            working, rather than dropping it to COASTING the
+	 *                            instant the tank reads empty
+	 * @param ignitedThisTick     a charge actually burned on this tick
+	 */
+	private void advancePhase(boolean canIgniteNewCharge, boolean powerStrokeActive, boolean ignitedThisTick) {
 		switch (phase) {
 			case STOPPED -> {
 				if (mechanicalRpm != 0.0F)
@@ -634,7 +744,12 @@ public final class EngineState {
 				}
 			}
 			case RUNNING -> {
-				if (!combustionPossible)
+				// Two conditions, and the second is what stops the engine from being
+				// declared "coasting" while it is demonstrably still making torque. The
+				// last charge of a run is bought a tick or two before the tank reads
+				// empty and goes on pushing for the rest of its stroke; leaving RUNNING
+				// then would have taken its Stress Capacity away mid-push.
+				if (!canIgniteNewCharge && !powerStrokeActive)
 					phase = EnginePhase.COASTING;
 				else if (simulatedRpm < EngineTuning.STALL_RPM)
 					stop();
@@ -648,7 +763,7 @@ public final class EngineState {
 				// of a coast-down.
 				if (hasComeToRest())
 					stop();
-				else if (combustionPossible && simulatedRpm >= EngineTuning.START_RPM)
+				else if (canIgniteNewCharge && simulatedRpm >= EngineTuning.START_RPM)
 					phase = EnginePhase.RUNNING;
 			}
 		}
@@ -796,8 +911,29 @@ public final class EngineState {
 	 * disqualifying - producing no combustion is.
 	 */
 	private boolean evaluateActiveGeneration() {
-		return phase.mayGenerate() && structureValid && ignitionEnabled && fuelAvailable
+		return phase.mayGenerate() && structureValid && ignitionEnabled && stillMakingCombustionTorque()
 			&& simulatedRpm >= EngineTuning.STALL_RPM && getFiringCylinderCount() > 0;
+	}
+
+	/**
+	 * Whether this engine's combustion is still worth anything to the network:
+	 * either it can pay for the next charge, or a charge it already paid for is
+	 * still pushing.
+	 *
+	 * <p>Fuel alone used to be the test, and it left a real gap. The tank goes empty
+	 * on the tick the last charge is drawn, but that charge burns for the following
+	 * half revolution and genuinely accelerates the crankshaft; declaring the engine
+	 * non-generating for those ticks handed Create a generated speed of zero while
+	 * the engine was still making torque, and took the network's capacity away a
+	 * fraction of a second early.
+	 *
+	 * <p>It closes rather than widens the honesty gap in the other direction too:
+	 * once that last stroke ends, both halves are false on the very next tick, so
+	 * generation stops immediately instead of coasting on an old
+	 * {@code ticksSinceCombustion} for another couple of revolutions.
+	 */
+	private boolean stillMakingCombustionTorque() {
+		return fuelAvailable || powerStrokeInProgress;
 	}
 
 	/**

@@ -1,0 +1,125 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to a branch makes the run already in flight for it pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Everything that can be checked without the mod's dependencies.
+  #
+  # Split out deliberately rather than folded into `build`. The engine simulation
+  # is free of Minecraft, NeoForge and Create types, so these checks need no
+  # Maven host at all - which means they still report a real result on a day when
+  # maven.neoforged.net or maven.createmod.net is down, instead of the whole run
+  # going red for a reason that has nothing to do with the change.
+  verify:
+    name: Simulation, assets and licence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Pure engine simulation tests
+        run: ./gradlew --no-daemon simulationTest
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Validate generated models
+        run: ./gradlew --no-daemon checkModels
+
+      # Generated assets are produced by the scripts in tools/ and must never be
+      # hand-edited, so the committed output has to match what the generators
+      # produce right now. A non-empty diff here means either that someone edited
+      # the output directly or that a generator changed without its output being
+      # regenerated - both of which leave the repository describing a build
+      # nobody can reproduce.
+      #
+      # These three are byte-reproducible: they use only the standard library
+      # (generate_engine_textures writes PNG through struct and zlib by hand) and
+      # emit JSON and PNG deterministically, so re-running them anywhere produces
+      # identical files.
+      #
+      # tools/generate_sounds.py is deliberately NOT run here. It needs numpy and
+      # libsndfile, and it emits Ogg Vorbis, whose encoder output is not stable
+      # across libsndfile versions - so it would report a spurious failure
+      # whenever the runner image changed its audio libraries, which is exactly
+      # the kind of red build that teaches people to ignore CI. Sound changes are
+      # reviewed by listening to them.
+      - name: Generated assets are up to date
+        run: |
+          python3 tools/generate_engine_models.py
+          python3 tools/generate_engine_textures.py
+          python3 tools/generate_survival_data.py
+          if ! git diff --quiet; then
+            echo "::error::Generated assets are stale. Re-run the generators in tools/ and commit the result."
+            git --no-pager diff --stat
+            exit 1
+          fi
+          echo "Generated assets match the generators."
+
+      # The project is source-available rather than open source, and that only
+      # holds if the documents saying so are actually present.
+      - name: Licence files are present
+        run: |
+          missing=0
+          for f in LICENSE.md ASSET_LICENSE.md CONTRIBUTING.md NOTICE.md; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing"
+              missing=1
+            fi
+          done
+          toml=src/main/templates/META-INF/neoforge.mods.toml
+          if ! grep -q 'license *= *"All Rights Reserved"' "$toml"; then
+            echo "::error::$toml must declare license = \"All Rights Reserved\""
+            missing=1
+          fi
+          if ! grep -q 'Source available — not open source\|source-available, but it is not open source' README.md; then
+            echo "::error::README.md must state that the project is source-available, not open source"
+            missing=1
+          fi
+          exit $missing
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # check depends on the simulation tests and the model check, so this covers
+      # them again against the real build. python3 is present on ubuntu-latest.
+      - name: Build and check
+        run: ./gradlew --no-daemon build check
+
+      - name: Upload the mod JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineered-combustion-jar
+          path: |
+            build/libs/*.jar
+            !build/libs/*-sources.jar
+          if-no-files-found: error

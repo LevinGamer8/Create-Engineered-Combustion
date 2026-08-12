@@ -78,6 +78,66 @@ Dependency resolution needs all of these to be reachable:
 If your network blocks any of them, the build fails during dependency
 resolution before it ever reaches compilation.
 
+## Testing
+
+```
+./gradlew check
+```
+
+runs everything: the pure engine simulation suites and the generated-model
+validation, alongside the normal build.
+
+### Without Minecraft
+
+The engine simulation is deliberately free of Minecraft, NeoForge and Create
+types, so most of this mod's behaviour can be tested on a bare JDK — no
+dependency downloads, no decompilation, no game launch:
+
+```
+./gradlew simulationTest checkModels
+```
+
+That is worth knowing about when the Maven hosts above are unreachable, because
+it is the part of `check` that still works.
+
+| Task | What it runs |
+| --- | --- |
+| `simulationTest` | every suite in `src/simulationTest/java` |
+| `simulationTest<Name>` | one suite, e.g. `simulationTestEngineLayoutTests` |
+| `checkModels` | `tools/check_models.py` |
+
+The `simulationTest` source set compiles the simulation and its tests with an
+**empty compile classpath**. That is load-bearing rather than an optimisation: it
+is what mechanically enforces the boundary, because the moment a Minecraft type is
+imported into `EngineState`, `EngineTuning`, `EngineLayout` or their neighbours,
+that compile fails. The two classes in the package that legitimately touch
+Minecraft — `EngineComponents` and `CombustionAudio` — are excluded by name in
+`build.gradle`, and that list is the exhaustive statement of where the boundary
+runs.
+
+The suites are plain classes with a `main` method rather than JUnit ones, so that
+running them needs nothing but a JDK. To add one, drop it in
+`src/simulationTest/java` and add its class name to `simulationTestClasses` in
+`build.gradle`.
+
+`checkModels` needs `python3` on `PATH`, and says so by name if it is missing.
+
+Which tests cover what — and which checks are simulation, which are Gradle, and
+which still have to be done by hand in game — is documented in
+[`docs/milestone-12-hardening.md`](docs/milestone-12-hardening.md).
+
+## Continuous integration
+
+[`.github/workflows/build.yml`](.github/workflows/build.yml) runs on pushes to
+`main` and on pull requests. It builds with Java 21 through the Gradle wrapper,
+runs `./gradlew build check`, and uploads the built JAR as a workflow artifact. It
+publishes no releases.
+
+A separate job runs the pure simulation tests, the model check, a
+generated-assets-are-current check and the licence-file check **without** the mod
+dependencies, so those still report even when an upstream Maven host is
+unavailable.
+
 ## Assets
 
 Every texture and model is generated, not hand-edited, and the generators are
@@ -170,3 +230,35 @@ for what writes what, why the resolutions differ, and the two model invariants
   cylinders that are actually burning fuel, never by how many exist, so a motored
   dry inline-4 still supplies exactly nothing. See
   [`docs/milestone-11.md`](docs/milestone-11.md).
+* **Milestone 12** - hardening pass: Stress Capacity is refreshed when a cylinder
+  stops firing even if the published speed does not move, so an inline-4 that
+  loses a Spark Plug while another source holds the shaft drops to three
+  cylinders' worth of capacity immediately; crankshaft layout is resolved by one
+  scan shared by both resolvers, so runs longer than four sections are
+  consistently invalid from every section instead of splitting into partial
+  engines; an unloaded chunk is no longer mistaken for the end of a run, so an
+  engine across a chunk border suspends rather than re-deriving itself into a
+  smaller one; extending a run at its negative end hands the ignition switch, the
+  Control Module and the selected mode to the new controller; combustion events
+  travel as one compact payload per engine per tick instead of a full block
+  entity sync per event; the last charge an engine paid for finishes its power
+  stroke instead of being cut off when the tank reads empty; and the coast-down
+  is shortened through separate non-firing drag rather than by weakening the
+  flywheel inertia. See
+  [`docs/milestone-12-hardening.md`](docs/milestone-12-hardening.md).
+
+## License
+
+Create: Engineered Combustion is source-available, but it is not open source.
+
+The repository may be viewed and forked through GitHub, but no general permission
+is granted to reuse, modify, redistribute, rehost, or publish the code or original
+assets.
+
+Official unmodified releases may be used for private, non-commercial gameplay.
+Public modpack distribution, mirrors, derivative builds, and reuse of code or
+assets require prior written permission.
+
+See [LICENSE.md](LICENSE.md), [ASSET_LICENSE.md](ASSET_LICENSE.md), and
+[CONTRIBUTING.md](CONTRIBUTING.md). Third-party rights are set out in
+[NOTICE.md](NOTICE.md).

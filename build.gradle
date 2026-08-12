@@ -69,6 +69,110 @@ neoForge {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pure simulation tests
+// ---------------------------------------------------------------------------
+//
+// The engine simulation is deliberately free of Minecraft, NeoForge and Create
+// types, and this source set is the payoff for that discipline: it compiles the
+// simulation and its tests with an EMPTY compile classpath, so the whole of the
+// engine's behaviour can be exercised without downloading Minecraft, without
+// decompiling it, and without launching a game.
+//
+// That empty classpath is load-bearing rather than an optimisation. It is what
+// mechanically enforces the rule the simulation is built on: if anyone ever
+// imports a Minecraft type into EngineState, EngineTuning, EngineLayout or their
+// neighbours, THIS COMPILE FAILS. The two classes in the package that do touch
+// Minecraft - EngineComponents, which resolves block entities out of a level, and
+// CombustionAudio, which plays sounds into one - are excluded by name below, and
+// that exclusion list is the exhaustive statement of where the boundary is.
+//
+// The tests are plain classes with a main method rather than JUnit, on purpose:
+// adding a test framework would mean a dependency to resolve, and the one thing
+// this source set is for is being runnable with nothing but a JDK.
+sourceSets {
+    simulationTest {
+        java {
+            srcDir "src/main/java"
+            srcDir "src/simulationTest/java"
+            include "dev/engineeredcombustion/content/engine/*.java"
+            exclude "dev/engineeredcombustion/content/engine/EngineComponents.java"
+            exclude "dev/engineeredcombustion/content/engine/CombustionAudio.java"
+            include "*.java"
+        }
+        compileClasspath = files()
+        runtimeClasspath = output
+    }
+}
+
+/**
+ * Every pure simulation suite, each a class with a main method that prints its
+ * checks and exits non-zero on failure.
+ */
+var simulationTestClasses = [
+    "EngineStabilityTests",
+    "EngineReloadTests",
+    "MultiCylinderTests",
+    "SparkPlugTests",
+    "EngineLayoutTests",
+    "EngineCapacityTests",
+    "LastPowerStrokeTests",
+    "EngineCoastDownTests",
+]
+
+var simulationTestTasks = simulationTestClasses.collect { className ->
+    tasks.register("simulationTest${className}", JavaExec) {
+        group = "verification"
+        description = "Runs the ${className} pure simulation suite."
+        classpath = sourceSets.simulationTest.runtimeClasspath
+        mainClass = className
+        javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    }
+}
+
+var simulationTest = tasks.register("simulationTest") {
+    group = "verification"
+    description = "Runs every pure engine simulation test. Needs no Minecraft."
+    dependsOn simulationTestTasks
+}
+
+// ---------------------------------------------------------------------------
+// Generated asset validation
+// ---------------------------------------------------------------------------
+
+var checkModels = tasks.register("checkModels", Exec) {
+    group = "verification"
+    description = "Validates the generated block models with tools/check_models.py."
+    // Explicit and cross-platform: `python` is Python 2 on some distributions and
+    // absent on others, so the interpreter is chosen rather than assumed.
+    var python = System.getProperty("os.name").toLowerCase().contains("windows") ? "python" : "python3"
+    commandLine python, "tools/check_models.py"
+    workingDir = project.projectDir
+    // Without this, a missing interpreter surfaces as an opaque Gradle exec
+    // failure. The model checker itself already exits non-zero on any problem,
+    // which is what fails the build.
+    doFirst {
+        try {
+            var probe = new ProcessBuilder(python, "--version").redirectErrorStream(true).start()
+            if (!probe.waitFor(30, java.util.concurrent.TimeUnit.SECONDS) || probe.exitValue() != 0)
+                throw new GradleException(missingPythonMessage(python))
+        } catch (IOException e) {
+            throw new GradleException(missingPythonMessage(python), e)
+        }
+    }
+}
+
+static String missingPythonMessage(String python) {
+    return "checkModels needs ${python} on PATH to run tools/check_models.py, and could not start it.\n" +
+        "Install Python 3, or run the model check yourself with:  python3 tools/check_models.py"
+}
+
+// ---------------------------------------------------------------------------
+
+tasks.named("check") {
+    dependsOn simulationTest, checkModels
+}
+
 repositories {
     mavenLocal()
     // Create, Ponder (contains Catnip) and Flywheel

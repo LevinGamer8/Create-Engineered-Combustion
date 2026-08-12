@@ -17,9 +17,10 @@ import net.minecraft.world.level.Level;
  * open - and not a smooth loop pitched up and down to imply a speed.
  *
  * <p>Every pulse this class plays is one charge that really burned. It is driven
- * from {@code EngineState#getCombustionEventId()}, the same server-authoritative
- * counter that consumed the fuel, delivered the torque, advanced the start
- * attempt and lit the chamber flash. There is no audio timer anywhere in the mod,
+ * from the combustion bits of {@code EngineCombustionEventsPayload} - the server's
+ * own record of the same event that consumed the fuel, delivered the torque,
+ * advanced the start attempt and lit the chamber flash, sent once per engine per
+ * tick. There is no audio timer anywhere in the mod,
  * and nothing here re-derives when a combustion "should" have happened from the
  * crank angle - which is what makes the rhythm the player hears the rhythm the
  * engine actually has, including when it is uneven, and including when it stops.
