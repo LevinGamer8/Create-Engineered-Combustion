@@ -187,6 +187,53 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	}
 
 	/**
+	 * Called by the crankshaft when the engine's <i>capacity basis</i> changed while
+	 * the speed it generates did not.
+	 *
+	 * <h2>The bug this exists for</h2>
+	 * Create does not ask a source for its capacity. It caches one number per source
+	 * in {@code KineticNetwork#sources} and multiplies it by the source's generated
+	 * speed on demand ({@code KineticNetwork#getActualCapacityOf}). The cache is
+	 * only refreshed when something explicitly refreshes it - and the only thing
+	 * that did was {@code updateGeneratedRotation}, which the engine calls when its
+	 * <b>published speed</b> changes.
+	 *
+	 * <p>Those two are not the same event. Pull a Spark Plug out of a running
+	 * inline-4 while another source on the network is holding the shaft at a steady
+	 * speed, and the engine drops from four firing cylinders to three - a quarter of
+	 * its capacity - without its published speed moving by a single quantum. Nothing
+	 * refreshed the cache, so the network went on being told the engine could
+	 * support four cylinders' worth of machinery it was no longer powering.
+	 *
+	 * <h2>Why this is not simply updateGeneratedRotation</h2>
+	 * {@code updateGeneratedRotation} would work, and it is far too big a hammer: it
+	 * re-evaluates the generated speed, can call {@code applyNewSpeed} - which
+	 * detaches and re-attaches the whole kinetic network - queues rotation
+	 * indicators, and sends a block entity update. None of that is warranted when
+	 * the only thing that moved is a multiplier.
+	 *
+	 * <p>What this does instead is exactly the stress half of
+	 * {@code updateGeneratedRotation}, which is the part Create itself uses to
+	 * refresh those two caches:
+	 * {@code notifyStressCapacityChange} re-registers the per-RPM capacity and
+	 * recomputes the network's total, and {@code updateStressFor} does the same for
+	 * the passive load this engine applies while it is not generating. Both figures
+	 * change together whenever an engine starts or stops generating, so both are
+	 * refreshed together here.
+	 */
+	public void onEngineCapacityChanged() {
+		if (level == null || level.isClientSide)
+			return;
+		// getOrCreateNetwork() would build a network for a block that is not on one,
+		// and then hand it a capacity to remember. A block with no network has no
+		// cache to invalidate.
+		if (!hasNetwork())
+			return;
+		notifyStressCapacityChange(calculateAddedStressCapacity());
+		getOrCreateNetwork().updateStressFor(this, calculateStressApplied());
+	}
+
+	/**
 	 * Called once by the crankshaft on the first server tick after a world load,
 	 * with the engine's state freshly derived from the world.
 	 *

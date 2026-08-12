@@ -564,12 +564,37 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// structure is intact, whether there is a plug, fuel and oil, and therefore
 		// whether the engine is generating at all. Now - and not in read() - is when
 		// Create is told.
+		// THREE SEPARATE QUESTIONS, and the reason FIX 1 exists is that they used to
+		// be answered by one:
+		//
+		//   generated speed  - what Create is told this engine turns the network at.
+		//   capacity basis   - how many cylinders are genuinely firing, which is the
+		//                      multiplier on the Stress Capacity Create caches.
+		//   passive load     - the drag a NON-generating engine puts on the network.
+		//
+		// The first is `generatedSpeedChanged`. The other two both change exactly when
+		// `firingBefore` or `generatingBefore` moves, and either can move while the
+		// published speed does not: an engine held at a steady speed by another source
+		// that loses a Spark Plug changes its capacity basis and nothing else.
+		boolean capacityBasisChanged = firingBefore != engine.getFiringCylinderCount()
+			|| generatingBefore != engine.isActivelyGenerating();
+
 		boolean reconciled = needsPostLoadReconcile;
-		if (reconciled)
+		if (reconciled) {
 			reconcileAfterLoad(flywheel);
-		else if (generatedSpeedChanged && flywheel != null)
+		} else if (flywheel != null) {
 			// The one and only place engine state crosses into Create's world.
-			flywheel.onEngineOutputChanged();
+			if (generatedSpeedChanged)
+				// Republishing the speed already refreshes both cached stress figures -
+				// see GeneratingKineticBlockEntity#updateGeneratedRotation - so this
+				// covers the capacity change too and must not be doubled up.
+				flywheel.onEngineOutputChanged();
+			else if (capacityBasisChanged)
+				// Speed unchanged, capacity changed: refresh only the caches that
+				// actually moved, rather than re-propagating the whole network for a
+				// multiplier.
+				flywheel.onEngineCapacityChanged();
+		}
 
 		playTransitionSounds(phaseBefore);
 		updateIgnitionIndicator();
