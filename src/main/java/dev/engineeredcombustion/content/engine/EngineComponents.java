@@ -96,7 +96,7 @@ import net.minecraft.world.level.block.state.BlockState;
  */
 public record EngineComponents(BlockPos controllerPos, Axis axis,
 
-	List<Cylinder> cylinders, boolean oversized,
+	List<Cylinder> cylinders, EngineAssemblyStatus status,
 
 	FlywheelPlacement flywheelPlacement, @Nullable BlockPos flywheelPos,
 	@Nullable EngineFlywheelBlockEntity flywheel,
@@ -173,6 +173,7 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 		}
 	}
 
+
 	// --- the layout, in one place ------------------------------------------
 
 	public static BlockPos cylinderPos(BlockPos crankshaftPos) {
@@ -242,10 +243,26 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 	 * @param oversized     the run is longer than {@link EngineTuning#MAX_CYLINDERS}
 	 *                      and is therefore not a supported engine
 	 */
-	public record Placement(BlockPos controllerPos, int index, int count, boolean oversized) {
+	public record Placement(BlockPos controllerPos, int index, int count, EngineAssemblyStatus status) {
 
+		/**
+		 * Whether this section is the one block entity that runs the engine.
+		 *
+		 * <p>See {@link EngineLayout.Result#isController()} for the rule; this only
+		 * carries it alongside a world position.
+		 */
 		public boolean isController() {
-			return index == 0;
+			return index == 0 && status.isUsable();
+		}
+
+		/** The run is longer than {@link EngineTuning#MAX_CYLINDERS} and is not an engine. */
+		public boolean oversized() {
+			return status == EngineAssemblyStatus.OVERSIZED;
+		}
+
+		/** Whether the whole run was visible, so this layout may be acted on. */
+		public boolean isComplete() {
+			return status.isUsable();
 		}
 	}
 
@@ -255,35 +272,45 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 	 *
 	 * <p>Followers need nothing more than this - their index fixes their crank
 	 * phase and points at the controller - and the renderers ask for it every
-	 * frame, so it is deliberately block states only: at most ten lookups for an
-	 * inline-4, no block entity resolution, and no allocation beyond the record.
+	 * frame, so it is deliberately block states only: at most ten lookups, no block
+	 * entity resolution, and no allocation beyond the record.
 	 *
 	 * <p>Identical on both sides, because block states are synchronised. That is
 	 * what lets a client work out on its own which throw it is drawing.
+	 *
+	 * <p><b>Identical to {@link #resolve} too</b>, because both are this one scan.
+	 * They used to walk the run separately, with different bounds, and disagreed
+	 * about every run longer than four sections: {@code locate} could report a
+	 * count of 5 with no oversize flag, name an inner section as a controller, and
+	 * hand out an index past the end of every per-cylinder array in the simulation.
 	 */
 	public static Placement locate(Level level, BlockPos fromPos, Axis axis) {
+		return scan(level, fromPos, axis);
+	}
+
+	/**
+	 * Puts a world position on {@link EngineLayout#scan}'s answer.
+	 *
+	 * <p>All this adds is the probe - which turns a signed offset along the axis
+	 * into a block-state lookup, and crucially asks {@code level.isLoaded} first, so
+	 * an unloaded chunk is reported as {@link EngineLayout.Section#UNLOADED} rather
+	 * than being mistaken for the end of the run - and the arithmetic that turns
+	 * "this many steps back" into the controller's position. The rules themselves
+	 * live in {@code EngineLayout}, where they can be tested without a world.
+	 */
+	private static Placement scan(Level level, BlockPos fromPos, Axis axis) {
 		Direction negative = Direction.get(AxisDirection.NEGATIVE, axis);
 		Direction positive = negative.getOpposite();
 
-		BlockPos controllerPos = fromPos;
-		int index = 0;
-		while (index < EngineTuning.MAX_CYLINDERS && isCrankshaftOn(level, controllerPos.relative(negative), axis)) {
-			controllerPos = controllerPos.relative(negative);
-			index++;
-		}
-		boolean oversized = index >= EngineTuning.MAX_CYLINDERS
-			&& isCrankshaftOn(level, controllerPos.relative(negative), axis);
+		EngineLayout.Result layout = EngineLayout.scan(offset -> {
+			BlockPos pos = offset < 0 ? fromPos.relative(negative, -offset) : fromPos.relative(positive, offset);
+			if (!level.isLoaded(pos))
+				return EngineLayout.Section.UNLOADED;
+			return isCrankshaftOn(level, pos, axis) ? EngineLayout.Section.CRANKSHAFT : EngineLayout.Section.ABSENT;
+		});
 
-		int count = index + 1;
-		BlockPos section = fromPos;
-		while (count < EngineTuning.MAX_CYLINDERS && isCrankshaftOn(level, section.relative(positive), axis)) {
-			section = section.relative(positive);
-			count++;
-		}
-		if (count >= EngineTuning.MAX_CYLINDERS && isCrankshaftOn(level, section.relative(positive), axis))
-			oversized = true;
-
-		return new Placement(controllerPos, index, count, oversized);
+		BlockPos negativeEnd = fromPos.relative(negative, layout.stepsBack());
+		return new Placement(negativeEnd, layout.index(), layout.count(), layout.status());
 	}
 
 	/**
@@ -299,51 +326,26 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 	 * controller: the walk below finds that for itself.
 	 */
 	public static EngineComponents resolve(Level level, BlockPos fromPos, Axis axis) {
-		Direction negative = Direction.get(AxisDirection.NEGATIVE, axis);
-		Direction positive = negative.getOpposite();
+		Direction positive = Direction.get(AxisDirection.POSITIVE, axis);
 
-		// Walk to the negative end of the run - the controller. Bounded, so a long
-		// line of crankcases is a cheap fixed cost rather than a world scan.
-		boolean loaded = true;
-		BlockPos controllerPos = fromPos;
-		int stepsBack = 0;
-		while (stepsBack < EngineTuning.MAX_CYLINDERS) {
-			BlockPos next = controllerPos.relative(negative);
-			if (!level.isLoaded(next)) {
-				loaded = false;
-				break;
-			}
-			if (!isCrankshaftOn(level, next, axis))
-				break;
-			controllerPos = next;
-			stepsBack++;
-		}
-		// Still more crankcase beyond the bound: too long to be one of our engines.
-		boolean oversized = stepsBack >= EngineTuning.MAX_CYLINDERS
-			&& isCrankshaftOn(level, controllerPos.relative(negative), axis);
+		// The very same scan the cheap path runs, so a caller that asks both can
+		// never be told two different shapes for one run of crankcases.
+		Placement placement = scan(level, fromPos, axis);
+		BlockPos controllerPos = placement.controllerPos();
+		boolean loaded = placement.status() != EngineAssemblyStatus.INCOMPLETE_CHUNKS;
 
-		// Then forward along it, collecting one cylinder per section.
-		List<Cylinder> cylinders = new ArrayList<>(EngineTuning.MAX_CYLINDERS);
-		BlockPos section = controllerPos;
-		while (true) {
+		// One cylinder per section, from the negative end forwards. The count comes
+		// from the scan and is already clamped, so this loop is bounded by
+		// MAX_CYLINDERS whatever the world looks like and can never walk off the end
+		// of the simulation's per-cylinder arrays.
+		List<Cylinder> cylinders = new ArrayList<>(placement.count());
+		for (int index = 0; index < placement.count(); index++) {
+			BlockPos section = controllerPos.relative(positive, index);
 			BlockPos cylinderPos = cylinderPos(section);
 			if (!level.isLoaded(cylinderPos))
 				loaded = false;
-			cylinders.add(new Cylinder(cylinders.size(), section, cylinderPos,
-				blockEntity(level, cylinderPos, CylinderBlockEntity.class)));
-
-			BlockPos next = section.relative(positive);
-			if (!level.isLoaded(next)) {
-				loaded = false;
-				break;
-			}
-			if (!isCrankshaftOn(level, next, axis))
-				break;
-			if (cylinders.size() >= EngineTuning.MAX_CYLINDERS) {
-				oversized = true;
-				break;
-			}
-			section = next;
+			cylinders.add(
+				new Cylinder(index, section, cylinderPos, blockEntity(level, cylinderPos, CylinderBlockEntity.class)));
 		}
 
 		BlockPos lastSection = cylinders.get(cylinders.size() - 1)
@@ -386,13 +388,13 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 			flywheelPos == null ? null : blockEntity(level, flywheelPos, EngineFlywheelBlockEntity.class);
 		// A flywheel block with no block entity behind it is not a flywheel this
 		// engine can drive, so it is not one of ours at all.
-		FlywheelPlacement placement =
+		FlywheelPlacement flywheelPlacement =
 			flywheel == null && attachment.isSingle() ? FlywheelPlacement.NONE : attachment.placement();
 		if (flywheel == null)
 			flywheelPos = null;
 
-		return new EngineComponents(controllerPos, axis, List.copyOf(cylinders), oversized, placement, flywheelPos,
-			flywheel, carburetorPos, carburetor, oilSumpPos, oilSump, loaded);
+		return new EngineComponents(controllerPos, axis, List.copyOf(cylinders), placement.status(), flywheelPlacement,
+			flywheelPos, flywheel, carburetorPos, carburetor, oilSumpPos, oilSump, loaded);
 	}
 
 	/**
@@ -401,9 +403,11 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 	 * engine nobody can see.
 	 */
 	public static EngineComponents detached(BlockPos pos, Axis axis) {
-		return new EngineComponents(pos, axis,
-			List.of(new Cylinder(0, pos, cylinderPos(pos), null)), false, FlywheelPlacement.NONE, null, null, null,
-			null, null, null, false);
+		return new EngineComponents(pos, axis, List.of(new Cylinder(0, pos, cylinderPos(pos), null)),
+			// Nothing about this "engine" was verified against a world, so the honest
+			// status is the one that says exactly that - and it is fail-closed, which a
+			// bare COMPLETE would not have been.
+			EngineAssemblyStatus.INCOMPLETE_CHUNKS, FlywheelPlacement.NONE, null, null, null, null, null, null, false);
 	}
 
 	/**
@@ -504,12 +508,31 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 	 * required for the engine to be motored by another Create source.
 	 */
 	public boolean isMechanicallyValid() {
-		if (oversized || flywheel == null)
+		// Anything but COMPLETE is fail-closed: an over-long run is not an engine, and
+		// a run the scan could not see the ends of must not be certified as one on the
+		// strength of the part that happened to be loaded.
+		if (!status.isUsable() || flywheel == null)
 			return false;
 		for (Cylinder cylinder : cylinders)
 			if (!cylinder.hasPiston())
 				return false;
 		return true;
+	}
+
+	/** The run is longer than {@link EngineTuning#MAX_CYLINDERS} and is not an engine. */
+	public boolean oversized() {
+		return status == EngineAssemblyStatus.OVERSIZED;
+	}
+
+	/**
+	 * Whether the crank run itself was fully visible - both ends found as real
+	 * block states rather than unloaded chunks, and short enough to be an engine.
+	 *
+	 * <p>A different question from {@link #chunksLoaded()}, which additionally
+	 * covers the cylinders, the flywheel and the supporting components.
+	 */
+	public boolean isLayoutComplete() {
+		return status.isUsable();
 	}
 
 	/** Whether a Spark Plug is screwed into <i>every</i> cylinder head. */
