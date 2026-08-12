@@ -40,6 +40,15 @@ package dev.engineeredcombustion.content.engine;
  * generating: an engine that is out of fuel, unlit, mid-start or merely being
  * spun by a neighbour is turning, and contributes nothing.
  *
+ * <h2>Capacity is one mask</h2>
+ * {@link #getActiveCylinderMask()} is the single authority on <i>how much</i> of
+ * the engine is producing that power: one bit per cylinder, derived on the server
+ * from the combustion ages once per tick and synchronised as ordinary state.
+ * Create's Stress Capacity multiplier, the cache-refresh trigger, the goggle
+ * diagnostics and the generated-capacity readout are all
+ * {@code Integer.bitCount} of that one number, so there is no arrangement in
+ * which the HUD can report nothing while the flywheel reports four.
+ *
  * <h2>Throttle</h2>
  * The throttle never writes a speed. It scales the torque a combustion event is
  * worth and moves the governor band with it, so the engine has to accelerate to
@@ -207,6 +216,47 @@ public final class EngineState {
 	private boolean powerStrokeInProgress;
 	/** Ticks since each cylinder last burned a charge, or -1 if it never has. */
 	private final int[] ticksSinceCombustion = newAges();
+
+	/**
+	 * Bit {@code i} set when cylinder {@code i} burned a charge recently enough to
+	 * be part of this engine's output right now.
+	 *
+	 * <h2>One capacity basis, and this is it</h2>
+	 * <b>Every</b> answer to "how much of this engine is working" is this field:
+	 * the Stress Capacity multiplier Create is handed, the capacity-change
+	 * detection that refreshes Create's cache, the goggle diagnostic, and the
+	 * generated-capacity figure the overlay prints. There is deliberately no
+	 * second derivation anywhere - {@link #getFiringCylinderCount()} is
+	 * {@code Integer.bitCount} of this and nothing else - so the HUD cannot say 0
+	 * while the flywheel says 4.
+	 *
+	 * <h2>Why a mask rather than a count</h2>
+	 * A count says three of four cylinders are working. A mask says <i>which</i>
+	 * one is not, which is the difference between "your engine is down on power"
+	 * and "cylinder 3 is dead" - and it is what lets the diagnostics point at the
+	 * bore to look in. It costs the same four bits either way.
+	 *
+	 * <h2>Server-authoritative, and stable</h2>
+	 * Derived on the server, once per simulated tick, from
+	 * {@link #ticksSinceCombustion} and the same speed-scaled allowance the
+	 * capacity has always used - so it <i>is</i> the old rule, named and stored
+	 * rather than recomputed at each call site. The client is told this value as
+	 * ordinary block entity state, and only when it changes.
+	 *
+	 * <p>That last part is what keeps it cheap. A healthy inline-4 holds
+	 * {@code 0b1111} for as long as it runs, so it puts nothing at all on the wire
+	 * between the moment it catches and the moment something changes: a plug pulled
+	 * ({@code 0b1111 -> 0b1011}), that cylinder genuinely firing again
+	 * ({@code 0b1011 -> 0b1111}), or the tank running dry
+	 * ({@code 0b1111 -> 0b0000}). It is emphatically <b>not</b> a per-combustion
+	 * event channel - those are {@code EngineCombustionEventsPayload}'s business,
+	 * and they stay there.
+	 *
+	 * <p>Nothing an external source does can set a bit. Being spun is not burning,
+	 * so a motored engine holds {@code 0b0000} however fast its pistons move.
+	 */
+	private int activeCylinderMask;
+
 	private boolean fuelAvailable;
 
 	/**
@@ -548,6 +598,14 @@ public final class EngineState {
 		expireStaleStartAttempt(anyChargeIgnitable && turningForwards);
 		advancePhase(anyChargeIgnitable, anyPowerStrokeActive, ignitedThisTick);
 
+		// THE capacity basis, derived once, here, and after the phase has settled so
+		// that an engine which just stopped has already forgotten its combustion.
+		// Everything downstream reads the stored mask rather than repeating this sum:
+		// Create's Stress Capacity multiplier, the capacity-change detection, the
+		// synchronised value the client's HUD prints, and the generation predicate
+		// immediately below.
+		activeCylinderMask = deriveActiveCylinderMask();
+
 		// Deliberately last, and deliberately after the phase has settled: this is
 		// the one evaluation of "is this engine producing power", and everything
 		// downstream - the speed Create is told, the capacity the network gets, the
@@ -789,6 +847,7 @@ public final class EngineState {
 		// Every cylinder forgets that it ever fired, so a stopped engine's firing
 		// count - and therefore its Stress Capacity - is zero from this instant.
 		java.util.Arrays.fill(ticksSinceCombustion, -1);
+		activeCylinderMask = 0;
 		resetStartAttempt();
 	}
 
@@ -912,7 +971,7 @@ public final class EngineState {
 	 */
 	private boolean evaluateActiveGeneration() {
 		return phase.mayGenerate() && structureValid && ignitionEnabled && stillMakingCombustionTorque()
-			&& simulatedRpm >= EngineTuning.STALL_RPM && getFiringCylinderCount() > 0;
+			&& simulatedRpm >= EngineTuning.STALL_RPM && activeCylinderMask != 0;
 	}
 
 	/**
@@ -937,6 +996,30 @@ public final class EngineState {
 	}
 
 	/**
+	 * Works out, from the combustion ages, which cylinders are currently part of
+	 * this engine's output.
+	 *
+	 * <p><b>The only place the capacity basis is decided.</b> Called once per
+	 * simulated tick, on the server; every consumer then reads
+	 * {@link #activeCylinderMask} rather than repeating this sum, which is what
+	 * makes one answer impossible to disagree with another.
+	 *
+	 * <p>"Recently enough" is scaled by speed, because the firing interval is: see
+	 * {@link EngineTuning#generationCombustionAllowanceTicks}. Each cylinder fires
+	 * once per revolution, so the allowance is the same one a single-cylinder
+	 * engine used - and it is comfortably longer than the interval, so a healthy
+	 * cylinder's bit never blinks between its own firing opportunities.
+	 */
+	private int deriveActiveCylinderMask() {
+		int allowance = EngineTuning.generationCombustionAllowanceTicks(simulatedRpm);
+		int mask = 0;
+		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
+			if (ticksSinceCombustion[cylinder] >= 0 && ticksSinceCombustion[cylinder] <= allowance)
+				mask |= 1 << cylinder;
+		return mask;
+	}
+
+	/**
 	 * How many of this engine's cylinders burned a charge recently enough to count
 	 * as genuinely firing right now.
 	 *
@@ -951,18 +1034,31 @@ public final class EngineState {
 	 * burning fuel, so a motored engine counts zero however quickly its pistons are
 	 * moving - the same rule that closed the multi-engine exploit, now per cylinder.
 	 *
-	 * <p>"Recently enough" is scaled by speed, because the firing interval is: see
-	 * {@link EngineTuning#generationCombustionAllowanceTicks}. Each cylinder fires
-	 * once per revolution, so the allowance is the same one a single-cylinder
-	 * engine used.
+	 * <p><b>Valid on both sides.</b> It is a read of
+	 * {@link #getActiveCylinderMask()}, which the server derives and synchronises,
+	 * so the client's diagnostics report the server's answer rather than a
+	 * reconstruction of it. It used to be recomputed here from
+	 * {@link #ticksSinceCombustion}, which the client is never told - so every
+	 * client-side caller of this got 0, for every engine, always.
 	 */
 	public int getFiringCylinderCount() {
-		int allowance = EngineTuning.generationCombustionAllowanceTicks(simulatedRpm);
-		int firing = 0;
-		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
-			if (ticksSinceCombustion[cylinder] >= 0 && ticksSinceCombustion[cylinder] <= allowance)
-				firing++;
-		return firing;
+		return Integer.bitCount(activeCylinderMask);
+	}
+
+	/**
+	 * Which cylinders are currently contributing, one bit each: {@code 0b1111} for
+	 * a healthy inline-4, {@code 0b1011} for one with a dead third cylinder,
+	 * {@code 0b0000} for an engine that is not burning anything.
+	 *
+	 * <p>The engine's single capacity basis - see {@link #activeCylinderMask}.
+	 */
+	public int getActiveCylinderMask() {
+		return activeCylinderMask;
+	}
+
+	/** Whether cylinder {@code i} is currently contributing to this engine's output. */
+	public boolean isCylinderActive(int cylinder) {
+		return cylinder >= 0 && cylinder < cylinderCount && (activeCylinderMask & (1 << cylinder)) != 0;
 	}
 
 	/**
@@ -1196,6 +1292,11 @@ public final class EngineState {
 		return Integer.bitCount(sparkPlugMask & ((1 << cylinderCount) - 1));
 	}
 
+	/** Which cylinders have a Spark Plug, one bit each. Set through {@link #setLayout}. */
+	public int getSparkPlugMask() {
+		return sparkPlugMask;
+	}
+
 	/** This cylinder's crank phase, in degrees - 0, 90, 180, 270 for an inline-4. */
 	public float getPhaseOffsetDegrees(int cylinder) {
 		return EngineTuning.cylinderPhaseOffsetDegrees(cylinder, cylinderCount);
@@ -1271,10 +1372,11 @@ public final class EngineState {
 	/**
 	 * Whether <i>every</i> cylinder had a Spark Plug on the last simulated tick.
 	 *
-	 * <p>Synchronised so the client-side overlays can explain a dead engine
-	 * without re-reading the world. False on an inline-4 missing one plug, which
-	 * is what the overlay's warning is for; how many are missing, and which, is
-	 * {@link #getSparkPlugCount()} and {@link #hasSparkPlug(int)}.
+	 * <p>Derived from the per-cylinder mask, which is what is synchronised - there
+	 * is deliberately no separate all-or-nothing flag on the wire, because one used
+	 * to arrive after the mask and flatten it. False on an inline-4 missing one
+	 * plug; how many are missing, and which, is {@link #getSparkPlugCount()} and
+	 * {@link #hasSparkPlug(int)}.
 	 */
 	public boolean isSparkPlugInstalled() {
 		return getSparkPlugCount() == cylinderCount;
@@ -1404,6 +1506,11 @@ public final class EngineState {
 	 */
 	public void restoreAfterLoad(boolean wasGenerating) {
 		activelyGenerating = wasGenerating;
+		// Rebuilt from the restored combustion ages, exactly as the running simulation
+		// would, so the first tick back already knows which cylinders were working -
+		// and a client joining a running engine is told at once rather than having to
+		// wait for each cylinder to fire before its HUD discovers it.
+		activeCylinderMask = deriveActiveCylinderMask();
 		outputRpm = simulatedRpm;
 		publishedRpm = wasGenerating && simulatedRpm >= EngineTuning.STALL_RPM
 			? quantiseForNetwork(simulatedRpm)
@@ -1433,11 +1540,34 @@ public final class EngineState {
 		copyInto(ticks, ticksSinceCombustion);
 		for (int cylinder = 0; cylinder < ticksSinceCombustion.length; cylinder++)
 			ticksSinceCombustion[cylinder] = Math.max(-1, ticksSinceCombustion[cylinder]);
+		// The ages are the physical state; the mask is a reading of them. Re-deriving
+		// it here rather than restoring a saved copy beside them is the same rule the
+		// published RPM follows, and for the same reason: two persisted copies of one
+		// fact come back disagreeing.
+		activeCylinderMask = deriveActiveCylinderMask();
 	}
 
 	/** The same, for every cylinder at once. */
 	public void setTicksSinceCombustion(int ticks) {
 		java.util.Arrays.fill(ticksSinceCombustion, Math.max(-1, ticks));
+		activeCylinderMask = deriveActiveCylinderMask();
+	}
+
+	/**
+	 * Adopts the server's capacity basis. <b>Client side.</b>
+	 *
+	 * <p>The client is told which cylinders are working rather than deriving it,
+	 * because it cannot derive it: {@link #ticksSinceCombustion} is simulation
+	 * state that never leaves the server, so a client-side derivation answered
+	 * "none of them" for every engine that ever ran.
+	 *
+	 * <p>On the server this is never called - {@code tickSimulation} owns the
+	 * field - and bits past the engine's cylinder count are dropped, so a mask that
+	 * arrives before a shrink is synchronised cannot claim a cylinder that is no
+	 * longer there.
+	 */
+	public void setActiveCylinderMask(int activeCylinderMask) {
+		this.activeCylinderMask = activeCylinderMask & ((1 << cylinderCount) - 1);
 	}
 
 	/**
@@ -1452,6 +1582,10 @@ public final class EngineState {
 	public void setLayout(int cylinderCount, int sparkPlugMask) {
 		this.cylinderCount = Math.min(Math.max(cylinderCount, 1), EngineTuning.MAX_CYLINDERS);
 		this.sparkPlugMask = sparkPlugMask & ((1 << this.cylinderCount) - 1);
+		// An engine that just lost a section cannot still be firing on it. Trimming
+		// here means no reading taken between this and the next simulated tick can
+		// count a cylinder the engine no longer has.
+		this.activeCylinderMask &= (1 << this.cylinderCount) - 1;
 	}
 
 	/** Copies as much of {@code from} as fits into {@code into}, leaving the rest. */
@@ -1527,13 +1661,12 @@ public final class EngineState {
 		this.ignitionEnabled = ignitionEnabled;
 	}
 
-	/**
-	 * Client-side convenience for a tag that only carries "are all the plugs in".
-	 * The authoritative per-cylinder answer arrives through {@link #setLayout}.
-	 */
-	public void setSparkPlugInstalled(boolean sparkPlugInstalled) {
-		this.sparkPlugMask = sparkPlugInstalled ? (1 << cylinderCount) - 1 : 0;
-	}
+	// There is deliberately no setSparkPlugInstalled(boolean). It existed for a tag
+	// that carried only "are all the plugs in", and because read() applied it AFTER
+	// setLayout it overwrote the real per-cylinder mask with an all-or-nothing one:
+	// on the client an inline-4 missing a single plug came out as an engine with no
+	// plugs at all. The per-cylinder mask is the only representation now, on both
+	// sides, and it arrives through setLayout.
 
 	public void setStructureValid(boolean structureValid) {
 		this.structureValid = structureValid;

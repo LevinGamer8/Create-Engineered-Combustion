@@ -129,6 +129,33 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	}
 
 	/**
+	 * Stress Capacity, in SU, that <b>this engine</b> is contributing to its
+	 * network right now.
+	 *
+	 * <p>Deliberately not the network's total. A network's capacity is the sum over
+	 * every source on it, which Create already displays; the question this answers
+	 * is the one only the engine can - "what is this machine actually putting in" -
+	 * and on a shared shaft the two are very different numbers.
+	 *
+	 * <p>It is exactly the arithmetic Create performs, and it is performed here
+	 * rather than reproduced anywhere else:
+	 * {@code KineticNetwork#getActualCapacityOf} is the registered per-RPM capacity
+	 * times the absolute generated speed, and those are precisely
+	 * {@link #calculateAddedStressCapacity()} and {@link #getGeneratedSpeed()}. The
+	 * goggle overlay used to multiply a tuning constant by a speed by a cylinder
+	 * count of its own; that reproduction could - and did - disagree with the real
+	 * thing, and it also ignored any datapack that had retuned the capacity.
+	 *
+	 * <p>Identical on both sides. Every input is synchronised: Create synchronises
+	 * its stress values to clients so its own goggle overlays can print them, the
+	 * published speed travels in the engine's block entity data, and the firing
+	 * cylinder count is now the server's own capacity mask.
+	 */
+	public float getEngineGeneratedCapacity() {
+		return calculateAddedStressCapacity() * Math.abs(getGeneratedSpeed());
+	}
+
+	/**
 	 * Load this engine puts <i>on</i> the network, per RPM.
 	 *
 	 * <p>The parasitic cost of turning a dead engine over: compression, bearing

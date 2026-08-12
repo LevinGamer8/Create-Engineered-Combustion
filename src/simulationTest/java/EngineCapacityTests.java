@@ -128,6 +128,12 @@ public class EngineCapacityTests {
 		int capacityBasis() {
 			return state.isActivelyGenerating() ? state.getFiringCylinderCount() : 0;
 		}
+
+		/** The mask as a player would read it: {@code 1011} for a dead third cylinder. */
+		String maskBits() {
+			String bits = Integer.toBinaryString(state.getActiveCylinderMask());
+			return "0".repeat(Math.max(0, cylinders - bits.length())) + bits;
+		}
 	}
 
 	/** Cranks a fuelled engine until it catches, then lets it settle at idle. */
@@ -145,6 +151,8 @@ public class EngineCapacityTests {
 		capacityChangesWhileSpeedIsPinned();
 		dryMotoredEngineHasNoCapacity();
 		reloadDoesNotResurrectCapacity();
+		activeCylinderMaskIsTheCapacityBasis();
+		activeCylinderMaskOnlyMovesOnRealEvents();
 
 		System.out.println();
 		if (failures > 0) {
@@ -310,6 +318,140 @@ public class EngineCapacityTests {
 		dead.tickFree();
 		check("a reloaded engine with an empty tank claims no capacity", dead.capacitySu() == 0.0,
 			String.format("%.0f su", dead.capacitySu()));
+	}
+
+	/**
+	 * The mask is not a second opinion about the capacity: it <b>is</b> the capacity
+	 * basis, and every other reading is a view of it.
+	 *
+	 * <p>What this pins down is the property the goggle overlay and Create's cached
+	 * multiplier now share by construction: {@code getFiringCylinderCount()} is
+	 * {@code Integer.bitCount(getActiveCylinderMask())} and nothing else, so there is
+	 * no arrangement of state in which the two can differ.
+	 */
+	static void activeCylinderMaskIsTheCapacityBasis() {
+		section("ONE CAPACITY BASIS: THE ACTIVE CYLINDER MASK");
+
+		Engine r4 = new Engine(4, 1000000);
+		start(r4);
+		check("a healthy inline-4 reads 1111", r4.state.getActiveCylinderMask() == 0b1111, r4.maskBits());
+		check("the firing count is exactly its bit count",
+			r4.state.getFiringCylinderCount() == Integer.bitCount(r4.state.getActiveCylinderMask()),
+			r4.state.getFiringCylinderCount() + " == bitCount(" + r4.maskBits() + ")");
+		check("and every one of its cylinders reports itself active",
+			r4.state.isCylinderActive(0) && r4.state.isCylinderActive(1) && r4.state.isCylinderActive(2)
+				&& r4.state.isCylinderActive(3),
+			r4.maskBits());
+
+		// Pull the plug out of cylinder 3 - bit 2, the third bore along the shaft.
+		r4.sparkPlugMask = 0b1011;
+		int allowance = EngineTuning.generationCombustionAllowanceTicks(r4.state.getSimulatedRpm());
+		for (int tick = 0; tick <= allowance + 2; tick++)
+			r4.tickFree();
+
+		check("pulling cylinder 3's plug reads 1011", r4.state.getActiveCylinderMask() == 0b1011, r4.maskBits());
+		check("and it is cylinder 3 specifically that went dark", !r4.state.isCylinderActive(2)
+			&& r4.state.isCylinderActive(0) && r4.state.isCylinderActive(1) && r4.state.isCylinderActive(3),
+			r4.maskBits());
+		check("capacity fell to three cylinders' worth", r4.capacityBasis() == 3,
+			r4.capacityBasis() + " firing, mask " + r4.maskBits());
+
+		// An engine that has run out of fuel loses every cylinder, not merely its
+		// generation flag - and it does so only once the last paid-for stroke is done.
+		Engine starved = new Engine(4, 1000000);
+		start(starved);
+		check("a fuelled inline-4 reads 1111 before starvation", starved.state.getActiveCylinderMask() == 0b1111,
+			starved.maskBits());
+		// The tank runs dry while it is running, which is the case that matters: the
+		// charges already bought go on pushing, and the mask may only empty once the
+		// last of them has finished its stroke and aged out.
+		starved.tank.mb = 0;
+		for (int tick = 0; tick < 20 * 60 && starved.state.getActiveCylinderMask() != 0; tick++)
+			starved.tickFree();
+		check("an inline-4 that has run dry reads 0000", starved.state.getActiveCylinderMask() == 0,
+			starved.maskBits());
+		check("and contributes nothing at all", starved.capacitySu() == 0.0,
+			String.format("%.0f su", starved.capacitySu()));
+
+		// The one an external source must never be able to fake.
+		Engine motored = new Engine(4, 0);
+		for (int tick = 0; tick < 200; tick++)
+			motored.tickHeldAt(EngineTuning.FULL_THROTTLE_RPM);
+		check("a dry inline-4 spun at 192 RPM still reads 0000", motored.state.getActiveCylinderMask() == 0,
+			motored.maskBits() + " at " + Math.round(motored.state.getMechanicalRpm()) + " RPM");
+	}
+
+	/**
+	 * <b>The property that keeps the mask cheap to synchronise.</b>
+	 *
+	 * <p>The block entity only puts the mask on the wire when it changes, which is
+	 * only worth doing if a healthy engine's mask is genuinely stable - if it
+	 * flickered between firing opportunities it would be a per-combustion packet
+	 * wearing a different name, and it would undo exactly the saving
+	 * {@code EngineCombustionEventsPayload} was written for.
+	 *
+	 * <p>It also pins the direction of the repair: refitting a plug is not what
+	 * makes a cylinder count again. Burning a charge in it is.
+	 */
+	static void activeCylinderMaskOnlyMovesOnRealEvents() {
+		section("THE MASK IS STABLE STATE, NOT AN EVENT CHANNEL");
+
+		Engine r4 = new Engine(4, 1000000);
+		start(r4);
+
+		int changes = countMaskChanges(r4, 400);
+		check("a healthy inline-4 does not change its mask for 400 ticks", changes == 0,
+			changes + " change(s) over 20 seconds at " + Math.round(r4.state.getSimulatedRpm()) + " RPM");
+
+		// Down a cylinder, and then steady again on three.
+		r4.sparkPlugMask = 0b1011;
+		int allowance = EngineTuning.generationCombustionAllowanceTicks(r4.state.getSimulatedRpm());
+		for (int tick = 0; tick <= allowance + 2; tick++)
+			r4.tickFree();
+		check("losing a plug moved it once, to 1011", r4.state.getActiveCylinderMask() == 0b1011, r4.maskBits());
+
+		changes = countMaskChanges(r4, 400);
+		check("and 1011 is then just as stable as 1111 was", changes == 0,
+			changes + " change(s) over 20 seconds on three cylinders");
+
+		// Refit the plug. The cylinder is capable again, but it has not burned
+		// anything yet, and capacity may not be paid for capability.
+		r4.sparkPlugMask = 0b1111;
+		check("refitting the plug does not restore the bit by itself",
+			r4.state.getActiveCylinderMask() == 0b1011, r4.maskBits() + " on the tick the plug went back in");
+
+		int combustionsBefore = r4.state.getCombustionEventId(2);
+		int ticksUntilMaskReturned = -1;
+		int ticksUntilCylinderFired = -1;
+		for (int tick = 1; tick <= 200; tick++) {
+			r4.tickFree();
+			if (ticksUntilCylinderFired < 0 && r4.state.getCombustionEventId(2) != combustionsBefore)
+				ticksUntilCylinderFired = tick;
+			if (ticksUntilMaskReturned < 0 && r4.state.getActiveCylinderMask() == 0b1111)
+				ticksUntilMaskReturned = tick;
+		}
+
+		check("cylinder 3 eventually burned a charge again", ticksUntilCylinderFired > 0,
+			"first combustion after " + ticksUntilCylinderFired + " tick(s)");
+		check("the mask returned to 1111", r4.state.getActiveCylinderMask() == 0b1111, r4.maskBits());
+		check("and not before that cylinder actually fired",
+			ticksUntilMaskReturned > 0 && ticksUntilMaskReturned >= ticksUntilCylinderFired,
+			"fired on tick " + ticksUntilCylinderFired + ", mask returned on tick " + ticksUntilMaskReturned);
+	}
+
+	/** How many times the mask changes over the next {@code ticks} ticks of free running. */
+	static int countMaskChanges(Engine engine, int ticks) {
+		int previous = engine.state.getActiveCylinderMask();
+		int changes = 0;
+		for (int tick = 0; tick < ticks; tick++) {
+			engine.tickFree();
+			int now = engine.state.getActiveCylinderMask();
+			if (now != previous) {
+				changes++;
+				previous = now;
+			}
+		}
+		return changes;
 	}
 
 	// ---------------------------------------------------------------- harness
