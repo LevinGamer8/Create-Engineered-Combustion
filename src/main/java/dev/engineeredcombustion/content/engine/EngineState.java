@@ -643,7 +643,7 @@ public final class EngineState {
 		// way back down, and it takes out over a revolution exactly what it puts in.
 		// That is why it can make a single-cylinder engine lumpy and an inline-4
 		// smooth without moving either one's equilibrium speed.
-		float drag = EngineTuning.frictionTorqueAt(simulatedRpm, lubrication) + loadDragTorque;
+		float drag = EngineTuning.frictionTorqueAt(simulatedRpm, lubrication) + loadDragTorque + coastDragTorque();
 		float netTorque = combustionTorque + compressionTorque - Math.signum(simulatedRpm) * drag;
 
 		float next = simulatedRpm + netTorque / EngineTuning.FLYWHEEL_INERTIA;
@@ -663,6 +663,40 @@ public final class EngineState {
 		// torque away well below it.
 		float ceiling = Math.max(speedLimitRpm, Math.abs(simulatedRpm));
 		simulatedRpm = clamp(next, -ceiling, ceiling);
+	}
+
+	/**
+	 * The extra drag of an engine that is turning without firing - pumping losses
+	 * and the heavier friction of a motored engine. Zero for a firing one.
+	 *
+	 * <p>Three gates, and each of them is a way this drag would be wrong:
+	 * <ul>
+	 * <li><b>only while free-running.</b> An engine Create is holding at a speed does
+	 * not integrate its own momentum - it takes that speed on - so subtracting drag
+	 * from it would corrupt the one number that is supposed to equal the shaft's, and
+	 * it would be charging the same losses twice: motoring a dead engine is already
+	 * billed to the network through
+	 * {@link EngineTuning#PASSIVE_DRAG_STRESS_PER_RPM}. This drag is for an engine
+	 * nothing is driving;</li>
+	 * <li><b>not while RUNNING</b>, so every equilibrium the governor solved for is
+	 * exactly where it was: idle stays 64 RPM and full throttle stays 192;</li>
+	 * <li><b>not while STARTING</b>, which is what keeps a hand crank able to start
+	 * the engine - a start attempt spends most of its ticks between firing kicks, and
+	 * charging it coast drag in those gaps would smother the attempt - and not while
+	 * a paid-for charge is still pushing, so the last stroke of a run finishes
+	 * against running friction rather than against the drag of an engine that has
+	 * already stopped burning.</li>
+	 * </ul>
+	 *
+	 * <p>Identical on both sides. Every input is either synchronised (the phase) or
+	 * derived identically by {@link #tickRotation} (free rotation) or provably false
+	 * while coasting (a power stroke - RUNNING cannot be left while one is live), so
+	 * the client's spin-down traces the server's curve exactly.
+	 */
+	private float coastDragTorque() {
+		if (!freeRotation || phase.isFiring() || powerStrokeInProgress)
+			return 0.0F;
+		return EngineTuning.coastDragTorqueAt(simulatedRpm, lubrication);
 	}
 
 	/**

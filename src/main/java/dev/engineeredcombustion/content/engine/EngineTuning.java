@@ -156,6 +156,51 @@ public final class EngineTuning {
 	/** Speed-proportional drag, which is what makes the engine settle at idle. */
 	public static final float FRICTION_TORQUE_PER_RPM = 0.08F;
 
+	// --- coast-down drag ----------------------------------------------------
+	//
+	// A spin-down used to take about ten seconds from idle, which reads as a
+	// flywheel on frictionless bearings rather than an engine. The obvious knob -
+	// FLYWHEEL_INERTIA - is the wrong one: it also sets how much a single cylinder's
+	// combustion ripples the crank speed within a revolution, how long the engine
+	// takes to spin up from a hand crank, and how much smoother an inline-4 is than
+	// an inline-1. Cutting it to shorten the coast would have paid for a shorter
+	// spin-down with a rougher, twitchier running engine.
+	//
+	// So the inertia is untouched and the extra drag is added only where it belongs:
+	// to an engine that is NOT making combustion torque. A real engine coasting with
+	// the throttle shut is pumping air past a closed plate and driving its own
+	// valvetrain and accessories, and that is a much bigger loss than the bearing
+	// friction a running engine fights.
+	//
+	// Two things this deliberately does not do:
+	//   - it does not touch a RUNNING or STARTING engine, so every equilibrium the
+	//     throttle promises (idle 64, half 128, full 192) is exactly as it was, and a
+	//     start attempt is not sabotaged between its firing kicks;
+	//   - it does not double-charge. PASSIVE_DRAG_STRESS_PER_RPM bills a kinetic
+	//     network for motoring a dead engine; this slows an engine nothing is
+	//     driving. The two never apply to the same rotation, because an engine held
+	//     at a speed by Create takes that speed on rather than integrating its own.
+
+	/**
+	 * How much harder friction bites on an engine that is not firing, as a multiple
+	 * of the running figure.
+	 *
+	 * <p>Applied on top of the lubrication multiplier rather than instead of it, so
+	 * a dry engine still coasts down faster than a well-oiled one.
+	 */
+	public static final float COAST_FRICTION_MULTIPLIER = 2.5F;
+
+	/**
+	 * Speed-independent drag of an engine being turned over without firing: pumping
+	 * against a closed throttle, and everything the crank drives that is not the
+	 * load.
+	 *
+	 * <p>Constant on purpose. It is what makes the last few RPM of a spin-down
+	 * actually finish instead of asymptotically creeping, which is the half of the
+	 * old coast-down that felt worst.
+	 */
+	public static final float PUMPING_DRAG_TORQUE = 6.0F;
+
 	/**
 	 * Width of the band over which combustion torque fades out, centred on the
 	 * <i>throttle's target speed</i>. Full torque at {@code target - 16}, none at
@@ -747,6 +792,21 @@ public final class EngineTuning {
 	/** Extra drag from the kinetic load hanging off the engine. Always positive. */
 	public static float loadDragTorque(float loadFactor) {
 		return LOAD_DRAG_TORQUE * clamp01(loadFactor);
+	}
+
+	/**
+	 * The <i>additional</i> drag an engine that is not firing suffers, over and above
+	 * the friction it fights while running. Always positive.
+	 *
+	 * <p>Returned as the extra rather than as a replacement total, so the caller adds
+	 * it to the ordinary friction term and that term keeps being counted exactly
+	 * once - see {@code EngineState#integrate}.
+	 *
+	 * @see #COAST_FRICTION_MULTIPLIER
+	 * @see #PUMPING_DRAG_TORQUE
+	 */
+	public static float coastDragTorqueAt(float rpm, LubricationState lubrication) {
+		return frictionTorqueAt(rpm, lubrication) * (COAST_FRICTION_MULTIPLIER - 1.0F) + PUMPING_DRAG_TORQUE;
 	}
 
 	/**
