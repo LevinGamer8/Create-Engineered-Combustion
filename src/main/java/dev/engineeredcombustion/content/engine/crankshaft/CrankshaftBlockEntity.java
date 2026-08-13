@@ -14,6 +14,7 @@ import com.simibubi.create.infrastructure.config.AllConfigs;
 
 import dev.engineeredcombustion.client.sound.EngineSoundManager;
 import dev.engineeredcombustion.content.engine.CombustionAudio;
+import dev.engineeredcombustion.content.engine.EngineAssemblyStatus;
 import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.EngineInputs;
 import dev.engineeredcombustion.content.engine.EnginePhase;
@@ -45,6 +46,7 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
@@ -159,13 +161,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private static final String KEY_START_PROGRESS = "StartProgress";
 	private static final String KEY_START_REQUIRED = "StartRequired";
 	private static final String KEY_FUEL_AVAILABLE = "FuelAvailable";
-	private static final String KEY_SPARK_PLUG = "SparkPlug";
 	private static final String KEY_LUBRICATION = "Lubrication";
 	private static final String KEY_OIL_WEAR = "OilWear";
 	private static final String KEY_SPARK_EVENT = "SparkEvent";
 	private static final String KEY_COMBUSTION_EVENT = "CombustionEvent";
 	private static final String KEY_GENERATING = "Generating";
 	private static final String KEY_COMBUSTION_AGE = "TicksSinceCombustion";
+	private static final String KEY_ACTIVE_CYLINDERS = "ActiveCylinders";
 	private static final String KEY_CYLINDER_INDEX = "CylinderIndex";
 	private static final String KEY_CYLINDER_COUNT = "CylinderCount";
 	private static final String KEY_SPARK_PLUG_MASK = "SparkPlugMask";
@@ -463,6 +465,12 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (!isEngineController())
 			return;
 
+		// Before anything this tick reads how many cylinders this engine has. The
+		// client cannot run the simulation that would tell it, so it takes the shape
+		// straight off the world - see adoptResolvedLayout.
+		if (level.isClientSide)
+			adoptResolvedLayout();
+
 		tickRotation();
 
 		if (level.isClientSide) {
@@ -541,9 +549,16 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		boolean structureValidBefore = engine.isStructureValid();
 		int startProgressBefore = engine.getStartProgress();
 		boolean fuelBefore = engine.isFuelAvailable();
-		boolean sparkPlugBefore = engine.isSparkPlugInstalled();
+		// The whole mask, not merely "are they all in". A four-cylinder engine that
+		// loses its second plug having already lost its third changes nothing about
+		// the all-or-nothing answer, and the client would have gone on drawing a plug
+		// in a head that no longer has one.
+		int sparkPlugMaskBefore = engine.getSparkPlugMask();
 		LubricationState lubricationBefore = engine.getLubrication();
-		int firingBefore = engine.getFiringCylinderCount();
+		// THE capacity basis, as one number. Compared as a mask rather than as a count
+		// so that a swap - cylinder 3 dying on the tick cylinder 2 comes back - is a
+		// change rather than a coincidence of equal counts.
+		int activeMaskBefore = engine.getActiveCylinderMask();
 		int[] sparkEventsBefore = engine.copyOfSparkEventIds();
 		int[] combustionEventsBefore = engine.copyOfCombustionEventIds();
 
@@ -567,10 +582,10 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		//   passive load     - the drag a NON-generating engine puts on the network.
 		//
 		// The first is `generatedSpeedChanged`. The other two both change exactly when
-		// `firingBefore` or `generatingBefore` moves, and either can move while the
+		// `activeMaskBefore` or `generatingBefore` moves, and either can move while the
 		// published speed does not: an engine held at a steady speed by another source
 		// that loses a Spark Plug changes its capacity basis and nothing else.
-		boolean capacityBasisChanged = firingBefore != engine.getFiringCylinderCount()
+		boolean capacityBasisChanged = activeMaskBefore != engine.getActiveCylinderMask()
 			|| generatingBefore != engine.isActivelyGenerating();
 
 		boolean reconciled = needsPostLoadReconcile;
@@ -605,12 +620,18 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// things that change the engine's rotation. Toggling redstone on a stopped
 		// engine changes no speed and no phase, so without this the client would
 		// keep showing the ignition state it was last told about.
+		//
+		// The capacity mask is in this list, and that is the whole of how it reaches
+		// the client: on a CHANGE, never on a firing. A healthy inline-4 holds
+		// 0b1111 from the moment it catches to the moment something breaks, so it
+		// costs exactly nothing between those two events - which is the property that
+		// keeps the combustion payload's saving intact.
 		if (generatedSpeedChanged || reconciled || signalBefore != redstoneSignal
 			|| phaseBefore != engine.getPhase() || structureValidBefore != engine.isStructureValid()
 			|| startProgressBefore != engine.getStartProgress() || fuelBefore != engine.isFuelAvailable()
-			|| sparkPlugBefore != engine.isSparkPlugInstalled()
+			|| sparkPlugMaskBefore != engine.getSparkPlugMask()
 			|| lubricationBefore != engine.getLubrication()
-			|| firingBefore != engine.getFiringCylinderCount()
+			|| activeMaskBefore != engine.getActiveCylinderMask()
 			|| generatingBefore != engine.isActivelyGenerating()) {
 			syncAndRearmResync();
 		} else if (engine.getMechanicalRpm() != 0.0F && --resyncCountdown <= 0) {
@@ -842,6 +863,43 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			stopForRebuild();
 		setChanged();
 		sync();
+	}
+
+	/**
+	 * Gives the client's copy of the simulation the layout the world actually
+	 * shows.
+	 *
+	 * <p><b>Not a second opinion.</b> {@link EngineComponents#locate} reads nothing
+	 * but block states, and block states are synchronised, so this derives the very
+	 * answer the server derived - the same scan, in the same class, from the same
+	 * data. It is the mechanism the renderers already rely on to know which crank
+	 * throw they are drawing.
+	 *
+	 * <p><b>Why it is needed at all.</b> The simulation's cylinder count used to
+	 * reach the client only inside the block entity's data, and the client's own
+	 * per-tick derivation was removed when the layout scan was unified. That was
+	 * survivable while a spark or a bang forced a full block entity synchronisation
+	 * several times a second; once combustion moved to its own compact payload,
+	 * those updates stopped, and any moment where the count had not arrived - a
+	 * layout packet still in flight behind an event packet, a section placed on the
+	 * tick a chunk was sent - left the client simulating an inline-1 inside an
+	 * inline-4. Every per-cylinder loop on the client is bounded by that number.
+	 *
+	 * <p>Fail-closed and idempotent: a run whose ends could not both be seen is not
+	 * adopted, and a layout that already agrees does no work.
+	 */
+	private void adoptResolvedLayout() {
+		if (level == null)
+			return;
+		EngineComponents.Placement placement = EngineComponents.locate(level, worldPosition, getAxis());
+		if (!placement.isComplete())
+			return;
+		if (placement.count() == engine.getCylinderCount())
+			return;
+		// The plug mask stays the server's - a plug is an item inside a block entity,
+		// not a block state, so it is the one part of the layout a block-state scan
+		// genuinely cannot see.
+		engine.setLayout(placement.count(), sparkPlugMask);
 	}
 
 	/**
@@ -1379,9 +1437,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (!(level instanceof ServerLevel serverLevel))
 			return;
 
+		// Every counter the engine has, not merely the ones the current layout uses.
+		// The diff is what it is: a counter that moved describes an event that really
+		// happened, and bounding the comparison by a number that could be smaller than
+		// the array is how an event gets silently dropped rather than sent.
 		int sparkMask = 0;
 		int combustionMask = 0;
-		for (int cylinder = 0; cylinder < engine.getCylinderCount(); cylinder++) {
+		for (int cylinder = 0; cylinder < EngineTuning.MAX_CYLINDERS; cylinder++) {
 			if (engine.getSparkEventId(cylinder) != sparkEventsBefore[cylinder])
 				sparkMask |= 1 << cylinder;
 			if (engine.getCombustionEventId(cylinder) != combustionEventsBefore[cylinder])
@@ -1410,6 +1472,16 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * rather than left to guess, and the flash and the bang are two reactions to one
 	 * bit instead of two mechanisms that could land a tick apart.
 	 *
+	 * <p><b>The payload decides which cylinders fired; this side only decides where
+	 * they are.</b> The bound below is therefore the engine resolved from the world
+	 * - the blocks the player can see, capped at
+	 * {@link EngineTuning#MAX_CYLINDERS} - and never the client simulation's own
+	 * cylinder count. Bounding it by the simulation meant that a client which had
+	 * not yet been told the engine's shape discarded every bit above its stale
+	 * count: on an inline-4 believed to be an inline-1, cylinders 2, 3 and 4 fired
+	 * in silence and darkness, and the firing rhythm the audio measures was a
+	 * quarter of the truth.
+	 *
 	 * @param sparkMask      bit {@code i} set when cylinder {@code i}'s coil fired
 	 * @param combustionMask bit {@code i} set when cylinder {@code i} burned a charge
 	 */
@@ -1417,7 +1489,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	public void playCombustionEvents(byte sparkMask, byte combustionMask) {
 		if (level == null)
 			return;
-		for (int cylinder = 0; cylinder < engine.getCylinderCount(); cylinder++) {
+		int resolvedCylinders = Math.min(engineComponents().cylinderCount(), EngineTuning.MAX_CYLINDERS);
+		for (int cylinder = 0; cylinder < resolvedCylinders; cylinder++) {
 			boolean sparked = (sparkMask & (1 << cylinder)) != 0;
 			boolean burned = (combustionMask & (1 << cylinder)) != 0;
 			if (!sparked && !burned)
@@ -1763,6 +1836,12 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			// audio and its rotation rule all read.
 			engine.setPublishedRpm(tag.getFloat(KEY_PUBLISHED_RPM));
 			engine.setActivelyGenerating(tag.getBoolean(KEY_GENERATING));
+			// And HOW MUCH of it is producing power. The combustion ages this is
+			// derived from are server-only simulation state, so before this arrived
+			// the client's own derivation answered "no cylinders" on every engine that
+			// ever ran - which is precisely what an inline-4 at full throttle
+			// reporting "Active Cylinders: 0 / 4" was.
+			engine.setActiveCylinderMask(tag.getInt(KEY_ACTIVE_CYLINDERS));
 		} else {
 			// Off disk. How long ago a charge last burned is simulation state, not
 			// bookkeeping: it is the condition an external source cannot fake, and
@@ -1808,11 +1887,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		redstoneSignal = tag.getInt(KEY_REDSTONE_SIGNAL);
 		engine.setStartAttempt(tag.getInt(KEY_START_PROGRESS), tag.getInt(KEY_START_REQUIRED));
 		engine.setFuelAvailable(tag.getBoolean(KEY_FUEL_AVAILABLE));
-		// Carried for the client's benefit only - the overlay explains a dead engine
-		// with it, and the cylinder that owns the truth may be a block the client
-		// has not been told about yet. The server overwrites it from the world on
-		// the very next tick.
-		engine.setSparkPlugInstalled(tag.getBoolean(KEY_SPARK_PLUG));
+		// There is no second, all-or-nothing spark plug flag to read back here any
+		// more. SparkPlugMask above is the whole answer, per cylinder, and reading a
+		// boolean after it - which is what this line used to do - overwrote that mask
+		// with "all of them" or "none of them": on the client an inline-4 missing one
+		// plug became an inline-4 with no plugs at all.
 		engine.setLubrication(LubricationState.byId(tag.getString(KEY_LUBRICATION)));
 		// Persisted so a chunk reload does not hand the player free oil by
 		// discarding the revolutions already banked towards the next draw.
@@ -1836,10 +1915,20 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// used to come back stale and stay stale. The client still needs it: the
 		// goggle diagnostics print what Create is really being told, and only the
 		// server knows that.
-		if (clientPacket)
+		if (clientPacket) {
 			tag.putFloat(KEY_PUBLISHED_RPM, engine.getPublishedRpm());
-		else
+			// WHICH cylinders are carrying the engine, one bit each - and the client's
+			// only possible source for it, because the combustion ages it is derived
+			// from are server-side simulation state that stays here.
+			//
+			// Client packet only, exactly like the published speed above and for the
+			// same reason: on disk this would be a second copy of something the ages
+			// below already determine, and a saved representation beside the thing it
+			// represents is how the two come back disagreeing. Loading re-derives it.
+			tag.putInt(KEY_ACTIVE_CYLINDERS, engine.getActiveCylinderMask());
+		} else {
 			tag.putIntArray(KEY_COMBUSTION_AGE, engine.copyOfTicksSinceCombustion());
+		}
 		tag.putBoolean(KEY_GENERATING, engine.isActivelyGenerating());
 		tag.putBoolean(KEY_IGNITION, engine.isIgnitionEnabled());
 		tag.putBoolean(KEY_STRUCTURE_VALID, engine.isStructureValid());
@@ -1849,7 +1938,6 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		tag.putInt(KEY_START_PROGRESS, engine.getStartProgress());
 		tag.putInt(KEY_START_REQUIRED, engine.getRequiredStartCycles());
 		tag.putBoolean(KEY_FUEL_AVAILABLE, engine.isFuelAvailable());
-		tag.putBoolean(KEY_SPARK_PLUG, engine.isSparkPlugInstalled());
 		tag.putString(KEY_LUBRICATION, engine.getLubrication()
 			.getId());
 		tag.putInt(KEY_OIL_WEAR, engine.getCombustionEventsSinceOilDraw());
@@ -2286,6 +2374,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// How many of them are genuinely burning fuel right now. THE line for a
 		// multi-cylinder engine: capacity is scaled by this, so an inline-4 reading
 		// "3 / 4" is an engine down a cylinder and down a quarter of its power.
+		//
+		// Read from the server's capacity mask, which is the SAME number the Flywheel
+		// hands Create - not a client-side re-derivation from combustion ages the
+		// client is never sent, which is what made this read "0 / 4" on every engine
+		// that ever ran.
 		int firing = state.getFiringCylinderCount();
 		diagnostic(tooltip, "active_cylinders", ECLang.translate("gui.value.fraction",
 			ECLang.number(firing)
@@ -2294,6 +2387,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 				.component())
 			.style(firing == components.cylinderCount() ? ChatFormatting.GREEN
 				: firing == 0 ? ChatFormatting.DARK_GRAY : ChatFormatting.GOLD));
+		addCylinderStatusLine(tooltip, state);
 		if (components.oversized())
 			ECLang.translate("gui.too_many_cylinders", ECLang.number(EngineTuning.MAX_CYLINDERS)
 				.component())
@@ -2343,22 +2437,54 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.style(ChatFormatting.AQUA));
 		diagnostic(tooltip, "generated_rpm", ECLang.number(state.getPublishedRpm())
 			.style(ChatFormatting.AQUA));
-		// Zero on any engine that is not actively generating, however fast the
-		// network is spinning it. Together with Generated RPM this is the whole
-		// diagnosis of a multi-engine network: capacity comes from combustion, never
-		// from rotation.
-		diagnostic(tooltip, "generated_capacity",
-			ECLang.number(state.isActivelyGenerating()
-				? EngineTuning.STRESS_CAPACITY_PER_RPM * state.getPublishedRpm() * firing
-				: 0.0F)
-				.style(state.isActivelyGenerating() ? ChatFormatting.AQUA : ChatFormatting.DARK_GRAY));
+		// What THIS engine is contributing, in SU - not what its network has in
+		// total, which Create already reports on the Flywheel. Asked of the Flywheel
+		// so that it is literally the figure Create is working from, rather than the
+		// overlay's own multiplication of a tuning constant that a datapack may have
+		// retuned underneath it. Zero on any engine that is not actively generating,
+		// however fast the network is spinning it: capacity comes from combustion,
+		// never from rotation.
+		EngineFlywheelBlockEntity generator = components.flywheel();
+		float generatedCapacity = generator == null ? 0.0F : generator.getEngineGeneratedCapacity();
+		diagnostic(tooltip, "generated_capacity", ECLang.number(generatedCapacity)
+			.style(generatedCapacity > 0.0F ? ChatFormatting.AQUA : ChatFormatting.DARK_GRAY));
 		// Network load is deliberately absent. Create already reports stress on the
 		// Flywheel, which is this engine's generator, and repeating it here would be
 		// the HUD clutter this overlay keeps out of the way behind sneak.
 	}
 
+	/**
+	 * Which cylinders are working, at a glance: a filled circle per firing cylinder
+	 * and a hollow one per dead cylinder, in crank-axis order.
+	 *
+	 * <p>The reason the capacity basis is a mask rather than a count. "3 / 4" says
+	 * the engine is down a cylinder; this says <i>which</i> one, so the player knows
+	 * which head to look in - and it costs one line and no extra state.
+	 *
+	 * <p>Absent on a single-cylinder engine, where the fraction above has already
+	 * said everything there is to say.
+	 */
+	private static void addCylinderStatusLine(List<Component> tooltip, EngineState state) {
+		int cylinders = state.getCylinderCount();
+		if (cylinders <= 1)
+			return;
+		MutableComponent status = Component.empty();
+		for (int cylinder = 0; cylinder < cylinders; cylinder++) {
+			if (cylinder > 0)
+				status.append(" ");
+			boolean active = state.isCylinderActive(cylinder);
+			status.append(Component.literal(active ? "●" : "○")
+				.withStyle(active ? ChatFormatting.GREEN : ChatFormatting.DARK_GRAY));
+		}
+		diagnostic(tooltip, "cylinder_status", status);
+	}
+
 	private static void diagnostic(List<Component> tooltip, String key, LangBuilder value) {
-		ECLang.translate("gui." + key, value.component())
+		diagnostic(tooltip, key, value.component());
+	}
+
+	private static void diagnostic(List<Component> tooltip, String key, Component value) {
+		ECLang.translate("gui." + key, value)
 			.style(ChatFormatting.DARK_GRAY)
 			.forGoggles(tooltip, 1);
 	}

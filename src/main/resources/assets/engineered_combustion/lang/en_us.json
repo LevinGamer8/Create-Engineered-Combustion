@@ -45,6 +45,7 @@
   "engineered_combustion.gui.structure": "Structure: %s",
   "engineered_combustion.gui.engine_layout": "Layout: %s",
   "engineered_combustion.gui.active_cylinders": "Active Cylinders: %s",
+  "engineered_combustion.gui.cylinder_status": "Cylinder Status: %s",
   "engineered_combustion.gui.layout.inline": "Inline-%s",
   "engineered_combustion.gui.too_many_cylinders": "Too many crankshaft sections (max %s)",
   "engineered_combustion.gui.crank_angle": "Crank Angle: %s°",

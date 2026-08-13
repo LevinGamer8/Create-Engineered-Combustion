@@ -45,6 +45,7 @@
   "engineered_combustion.gui.structure": "Struktur: %s",
   "engineered_combustion.gui.engine_layout": "Bauart: %s",
   "engineered_combustion.gui.active_cylinders": "Aktive Zylinder: %s",
+  "engineered_combustion.gui.cylinder_status": "Zylinderstatus: %s",
   "engineered_combustion.gui.layout.inline": "Reihe-%s",
   "engineered_combustion.gui.too_many_cylinders": "Zu viele Kurbelwellenabschnitte (max. %s)",
   "engineered_combustion.gui.crank_angle": "Kurbelwinkel: %s°",
