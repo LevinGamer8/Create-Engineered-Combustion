@@ -11,9 +11,9 @@ package dev.engineeredcombustion.content.engine;
  *
  * <p>The multiplier feeds the engine's existing friction term rather than any
  * separate slowdown mechanism, so a dry engine settles at a lower speed by the
- * same physics that makes a healthy one settle at idle. At the tuned values that
- * works out to roughly 64 RPM lubricated, 57 RPM low and 26 RPM dry - running,
- * but with little in hand and easy to drag under.
+ * same physics that makes a healthy one settle at idle. Low oil trims speed and
+ * reserve torque; a dry engine runs much rougher and coasts down much sooner,
+ * while an external source can still turn it normally.
  */
 public enum LubricationState {
 
