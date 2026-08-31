@@ -1,7 +1,9 @@
 package dev.engineeredcombustion.client;
 
 import dev.engineeredcombustion.EngineeredCombustion;
+import dev.engineeredcombustion.ponder.ECPonderPlugin;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
+import net.createmod.ponder.foundation.PonderIndex;
 
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -16,6 +18,12 @@ public class EngineeredCombustionClient {
 		// Partial models have to be created before Minecraft loads models, so this
 		// happens as early as possible - during mod construction, like Create does.
 		ECPartialModels.init();
+
+		// Ponder is client-only and its index is a plain static registry, so the
+		// plugin goes in during construction like the partial models above rather
+		// than waiting for an event. PonderIndex.addPlugin synchronises internally,
+		// which is what makes that safe during parallel mod loading.
+		PonderIndex.addPlugin(new ECPonderPlugin());
 
 		modEventBus.addListener(EngineeredCombustionClient::registerRenderers);
 	}
