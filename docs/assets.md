@@ -10,7 +10,7 @@ commit what it wrote.
 | --- | --- |
 | Textures, fluid sprites, bucket and item icons | `tools/generate_engine_textures.py` |
 | Every block and item model | `tools/generate_engine_models.py` |
-| Recipes, tags, loot tables, worldgen | `tools/generate_survival_data.py` |
+| Recipes, tags, the Oil Shale loot table, worldgen | `tools/generate_survival_data.py` |
 | Static checks over what those wrote | `tools/check_models.py` |
 | Offline rasteriser for looking at it | `tools/preview_engine.py` |
 | Engine audio (unrelated, untouched) | `tools/generate_sounds.py` |
@@ -27,6 +27,15 @@ generator for a different reason from the other two: not because coordinates
 interlock, but because **the balance numbers must only exist once.** A yield
 that appears in two hand-written recipe files drifts. Every number a balance
 pass would touch is a named constant at the top of that file.
+
+The machine blocks' loot tables are the one exception, and they are hand-written
+on purpose: they carry no balance numbers, they change only when a block starts
+or stops needing something copied onto its drop, and one of them - the
+Crankshaft's - exists to carry a Data Component (`crankshaft_bearing_wear`)
+rather than to decide a yield. Generating them would put a Java-side registry
+name into a Python file for nothing. The generators leave them alone, so
+re-running everything and finding a clean tree is still the check that the
+generated half is current.
 
 Both generators are deterministic - the noise runs off a fixed-seed LCG - so
 re-running them reproduces the committed assets byte for byte, and a diff that
