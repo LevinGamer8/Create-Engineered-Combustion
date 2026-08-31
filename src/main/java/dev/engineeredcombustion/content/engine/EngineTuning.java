@@ -1189,10 +1189,13 @@ public final class EngineTuning {
 	 * System property that multiplies every wear rate, for development and manual
 	 * testing only.
 	 *
-	 * <p>Real wear is measured in tens of hours, which makes testing it by playing
-	 * impossible. Setting {@code -Dengineered_combustion.wearMultiplier=2000} on a
-	 * development client compresses a whole engine's life into a couple of
-	 * minutes, which is what the milestone's manual test matrix needs.
+	 * <p>Real wear is measured in thousands of hours, which makes testing it by
+	 * playing impossible. Setting
+	 * {@code -Dengineered_combustion.wearMultiplier=100000} on a development client
+	 * compresses a whole engine's life into a couple of minutes, which is what the
+	 * milestone's manual test matrix needs. The 13.1 rebalance is why that is
+	 * {@link #MAX_WEAR_MULTIPLIER} rather than the 2000 it used to be: against a
+	 * baseline of some 2,800 hours, 2000x is an hour and a half.
 	 *
 	 * <p>A JVM property rather than a command or a config, deliberately: it cannot
 	 * be reached from inside a running game, so there is no cheat button on a
