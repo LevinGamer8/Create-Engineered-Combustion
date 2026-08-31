@@ -1,0 +1,35 @@
+{
+  "display": {
+    "icon": {
+      "id": "minecraft:blaze_powder"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.are_you_trying_to_kill_it.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.are_you_trying_to_kill_it.description"
+    },
+    "frame": "challenge",
+    "show_toast": true,
+    "announce_to_chat": false,
+    "hidden": true
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "abuse_state",
+        "abuse_kind": "all_out"
+      }
+    }
+  },
+  "parent": "engineered_combustion:warranty_void",
+  "requirements": [
+    [
+      "event"
+    ]
+  ],
+  "rewards": {
+    "experience": 50
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:crankshaft"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.back_in_service.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.back_in_service.description"
+    },
+    "frame": "goal",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "maintenance_completed",
+        "improved_from": "worn",
+        "improved_to": "good"
+      }
+    }
+  },
+  "parent": "engineered_combustion:fresh_internals",
+  "requirements": [
+    [
+      "event"
+    ]
+  ],
+  "rewards": {
+    "experience": 20
+  }
+}

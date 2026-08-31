@@ -21,6 +21,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
@@ -117,6 +118,68 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	}
 
 	/**
+	 * The condition of the assembly last taken out of this bore, for deciding
+	 * whether fitting the next one was a repair.
+	 *
+	 * <p>Deliberately transient and deliberately narrow. A repair is
+	 * "the part that was in here was worse than the part that is in here now", and
+	 * that comparison needs exactly one number to survive exactly as long as it
+	 * takes a player to swap a piston. Persisting it would mean saving a fact about
+	 * a part that is no longer anywhere near this cylinder, and tracking item
+	 * identity would mean the fragile permanent bookkeeping the milestone
+	 * explicitly says not to introduce for this.
+	 *
+	 * <p>-1 when nothing has been removed from this bore since it loaded, which
+	 * reads as "no repair to speak of" and is the right answer for a first
+	 * installation.
+	 */
+	private float lastRemovedPistonWear = -1.0F;
+
+	/**
+	 * Tells this cylinder's engine that a player just worked on it.
+	 *
+	 * <p>Routed to the controller because attribution belongs to the engine rather
+	 * than to whichever block was clicked, and a quiet no-op on a cylinder that is
+	 * not part of a valid engine yet - which is the ordinary case while one is
+	 * being built.
+	 */
+	public void noteEngineInteraction(Player player) {
+		CrankshaftBlockEntity controller = engineController();
+		if (controller != null)
+			controller.rememberInteraction(player);
+	}
+
+	/** Tells this cylinder's engine that a repair improved it. */
+	public void reportEngineMaintenance(Player player, WearCondition before, WearCondition after) {
+		CrankshaftBlockEntity controller = engineController();
+		if (controller != null)
+			controller.reportMaintenance(player, before, after);
+	}
+
+	/**
+	 * The controller of this cylinder's engine, or null when it is not part of one.
+	 *
+	 * <p>Goes through {@link #getCrankshaft()} rather than looking a block up by
+	 * geometry, so the rule about where a cylinder's crankshaft sits stays in
+	 * {@code EngineComponents} where the rest of the layout lives.
+	 */
+	@Nullable
+	private CrankshaftBlockEntity engineController() {
+		CrankshaftBlockEntity crankshaft = getCrankshaft();
+		return crankshaft == null ? null : crankshaft.getEngineController();
+	}
+
+	/** The condition of the last assembly taken out of this bore, or null. */
+	public WearCondition lastRemovedPistonCondition() {
+		return lastRemovedPistonWear < 0.0F ? null : WearCondition.of(lastRemovedPistonWear);
+	}
+
+	/** Forgets it, once it has been used to judge one swap. */
+	public void forgetLastRemovedPiston() {
+		lastRemovedPistonWear = -1.0F;
+	}
+
+	/**
 	 * Takes the assembly out and hands back the wear to put on the item.
 	 *
 	 * <p>The only way to remove one, and one call rather than a read and a remove,
@@ -133,6 +196,9 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		if (!pistonInstalled)
 			return -1.0F;
 		float wear = pistonWear;
+		// Remembered so that fitting the next one can be recognised as a repair - or
+		// recognised as not being one, which is the joke the milestone asks for.
+		lastRemovedPistonWear = wear;
 		setPistonInstalled(false);
 		return wear;
 	}

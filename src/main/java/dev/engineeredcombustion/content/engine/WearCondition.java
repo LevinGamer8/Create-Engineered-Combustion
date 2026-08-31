@@ -86,6 +86,18 @@ public enum WearCondition {
 	}
 
 	/**
+	 * Whether this condition is no worse than the given one.
+	 *
+	 * <p>The symmetric partner of {@link #isAtLeast}, and worth having rather than
+	 * writing {@code !isAtLeast(...)} at the call sites: the negation of "at least
+	 * this worn" is "strictly better than this worn", which is off by one band from
+	 * what a bounded range means, and that is an easy mistake to make silently.
+	 */
+	public boolean isAtMost(WearCondition other) {
+		return ordinal() <= other.ordinal();
+	}
+
+	/**
 	 * Whether a part in this condition is worth telling the player about
 	 * unprompted. Everything up to {@link #USED} is a normal, healthy engine.
 	 */

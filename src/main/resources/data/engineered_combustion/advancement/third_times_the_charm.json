@@ -1,0 +1,37 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:piston_assembly"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.third_times_the_charm.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.third_times_the_charm.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "inline_running",
+        "cylinders": {
+          "min": 3
+        },
+        "active_cylinders": {
+          "min": 3
+        }
+      }
+    }
+  },
+  "parent": "engineered_combustion:double_trouble",
+  "requirements": [
+    [
+      "event"
+    ]
+  ]
+}

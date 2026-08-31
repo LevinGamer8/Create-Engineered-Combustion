@@ -1,0 +1,33 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:piston_assembly"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.fresh_internals.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.fresh_internals.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "maintenance_completed",
+        "improved_from": "used",
+        "improved_to": "good"
+      }
+    }
+  },
+  "parent": "engineered_combustion:keep_it_slippery",
+  "requirements": [
+    [
+      "event"
+    ]
+  ]
+}

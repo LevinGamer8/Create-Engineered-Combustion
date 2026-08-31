@@ -1,0 +1,39 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:spark_plug"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.three_out_of_four.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.three_out_of_four.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": false,
+    "hidden": true
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "inline_running",
+        "cylinders": {
+          "min": 4,
+          "max": 4
+        },
+        "active_cylinders": {
+          "min": 3,
+          "max": 3
+        }
+      }
+    }
+  },
+  "parent": "engineered_combustion:four_of_a_kind",
+  "requirements": [
+    [
+      "event"
+    ]
+  ]
+}

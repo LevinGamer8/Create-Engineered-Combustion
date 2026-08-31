@@ -1,0 +1,37 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:gasoline_bucket"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.refined_taste.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.refined_taste.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "has": {
+      "trigger": "minecraft:inventory_changed",
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "engineered_combustion:gasoline_bucket"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "parent": "engineered_combustion:black_gold",
+  "requirements": [
+    [
+      "has"
+    ]
+  ]
+}

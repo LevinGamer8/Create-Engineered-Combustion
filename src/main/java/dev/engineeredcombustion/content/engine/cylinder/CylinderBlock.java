@@ -5,6 +5,7 @@ import org.jetbrains.annotations.Nullable;
 import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
+import dev.engineeredcombustion.content.engine.WearCondition;
 import dev.engineeredcombustion.registry.ECDataComponents;
 import dev.engineeredcombustion.registry.ECItems;
 import net.minecraft.ChatFormatting;
@@ -79,11 +80,23 @@ public class CylinderBlock extends Block implements EntityBlock {
 			// that has been in an engine before is exactly as tired as it was when it
 			// came out, which is the whole of the no-free-repair rule.
 			float wear = ECDataComponents.wearOf(stack, ECDataComponents.PISTON_WEAR);
-			return install(cylinder.hasPistonAssembly(), () -> cylinder.installPistonAssembly(wear), state, level,
-				pos, player, stack);
+			return install(cylinder.hasPistonAssembly(), () -> {
+				// What was in here before, so that fitting this one can be judged.
+				// Read BEFORE the new part goes in, or the comparison is with itself.
+				WearCondition removed = cylinder.lastRemovedPistonCondition();
+				cylinder.installPistonAssembly(wear);
+				cylinder.noteEngineInteraction(player);
+				if (removed != null) {
+					cylinder.reportEngineMaintenance(player, removed, WearCondition.of(wear));
+					cylinder.forgetLastRemovedPiston();
+				}
+			}, state, level, pos, player, stack);
 		}
 		if (stack.is(ECItems.SPARK_PLUG.get()))
-			return install(cylinder.hasSparkPlug(), cylinder::installSparkPlug, state, level, pos, player, stack);
+			return install(cylinder.hasSparkPlug(), () -> {
+				cylinder.installSparkPlug();
+				cylinder.noteEngineInteraction(player);
+			}, state, level, pos, player, stack);
 		return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
 	}
 

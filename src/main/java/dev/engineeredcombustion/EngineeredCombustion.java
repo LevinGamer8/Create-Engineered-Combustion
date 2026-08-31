@@ -7,6 +7,7 @@ import com.mojang.logging.LogUtils;
 import dev.engineeredcombustion.network.ECPackets;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECBlocks;
+import dev.engineeredcombustion.registry.ECCriteriaTriggers;
 import dev.engineeredcombustion.registry.ECDataComponents;
 import dev.engineeredcombustion.registry.ECCreativeTabs;
 import dev.engineeredcombustion.registry.ECFluids;
@@ -48,6 +49,9 @@ public class EngineeredCombustion {
 		// being a free repair.
 		ECDataComponents.register(modEventBus);
 		ECSounds.register(modEventBus);
+		// One configurable criterion behind every advancement the mod ships. See
+		// EngineEventTrigger for why that is one class rather than twenty-three.
+		ECCriteriaTriggers.register(modEventBus);
 
 		modEventBus.addListener(EngineeredCombustion::commonSetup);
 		modEventBus.addListener(EngineeredCombustion::registerCapabilities);

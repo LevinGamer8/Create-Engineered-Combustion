@@ -1,0 +1,35 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:spark_plug"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.still_runs.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.still_runs.description"
+    },
+    "frame": "goal",
+    "show_toast": true,
+    "announce_to_chat": false,
+    "hidden": true
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "engine_started",
+        "min_condition": "critical"
+      }
+    }
+  },
+  "parent": "engineered_combustion:warranty_void",
+  "requirements": [
+    [
+      "event"
+    ]
+  ],
+  "rewards": {
+    "experience": 20
+  }
+}

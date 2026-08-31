@@ -1,0 +1,37 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:engine_oil_bucket"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.keep_it_slippery.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.keep_it_slippery.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "has": {
+      "trigger": "minecraft:inventory_changed",
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "engineered_combustion:engine_oil_bucket"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "parent": "engineered_combustion:refined_taste",
+  "requirements": [
+    [
+      "has"
+    ]
+  ]
+}

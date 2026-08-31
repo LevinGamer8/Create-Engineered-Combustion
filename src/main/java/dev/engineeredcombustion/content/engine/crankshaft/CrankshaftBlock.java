@@ -205,8 +205,14 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<C
 		super.setPlacedBy(level, pos, state, placer, stack);
 		if (level.isClientSide)
 			return;
-		if (level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft)
+		if (level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft) {
 			crankshaft.setBearingWear(ECDataComponents.wearOf(stack, ECDataComponents.CRANKSHAFT_BEARING_WEAR));
+			// A player who has just discovered the inline limit gets told, once, by
+			// the block they placed to find it. The section stays where it was put -
+			// this is a joke about hitting an edge, never a way past one.
+			if (placer instanceof Player player)
+				crankshaft.reportLayoutIfRefused(player);
+		}
 	}
 
 	@Override

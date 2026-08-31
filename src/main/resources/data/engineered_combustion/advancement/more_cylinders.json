@@ -1,0 +1,32 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:crankshaft"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.more_cylinders.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.more_cylinders.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": false,
+    "hidden": true
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "invalid_layout_attempt",
+        "layout": "too_many_cylinders"
+      }
+    }
+  },
+  "parent": "engineered_combustion:four_of_a_kind",
+  "requirements": [
+    [
+      "event"
+    ]
+  ]
+}

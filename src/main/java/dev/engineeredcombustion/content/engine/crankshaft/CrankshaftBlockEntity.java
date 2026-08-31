@@ -12,10 +12,13 @@ import com.simibubi.create.foundation.blockEntity.behaviour.CenteredSideValueBox
 import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollOptionBehaviour;
 import com.simibubi.create.infrastructure.config.AllConfigs;
 
+import dev.engineeredcombustion.advancement.EngineInteractionMemory;
 import dev.engineeredcombustion.client.sound.EngineSoundManager;
 import dev.engineeredcombustion.content.engine.CombustionAudio;
 import dev.engineeredcombustion.content.engine.EngineAssemblyStatus;
 import dev.engineeredcombustion.content.engine.EngineComponents;
+import dev.engineeredcombustion.content.engine.EngineEventRecord;
+import dev.engineeredcombustion.content.engine.EngineEventTracker;
 import dev.engineeredcombustion.content.engine.EngineInputs;
 import dev.engineeredcombustion.content.engine.EnginePhase;
 import dev.engineeredcombustion.content.engine.EngineState;
@@ -37,6 +40,7 @@ import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.foundation.EngineConditionText;
 import dev.engineeredcombustion.network.EngineCombustionEventsPayload;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
+import dev.engineeredcombustion.registry.ECCriteriaTriggers;
 import dev.engineeredcombustion.registry.ECDataComponents;
 import dev.engineeredcombustion.registry.ECItems;
 import dev.engineeredcombustion.registry.ECSounds;
@@ -54,6 +58,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
@@ -183,6 +188,21 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private static final String KEY_ENGINE_BEARING_WEAR = "EngineBearingWear";
 
 	private final EngineState engine = new EngineState();
+
+	/**
+	 * What this engine has been seen to do, so that advancements can be awarded for
+	 * transitions rather than for states.
+	 *
+	 * <p>Deliberately NOT persisted. A tracker that has never seen this engine
+	 * primes itself to whatever the world was already in the middle of and reports
+	 * none of it, which is precisely what stops a chunk load from re-awarding
+	 * "It Really Started!" to whoever walked past - see {@link EngineEventTracker}.
+	 * Saving it would have been the bug.
+	 */
+	private final EngineEventTracker eventTracker = new EngineEventTracker();
+
+	/** Who was last messing with this engine. See {@link EngineInteractionMemory}. */
+	private final EngineInteractionMemory interactions = new EngineInteractionMemory();
 
 	/**
 	 * Picks how many firing cycles a start attempt needs. Lives on the block
@@ -628,7 +648,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// Step 6 of the tick: the physics is done, so the work it represents can be
 		// charged to the parts that did it. Deliberately after tickSimulation and
 		// before anything downstream reads a condition.
-		accumulateWear(tickComponents, combustionEventsBeforeWear);
+		boolean wornThisTick = accumulateWear(tickComponents, combustionEventsBeforeWear);
 
 		// This tick is the engine's first since the world was loaded, and the
 		// simulation above has just re-derived everything from the world: whether the
@@ -674,6 +694,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 		playTransitionSounds(phaseBefore);
 		updateIgnitionIndicator();
+		dispatchEngineEvents(tickComponents, wornThisTick);
 
 		// This tick's sparks and combustions, as one small packet rather than as a
 		// full block entity synchronisation per event - see
@@ -1393,6 +1414,9 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * kind of confirmation and which does not accumulate in the chat log.
 	 */
 	public void toggleIgnitionFor(Player player) {
+		// Working the ignition is messing with the engine, so whatever it does over
+		// the next few seconds is this player's doing.
+		rememberInteraction(player);
 		boolean on = toggleManualIgnition();
 		playSound(SoundEvents.LEVER_CLICK, 0.4F, on ? 0.72F : 0.58F);
 		ECLang.translate("gui.ignition", ECLang.translate(on ? "gui.value.enabled" : "gui.value.disabled")
@@ -1400,6 +1424,61 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.component())
 			.style(ChatFormatting.WHITE)
 			.sendStatus(player);
+		if (on)
+			reportStartBlocker(player);
+	}
+
+	/**
+	 * Says, once, why this engine is not going to start.
+	 *
+	 * <p>Sent only when a player has just switched the ignition ON and the engine
+	 * is not running - which is the exact moment someone is trying to start it and
+	 * wondering why nothing happened. Never from the tick, so there is no
+	 * possibility of it nagging.
+	 *
+	 * <h2>Only one line, and only true ones</h2>
+	 * The first blocker found wins, because a player fixes one thing at a time and
+	 * a list of four faults is a worse answer than the first one. And every line
+	 * here is a genuine blocker: <b>low or missing oil is deliberately absent</b>,
+	 * because the simulation really does let an engine run dry, and saying "Needs
+	 * Oil" would be the tutorial telling a lie the game does not back up. The
+	 * goggles carry that warning instead, where it belongs - as a danger rather
+	 * than as a refusal.
+	 *
+	 * <p>The last line is not a fault at all. An engine with everything it needs
+	 * still will not start on its own, and "crank it" is the single most useful
+	 * thing this method can say to somebody who has just built their first one.
+	 */
+	private void reportStartBlocker(Player player) {
+		if (engine.getPhase() == EnginePhase.RUNNING)
+			return;
+		EngineComponents components = engineComponents();
+		if (!components.isMechanicallyValid())
+			// The structure itself is wrong. The assembly status already has its own
+			// far more detailed readout, so this stays quiet rather than duplicating it.
+			return;
+
+		String key;
+		if (!components.hasSparkPlug())
+			key = "gui.start_no_spark_plug";
+		else if (!hasEveryPiston(components))
+			key = "gui.start_no_piston";
+		else if (components.carburetor() == null || !components.carburetor()
+			.holdsValidFuel())
+			key = "gui.start_no_gasoline";
+		else
+			key = "gui.start_needs_cranking";
+
+		ECLang.translate(key)
+			.style(key.equals("gui.start_needs_cranking") ? ChatFormatting.WHITE : ChatFormatting.RED)
+			.sendStatus(player);
+	}
+
+	private static boolean hasEveryPiston(EngineComponents components) {
+		for (EngineComponents.Cylinder cylinder : components.cylinders())
+			if (!cylinder.hasPiston())
+				return false;
+		return true;
 	}
 
 	public void setManualIgnition(boolean on) {
@@ -1897,10 +1976,10 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 *                               before the simulation ran; a counter that moved
 	 *                               is a charge that really burned
 	 */
-	private void accumulateWear(EngineComponents components, int[] combustionEventsBefore) {
+	private boolean accumulateWear(EngineComponents components, int[] combustionEventsBefore) {
 		float revolutions = engine.getRevolutionsThisTick();
 		if (revolutions <= 0.0F)
-			return;
+			return false;
 
 		float rpm = engine.getMechanicalRpm();
 		float load = engine.getLoadFactor();
@@ -1929,6 +2008,138 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 				wear += perCombustion;
 			bore.addPistonWear(wear);
 		}
+		// The engine genuinely wore this tick. That is what gates every condition
+		// advancement - see EngineEventTracker - so that wear which arrived any other
+		// way cannot award one.
+		return true;
+	}
+
+	/**
+	 * Offers everything this engine just did to whoever deserves the credit.
+	 *
+	 * <p>Server-side, controller-only, and the single place advancement progress
+	 * originates. There is no scan anywhere: the tracker compares this tick against
+	 * the last one and almost always has nothing to say, so the common cost of this
+	 * method is one virtual call and an empty list.
+	 *
+	 * <p>Events are split by whether the mod can <b>know</b> who did it.
+	 *
+	 * <p>Fitting a part or completing a repair arrives through an interaction with
+	 * a player attached, so those are attributed exactly and go to nobody else.
+	 * Everything else uses the nearby path, which prefers the recent interactor
+	 * when there is one and otherwise credits whoever is close enough to be
+	 * watching.
+	 *
+	 * <p>That includes <b>cranking and starting</b>, and deliberately so. An engine
+	 * is turned over with Create's Hand Crank, which is Create's block and gives
+	 * this mod no callback naming the player - so there is no interaction to
+	 * attribute to. What there is instead is a guarantee that is just as good: the
+	 * Hand Crank must be held down, adjacent to the engine, for the whole of the
+	 * cranking, so anybody who cranked an engine is by construction standing next
+	 * to it. Insisting on exact attribution here would mean never awarding the
+	 * mod's two most important advancements to the person who earned them.
+	 */
+	private void dispatchEngineEvents(EngineComponents components, boolean wornThisTick) {
+		if (!(level instanceof ServerLevel serverLevel))
+			return;
+
+		EngineWearInputs wear = engine.getWear();
+		int cylinders = components.cylinderCount();
+		List<EngineEventRecord> events = eventTracker.tick(engine.getPhase(), engine.isActivelyGenerating(),
+			engine.isStructureValid(), cylinders, Integer.bitCount(engine.getActiveCylinderMask()),
+			engine.getLubrication(), engine.getMechanicalRpm(), engine.getLoadFactor(), wornThisTick,
+			wear.mechanicalCondition(), worstCompressionCondition(wear, cylinders),
+			wear.overallCondition(cylinders));
+		if (events.isEmpty())
+			return;
+
+		for (EngineEventRecord record : events)
+			switch (record.event()) {
+				// Arrived through an interaction that named a player. Nobody else may
+				// have these.
+				case ASSEMBLED, MAINTENANCE_COMPLETED -> interactions.fireAttributed(serverLevel, record);
+				// Everything else, including cranking and starting. See the note above.
+				default -> interactions.fireNearby(serverLevel, worldPosition.getX() + 0.5D,
+					worldPosition.getY() + 0.5D, worldPosition.getZ() + 0.5D, record);
+			}
+	}
+
+	/** The worst compression of any of this engine's cylinders. */
+	private static WearCondition worstCompressionCondition(EngineWearInputs wear, int cylinderCount) {
+		WearCondition worst = WearCondition.PRISTINE;
+		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
+			worst = WearCondition.worst(worst, wear.compressionCondition(cylinder));
+		return worst;
+	}
+
+	/**
+	 * Records that a player just did something to this engine, so that whatever it
+	 * does over the next few seconds is credited to them.
+	 *
+	 * <p>Called from the interactions that constitute "messing with an engine":
+	 * cranking it, switching its ignition, changing its throttle, and fitting or
+	 * removing any of its parts. Routed to the controller because attribution
+	 * belongs to the engine rather than to the section that happened to be clicked.
+	 */
+	public void rememberInteraction(Player player) {
+		if (level instanceof ServerLevel serverLevel)
+			getEngineController().interactions.remember(player, serverLevel);
+	}
+
+	/**
+	 * Looks at what this engine has just become and, if it is something the mod
+	 * does not support, tells the player who built it.
+	 *
+	 * <p>Called from block placement rather than from the tick, because it is about
+	 * a thing a player just did and because an unsupported layout is a stable state
+	 * - polling it every tick would say the same thing forever.
+	 *
+	 * <p>Reads the layout fresh rather than trusting a cached one: the block that
+	 * triggered this was placed moments ago and the engine may not have ticked
+	 * since.
+	 */
+	public void reportLayoutIfRefused(Player player) {
+		if (level == null || level.isClientSide)
+			return;
+		EngineComponents components = resolveComponents();
+		if (components.status() == EngineAssemblyStatus.OVERSIZED)
+			reportInvalidLayout(player, EngineEventRecord.InvalidLayout.TOO_MANY_CYLINDERS);
+		else if (components.hasFlywheelConflict())
+			reportInvalidLayout(player, EngineEventRecord.InvalidLayout.SECOND_FLYWHEEL);
+	}
+
+	/**
+	 * Reports that a player tried to build something this engine does not support.
+	 *
+	 * <p>Fired at the moment of refusal - the layout stays invalid, and these are
+	 * jokes about finding an edge rather than a way past one.
+	 */
+	public void reportInvalidLayout(Player player, EngineEventRecord.InvalidLayout reason) {
+		if (!(level instanceof ServerLevel serverLevel) || !(player instanceof ServerPlayer serverPlayer))
+			return;
+		rememberInteraction(player);
+		ECCriteriaTriggers.ENGINE_EVENT.get()
+			.fire(serverPlayer, EngineEventRecord.invalidLayout(reason));
+	}
+
+	/**
+	 * Reports that maintenance improved this engine.
+	 *
+	 * <p>Takes both ends of the repair because only the pair is meaningful: pulling
+	 * a worn part out and pushing the same one back changes nothing, and must not
+	 * read as a repair. The tracker rejects any pair that is not an improvement.
+	 */
+	public void reportMaintenance(Player player, WearCondition before, WearCondition after) {
+		if (!(level instanceof ServerLevel serverLevel))
+			return;
+		CrankshaftBlockEntity controller = getEngineController();
+		controller.interactions.remember(player, serverLevel);
+		int cylinders = controller.engineComponents()
+			.cylinderCount();
+		EngineEventRecord record = controller.eventTracker.maintenance(before, after, cylinders,
+			Integer.bitCount(controller.engine.getActiveCylinderMask()));
+		if (record != null)
+			controller.interactions.fireAttributed(serverLevel, record);
 	}
 
 	/**

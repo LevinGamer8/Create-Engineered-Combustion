@@ -1,0 +1,42 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:crankshaft"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.root.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.root.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false,
+    "background": "minecraft:block/deepslate"
+  },
+  "criteria": {
+    "has": {
+      "trigger": "minecraft:inventory_changed",
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "engineered_combustion:oil_shale",
+              "engineered_combustion:crushed_oil_shale",
+              "engineered_combustion:crankshaft",
+              "engineered_combustion:cylinder",
+              "engineered_combustion:gasoline_bucket",
+              "engineered_combustion:engine_oil_bucket"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "requirements": [
+    [
+      "has"
+    ]
+  ]
+}

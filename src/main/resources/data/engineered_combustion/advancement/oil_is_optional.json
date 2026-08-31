@@ -1,0 +1,32 @@
+{
+  "display": {
+    "icon": {
+      "id": "minecraft:bucket"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.oil_is_optional.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.oil_is_optional.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": false,
+    "hidden": true
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "abuse_state",
+        "abuse_kind": "dry"
+      }
+    }
+  },
+  "parent": "engineered_combustion:keep_it_slippery",
+  "requirements": [
+    [
+      "event"
+    ]
+  ]
+}

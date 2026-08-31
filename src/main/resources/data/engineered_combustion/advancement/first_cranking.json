@@ -1,0 +1,31 @@
+{
+  "display": {
+    "icon": {
+      "id": "minecraft:iron_ingot"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.first_cranking.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.first_cranking.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "cranking_started"
+      }
+    }
+  },
+  "parent": "engineered_combustion:some_assembly_required",
+  "requirements": [
+    [
+      "event"
+    ]
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:flywheel"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.two_flywheels.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.two_flywheels.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": false,
+    "hidden": true
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "invalid_layout_attempt",
+        "layout": "second_flywheel"
+      }
+    }
+  },
+  "parent": "engineered_combustion:mechanical_power",
+  "requirements": [
+    [
+      "event"
+    ]
+  ]
+}

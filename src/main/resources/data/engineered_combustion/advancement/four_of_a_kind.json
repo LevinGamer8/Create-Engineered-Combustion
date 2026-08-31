@@ -1,0 +1,41 @@
+{
+  "display": {
+    "icon": {
+      "id": "engineered_combustion:carburetor"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.four_of_a_kind.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.four_of_a_kind.description"
+    },
+    "frame": "goal",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "inline_running",
+        "cylinders": {
+          "min": 4,
+          "max": 4
+        },
+        "active_cylinders": {
+          "min": 4
+        }
+      }
+    }
+  },
+  "parent": "engineered_combustion:third_times_the_charm",
+  "requirements": [
+    [
+      "event"
+    ]
+  ],
+  "rewards": {
+    "experience": 20
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "display": {
+    "icon": {
+      "id": "minecraft:iron_nugget"
+    },
+    "title": {
+      "translate": "advancements.engineered_combustion.mechanical_sympathy.title"
+    },
+    "description": {
+      "translate": "advancements.engineered_combustion.mechanical_sympathy.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": false,
+    "hidden": true
+  },
+  "criteria": {
+    "event": {
+      "trigger": "engineered_combustion:engine_event",
+      "conditions": {
+        "event": "condition_reached",
+        "condition_kind": "mechanical",
+        "min_condition": "poor"
+      }
+    }
+  },
+  "parent": "engineered_combustion:oil_is_optional",
+  "requirements": [
+    [
+      "event"
+    ]
+  ]
+}
