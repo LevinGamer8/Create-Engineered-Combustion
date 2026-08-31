@@ -127,6 +127,9 @@ which still have to be done by hand in game — is documented in
 [`docs/milestone-12-hardening.md`](docs/milestone-12-hardening.md) and, for engine
 wear, in
 [`docs/milestone-13-wear-maintenance.md`](docs/milestone-13-wear-maintenance.md).
+The advancement, Ponder, translation and structure checks - and what was
+deliberately *not* tested - are in
+[`docs/milestone-14-player-experience.md`](docs/milestone-14-player-experience.md).
 
 ## Continuous integration
 
@@ -257,12 +260,39 @@ for what writes what, why the resolutions differ, and the two model invariants
   less torque and contributes proportionally less Stress Capacity - an inline-4
   with one dead-compression bore supplies 3.65 cylinders' worth, not four - while
   still counting as an active cylinder, and worn bearings are felt as extra
-  friction rather than as subtracted RPM. Rates are per revolution, so a
-  looked-after engine reaches its service limit after tens of hours and a dry one
-  in under two; the Air Filter finally earns its place by quadrupling bore wear
-  when it is missing. The goggles name the worn part and the reason it is wearing,
-  and servicing needs a stopped engine. See
+  friction rather than as subtracted RPM. Rates are per revolution, so wear
+  follows the work the machine actually did. The goggles name the worn part and
+  the reason it is wearing, and servicing needs a stopped engine. See
   [`docs/milestone-13-wear-maintenance.md`](docs/milestone-13-wear-maintenance.md).
+* **Milestone 13.1** - realistic wear rebalance: a properly lubricated, filtered
+  and normally operated engine now experiences near-negligible major-component
+  wear. The healthy baseline drops by a factor of 114, so an engine at full
+  throttle under half load accumulates about 0.035 bearing wear in 100 hours and
+  is some 2,800 hours from its service limit - crankshafts and Piston Assemblies
+  are not consumables, and replacing one is what happens to an engine that was
+  abused rather than to one that was used. Everything harmful is restated as a
+  much larger multiple of that much smaller number: low oil 18x, running dry
+  1000x, an open intake 8x, sustained overspeed up to 10x, so a dry engine still
+  destroys itself in hours and a dry, oversped, fully loaded one in about twelve
+  minutes, while thirty dry seconds are forgiven. Full load moves the other way,
+  1.9x to 1.6x - an engine hauling a network is doing its job, not being
+  mistreated. Both consequence curves are reshaped to be mostly quadratic, so a
+  Good engine keeps 99.2% of its compression and healthy engines feel healthy.
+  See
+  [`docs/milestone-13-wear-maintenance.md`](docs/milestone-13-wear-maintenance.md).
+* **Milestone 14** - player experience, Ponder and progression: everything a
+  newcomer needs to build, start, expand, diagnose and maintain an engine, put
+  where they already know to look. Eight Ponder scenes registered through Create's
+  own plugin interface, staged on generated structure files and technically true
+  to the game in every frame. Twenty-two advancements in one tab, all driven by a
+  single configurable criterion reading real engine events rather than by scanning
+  - so a chunk load cannot re-award a first start, rotation is never mistaken for
+  generation, and a condition only counts when the engine wore its way there.
+  Item tooltips, action-bar feedback that names the one thing actually blocking a
+  start, and goggle warnings that show the root cause instead of the cascade below
+  it. Everything is in English and German, and a validator checks that every id,
+  key, structure and translation resolves. See
+  [`docs/milestone-14-player-experience.md`](docs/milestone-14-player-experience.md).
 
 ## License
 

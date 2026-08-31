@@ -164,6 +164,31 @@ var checkModels = tasks.register("checkModels", Exec) {
     }
 }
 
+/**
+ * The player-visible surface: advancement ids and parents, Ponder scene keys,
+ * structure files, and both language files agreeing with each other.
+ *
+ * <p>None of it is code, so none of it is caught by compiling or by the
+ * simulation suites - a mistyped advancement parent makes a branch silently
+ * vanish, and a missing translation key renders as the key itself on screen.
+ */
+var validateUx = tasks.register("validateUx", Exec) {
+    group = "verification"
+    description = "Validates advancements, Ponder scenes, structures and translations."
+    var python = System.getProperty("os.name").toLowerCase().contains("windows") ? "python" : "python3"
+    commandLine python, "tools/validate_ux.py"
+    workingDir = project.projectDir
+    doFirst {
+        try {
+            var probe = new ProcessBuilder(python, "--version").redirectErrorStream(true).start()
+            if (!probe.waitFor(30, java.util.concurrent.TimeUnit.SECONDS) || probe.exitValue() != 0)
+                throw new GradleException(missingPythonMessage(python))
+        } catch (IOException e) {
+            throw new GradleException(missingPythonMessage(python), e)
+        }
+    }
+}
+
 static String missingPythonMessage(String python) {
     return "checkModels needs ${python} on PATH to run tools/check_models.py, and could not start it.\n" +
         "Install Python 3, or run the model check yourself with:  python3 tools/check_models.py"
@@ -172,7 +197,7 @@ static String missingPythonMessage(String python) {
 // ---------------------------------------------------------------------------
 
 tasks.named("check") {
-    dependsOn simulationTest, checkModels
+    dependsOn simulationTest, checkModels, validateUx
 }
 
 repositories {

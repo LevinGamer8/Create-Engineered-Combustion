@@ -51,6 +51,11 @@ jobs:
       - name: Validate generated models
         run: ./gradlew --no-daemon checkModels
 
+      # Advancements, Ponder scenes, structures and translations. Needs no
+      # Maven host either, for the same reason: none of it is compiled.
+      - name: Validate the player-visible surface
+        run: ./gradlew --no-daemon validateUx
+
       # Generated assets are produced by the scripts in tools/ and must never be
       # hand-edited, so the committed output has to match what the generators
       # produce right now. A non-empty diff here means either that someone edited
@@ -74,6 +79,10 @@ jobs:
           python3 tools/generate_engine_models.py
           python3 tools/generate_engine_textures.py
           python3 tools/generate_survival_data.py
+          python3 tools/generate_advancements.py
+          python3 tools/generate_ponder_structures.py
+          python3 tools/generate_ponder_lang.py
+          python3 tools/generate_ui_lang.py
           if ! git diff --quiet; then
             echo "::error::Generated assets are stale. Re-run the generators in tools/ and commit the result."
             git --no-pager diff --stat
