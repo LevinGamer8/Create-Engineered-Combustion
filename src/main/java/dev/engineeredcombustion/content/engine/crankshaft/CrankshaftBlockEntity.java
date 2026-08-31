@@ -618,8 +618,6 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// else this tick reads - see EngineComponents#resolveWear. Read BEFORE the
 		// physics runs and written back after it, so nothing this tick wears can
 		// retroactively change a power stroke that already happened.
-		float engineBearingWearBefore = engine.getWear()
-			.averageBearingWear();
 		int[] combustionEventsBeforeWear = engine.copyOfCombustionEventIds();
 
 		EngineInputs inputs = new EngineInputs(tickComponents.isMechanicallyValid(), control.ignitionEnabled(),
@@ -707,7 +705,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			// the server's curve. Compared against the quantised value it was last told
 			// rather than against the live one, so real wear - a millionth per
 			// revolution - puts nothing at all on the wire between condition steps.
-			|| bearingWearSyncNeeded(engineBearingWearBefore)) {
+			|| bearingWearMoved()) {
 			syncAndRearmResync();
 		} else if (engine.getMechanicalRpm() != 0.0F && --resyncCountdown <= 0) {
 			syncAndRearmResync();
@@ -1934,24 +1932,25 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	}
 
 	/**
-	 * Whether the engine's average bearing wear has moved far enough since the last
-	 * update for the client to need telling.
+	 * Whether the engine's average bearing wear has moved far enough since the
+	 * client was last told for it to need telling again.
+	 *
+	 * <p>A pure question - {@link #syncAndRearmResync()} records the answer when an
+	 * update actually goes out, so this can be short-circuited past without leaving
+	 * that record stale.
 	 *
 	 * <p>Quantised, because the client needs this figure only to name a condition
-	 * band and to trace the same coast-down curve the server does - and because
-	 * comparing the live value would put a block entity update on the wire every
-	 * single tick a worn engine turns.
+	 * band and to trace the same coast-down curve the server does. Comparing the
+	 * live value would put a block entity update on the wire every single tick a
+	 * worn engine turns, which is exactly the traffic this milestone must not add.
 	 */
-	private boolean bearingWearSyncNeeded(float previousAverage) {
-		float now = engine.getWear()
-			.averageBearingWear();
-		if (now == previousAverage)
-			return false;
-		float quantised = EngineWearMath.quantiseWear(now);
-		if (quantised == syncedEngineBearingWear)
-			return false;
-		syncedEngineBearingWear = quantised;
-		return true;
+	private boolean bearingWearMoved() {
+		return quantisedEngineBearingWear() != syncedEngineBearingWear;
+	}
+
+	private float quantisedEngineBearingWear() {
+		return EngineWearMath.quantiseWear(engine.getWear()
+			.averageBearingWear());
 	}
 
 	/**
@@ -2315,6 +2314,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * whole coast was over.
 	 */
 	private void syncAndRearmResync() {
+		// Every update carries the engine's condition with it, so this is the moment
+		// the client learns it - recorded here rather than where the need is detected,
+		// so an update sent for some other reason still counts and the next quantum
+		// crossing is not sent twice.
+		syncedEngineBearingWear = quantisedEngineBearingWear();
 		sync();
 		// A freewheeling engine is the one state whose rotation the client integrates
 		// for itself, so it is the one state worth confirming often: about eight
