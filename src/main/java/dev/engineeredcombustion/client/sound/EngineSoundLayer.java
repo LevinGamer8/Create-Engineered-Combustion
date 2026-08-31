@@ -2,7 +2,9 @@ package dev.engineeredcombustion.client.sound;
 
 import dev.engineeredcombustion.content.engine.EngineState;
 import dev.engineeredcombustion.content.engine.EngineTuning;
+import dev.engineeredcombustion.content.engine.EngineWearMath;
 import dev.engineeredcombustion.content.engine.LubricationState;
+import dev.engineeredcombustion.content.engine.WearCondition;
 import dev.engineeredcombustion.registry.ECSounds;
 import net.minecraft.sounds.SoundEvent;
 
@@ -105,8 +107,9 @@ public enum EngineSoundLayer {
 	 * layer is pitched by the firing <i>rate</i> - never by RPM - so that even in
 	 * the aggregate regime the layer follows combustion rather than rotation.
 	 *
-	 * <p>{@code gameTime} only feeds the roughness a dry engine gets, which is a
-	 * pure function of it so that it cannot desynchronise between players.
+	 * <p>{@code gameTime} only feeds the roughness an unhealthy engine gets - dry,
+	 * mechanically worn, or both - which is a pure function of it so that it cannot
+	 * desynchronise between players.
 	 */
 	public float pitchFor(EngineState engine, float eventRateHz, long gameTime) {
 		float pitch = switch (this) {
@@ -114,20 +117,43 @@ public enum EngineSoundLayer {
 			case COMBUSTION -> EngineTuning.mechanicalLayerPitch(
 				eventRateHz / EngineTuning.SOUND_COMBUSTION_PULSE_MAX_RATE_HZ * EngineTuning.SOUND_REFERENCE_RPM);
 		};
-		return roughen(pitch, engine.getLubrication(), gameTime);
+		return roughen(pitch, engine, gameTime);
 	}
 
 	/**
-	 * Gives a dry engine a slight unevenness.
+	 * Gives an unhealthy engine a slight unevenness.
 	 *
-	 * <p>Optional flavour, kept as a pure function of game time so it adds no state
-	 * to the sound system and sounds the same for every player. The HUD is the real
-	 * lubrication warning; this only makes a dry engine sound like one.
+	 * <p>Two independent wobbles, because they are two different complaints and a
+	 * player should be able to tell them apart:
+	 * <ul>
+	 * <li><b>dry</b> - a fast flutter, switched on outright by the lubrication
+	 * state, because running an engine dry is an immediate fault;</li>
+	 * <li><b>worn</b> - a slower, shallower chatter that fades in from
+	 * {@link WearCondition#WORN} and reaches full depth at the service limit. A
+	 * healthy engine is untouched by it, and even a finished one only ever gets a
+	 * tired-sounding bearing rather than a different engine.</li>
+	 * </ul>
+	 *
+	 * <p>No new sound asset, deliberately: this is the existing loop, pitched. Both
+	 * terms are pure functions of game time, so they add no state to the sound
+	 * system, cannot accumulate error, and sound identical for every player watching
+	 * the same engine.
+	 *
+	 * <p>Flavour only. The goggles remain the authoritative statement of an engine's
+	 * condition; this makes a tired one sound tired.
 	 */
-	private static float roughen(float pitch, LubricationState lubrication, long gameTime) {
-		if (lubrication != LubricationState.DRY)
-			return pitch;
-		float wobble = (float) Math.sin(gameTime * EngineTuning.SOUND_DRY_ROUGHNESS_RATE);
-		return pitch * (1.0F + EngineTuning.SOUND_DRY_ROUGHNESS * wobble);
+	private static float roughen(float pitch, EngineState engine, long gameTime) {
+		float roughness = 0.0F;
+		if (engine.getLubrication() == LubricationState.DRY)
+			roughness += EngineTuning.SOUND_DRY_ROUGHNESS
+				* (float) Math.sin(gameTime * EngineTuning.SOUND_DRY_ROUGHNESS_RATE);
+
+		float wear = EngineWearMath.mechanicalRoughness(engine.getWear()
+			.averageBearingWear());
+		if (wear > 0.0F)
+			roughness += EngineTuning.SOUND_WEAR_ROUGHNESS * wear
+				* (float) Math.sin(gameTime * EngineTuning.SOUND_WEAR_ROUGHNESS_RATE);
+
+		return roughness == 0.0F ? pitch : pitch * (1.0F + roughness);
 	}
 }

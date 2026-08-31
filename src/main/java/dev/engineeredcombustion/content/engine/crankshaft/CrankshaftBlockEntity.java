@@ -613,9 +613,23 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 		boolean generatingBefore = engine.isActivelyGenerating();
 
+		// The condition of the actual parts, read from the same snapshot everything
+		// else this tick reads - see EngineComponents#resolveWear. Read BEFORE the
+		// physics runs and written back after it, so nothing this tick wears can
+		// retroactively change a power stroke that already happened.
+		float engineBearingWearBefore = engine.getWear()
+			.averageBearingWear();
+		int[] combustionEventsBeforeWear = engine.copyOfCombustionEventIds();
+
 		EngineInputs inputs = new EngineInputs(tickComponents.isMechanicallyValid(), control.ignitionEnabled(),
-			tickComponents.cylinderCount(), sparkPlugMask, control.throttle(), readLoadFactor(), speedLimit());
+			tickComponents.cylinderCount(), sparkPlugMask, control.throttle(), readLoadFactor(), speedLimit(),
+			tickComponents.resolveWear());
 		boolean generatedSpeedChanged = engine.tickSimulation(inputs, fuelSupply, oilSupply, random);
+
+		// Step 6 of the tick: the physics is done, so the work it represents can be
+		// charged to the parts that did it. Deliberately after tickSimulation and
+		// before anything downstream reads a condition.
+		accumulateWear(tickComponents, combustionEventsBeforeWear);
 
 		// This tick is the engine's first since the world was loaded, and the
 		// simulation above has just re-derived everything from the world: whether the
@@ -634,8 +648,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// `activeMaskBefore` or `generatingBefore` moves, and either can move while the
 		// published speed does not: an engine held at a steady speed by another source
 		// that loses a Spark Plug changes its capacity basis and nothing else.
+		// The mask says WHICH cylinders are working and the capacity factor says HOW
+		// STRONG they are, and either can move without the other: a plug pulled moves
+		// the mask, and a piston slowly losing compression moves only the factor. Both
+		// have to refresh Create's cached capacity, and the factor is already quantised
+		// so that slow wear cannot do it more than a few dozen times in a part's life.
 		boolean capacityBasisChanged = activeMaskBefore != engine.getActiveCylinderMask()
-			|| generatingBefore != engine.isActivelyGenerating();
+			|| generatingBefore != engine.isActivelyGenerating() || engine.hasCapacityFactorChanged();
 
 		boolean reconciled = needsPostLoadReconcile;
 		if (reconciled) {
@@ -681,7 +700,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			|| sparkPlugMaskBefore != engine.getSparkPlugMask()
 			|| lubricationBefore != engine.getLubrication()
 			|| activeMaskBefore != engine.getActiveCylinderMask()
-			|| generatingBefore != engine.isActivelyGenerating()) {
+			|| generatingBefore != engine.isActivelyGenerating() || engine.hasCapacityFactorChanged()
+			// The client integrates a freewheeling engine's spin-down itself, and worn
+			// bearings multiply the friction it fights, so it needs this figure to trace
+			// the server's curve. Compared against the quantised value it was last told
+			// rather than against the live one, so real wear - a millionth per
+			// revolution - puts nothing at all on the wire between condition steps.
+			|| bearingWearSyncNeeded(engineBearingWearBefore)) {
 			syncAndRearmResync();
 		} else if (engine.getMechanicalRpm() != 0.0F && --resyncCountdown <= 0) {
 			syncAndRearmResync();
@@ -739,16 +764,24 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	}
 
 	/**
-	 * How many of this engine's cylinders are genuinely firing, for the flywheel
-	 * asking. Zero for any flywheel this engine does not drive.
+	 * How many <i>healthy cylinders' worth</i> of output this engine is providing,
+	 * for the flywheel asking. Zero for any flywheel this engine does not drive.
 	 *
-	 * <p>What Stress Capacity is scaled by, so an inline-4 supplies four times what
-	 * a single does - and an inline-4 with a dead plug three quarters of that.
+	 * <p>What Stress Capacity is scaled by. An inline-4 supplies four times what a
+	 * single does; an inline-4 with a dead plug three quarters of that; and an
+	 * inline-4 whose third bore has lost its compression supplies 3.65 cylinders'
+	 * worth, because a worn cylinder is still a firing cylinder and simply pushes
+	 * less hard.
+	 *
+	 * <p>Latched and quantised by the simulation rather than computed here - see
+	 * {@link EngineState#getPublishedCapacityFactor()} - because Create asks for
+	 * capacity at arbitrary times and must never be handed a figure that drifts
+	 * every tick.
 	 */
-	public int getFiringCylinderCountFor(BlockPos queryingFlywheelPos) {
+	public float getCapacityFactorFor(BlockPos queryingFlywheelPos) {
 		if (!drivesFlywheelAt(queryingFlywheelPos))
-			return 0;
-		return getEngineState().getFiringCylinderCount();
+			return 0.0F;
+		return getEngineState().getPublishedCapacityFactor();
 	}
 
 	/**
@@ -1832,6 +1865,144 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	}
 
 	// --- bearing wear --------------------------------------------------------
+
+	/**
+	 * Charges this tick's mechanical work to the parts that did it.
+	 *
+	 * <p>Step 6 of the tick, and the only place any wear is written. It runs after
+	 * the simulation, on the server, in the controller, against the same component
+	 * snapshot the simulation was handed - so the wear a part accumulates for this
+	 * tick can never reach back and change the power stroke that produced it.
+	 *
+	 * <h2>What is charged, and to whom</h2>
+	 * <ul>
+	 * <li><b>every crankshaft section</b> gets bearing wear for the revolutions the
+	 * crank actually turned, whoever turned it. Being motored by another Create
+	 * source is real mechanical work on real bearings, and a dry engine being
+	 * motored is destroying them just as fast as a dry engine running;</li>
+	 * <li><b>every cylinder with a Piston Assembly in it</b> gets ring and bore wear
+	 * for the same revolutions - the piston is being dragged up and down whether or
+	 * not anything burns above it;</li>
+	 * <li><b>only cylinders that actually burned a charge this tick</b> additionally
+	 * get combustion wear. That is the half a motored engine must never accumulate,
+	 * and it is charged from the very counter that consumed the fuel and delivered
+	 * the torque, so it cannot be claimed by combustion that did not happen.</li>
+	 * </ul>
+	 *
+	 * <p>Everything is quoted per revolution rather than per tick, so wear follows
+	 * the work the machine did rather than how long the server ran, and a server
+	 * below 20 TPS wears its engines at the same rate per revolution as one at full
+	 * speed.
+	 *
+	 * @param combustionEventsBefore each cylinder's combustion counter as it stood
+	 *                               before the simulation ran; a counter that moved
+	 *                               is a charge that really burned
+	 */
+	private void accumulateWear(EngineComponents components, int[] combustionEventsBefore) {
+		float revolutions = engine.getRevolutionsThisTick();
+		if (revolutions <= 0.0F)
+			return;
+
+		float rpm = engine.getMechanicalRpm();
+		float load = engine.getLoadFactor();
+		LubricationState lubrication = engine.getLubrication();
+		boolean filtered = components.hasAirFilter();
+		// 1 in any normal game. See EngineTuning#WEAR_MULTIPLIER_PROPERTY - it exists
+		// so that a whole engine's service life fits inside a manual test.
+		float rate = EngineTuning.wearRateMultiplier() * revolutions;
+
+		float bearing = EngineWearMath.bearingWearPerRevolution(lubrication, rpm, load) * rate;
+		float motion = EngineWearMath.cylinderWearPerRevolution(lubrication, rpm, load, filtered) * rate;
+		float perCombustion = EngineWearMath.cylinderWearPerCombustion(lubrication, rpm, load, filtered)
+			* EngineTuning.wearRateMultiplier();
+
+		for (EngineComponents.Cylinder cylinder : components.cylinders()) {
+			CrankshaftBlockEntity section = cylinder.crankshaft();
+			if (section != null)
+				section.addBearingWear(bearing);
+
+			CylinderBlockEntity bore = cylinder.blockEntity();
+			if (bore == null || !bore.hasPistonAssembly())
+				continue;
+			float wear = motion;
+			int index = cylinder.index();
+			if (index < combustionEventsBefore.length && engine.getCombustionEventId(index) != combustionEventsBefore[index])
+				wear += perCombustion;
+			bore.addPistonWear(wear);
+		}
+	}
+
+	/**
+	 * Whether the engine's average bearing wear has moved far enough since the last
+	 * update for the client to need telling.
+	 *
+	 * <p>Quantised, because the client needs this figure only to name a condition
+	 * band and to trace the same coast-down curve the server does - and because
+	 * comparing the live value would put a block entity update on the wire every
+	 * single tick a worn engine turns.
+	 */
+	private boolean bearingWearSyncNeeded(float previousAverage) {
+		float now = engine.getWear()
+			.averageBearingWear();
+		if (now == previousAverage)
+			return false;
+		float quantised = EngineWearMath.quantiseWear(now);
+		if (quantised == syncedEngineBearingWear)
+			return false;
+		syncedEngineBearingWear = quantised;
+		return true;
+	}
+
+	/**
+	 * The engine's condition as one word: the worse of its mechanical condition and
+	 * any one cylinder's compression.
+	 *
+	 * <p>Deliberately the worst rather than an average - an inline-4 with three
+	 * perfect bores and one at the service limit is an engine that needs a piston,
+	 * and averaging would call it lightly used.
+	 *
+	 * <p>Resolved from the blocks rather than from the simulation, so it is valid on
+	 * both sides: the client is told each Cylinder's and each section's own wear as
+	 * ordinary block entity state, which is also why per-cylinder compression never
+	 * has to travel with the engine.
+	 */
+	public WearCondition getEngineCondition() {
+		EngineComponents components = engineComponents();
+		WearCondition condition = WearCondition.of(components.resolveWear()
+			.averageBearingWear());
+		for (EngineComponents.Cylinder cylinder : components.cylinders())
+			if (cylinder.hasPiston())
+				condition = WearCondition.worst(condition, WearCondition.of(cylinder.pistonWear()));
+		return condition;
+	}
+
+	/**
+	 * The engine's condition, its parts' exact wear and every factor currently
+	 * driving it, as one line of text.
+	 *
+	 * <p>Development diagnostics: this is the only place in the mod that puts raw
+	 * wear floats anywhere, and nothing player-facing calls it. It is here rather
+	 * than in a debug command so that it costs a dedicated server nothing and can be
+	 * reached from a breakpoint or a temporary log line while tuning.
+	 */
+	public String describeWear() {
+		EngineComponents components = engineComponents();
+		EngineWearInputs wear = components.resolveWear();
+		float rpm = engine.getMechanicalRpm();
+		float load = engine.getLoadFactor();
+		StringBuilder text = new StringBuilder("Engine wear at ").append(getControllerPos())
+			.append(String.format(": average bearings %.4f, worst bearing %.4f", wear.averageBearingWear(),
+				wear.worstBearingWear()));
+		for (EngineComponents.Cylinder cylinder : components.cylinders())
+			text.append(String.format(", C%d piston %.4f", cylinder.index() + 1, cylinder.pistonWear()));
+		return text.append(String.format(
+			", oil factor %.1f, filter factor %.1f, rpm factor %.3f, load factor %.3f, friction %.3f, effective capacity %.3f cylinders",
+			EngineWearMath.lubricationWearMultiplier(engine.getLubrication()),
+			EngineWearMath.filtrationWearMultiplier(components.hasAirFilter()), EngineWearMath.rpmWearFactor(rpm),
+			EngineWearMath.bearingLoadWearFactor(load), wear.bearingFrictionMultiplier(),
+			engine.getPublishedCapacityFactor()))
+			.toString();
+	}
 
 	/**
 	 * This section's own bearing wear. Server-exact; the client's copy is quantised

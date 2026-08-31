@@ -7,6 +7,7 @@ import org.jetbrains.annotations.Nullable;
 
 import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlock;
+import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlock;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
@@ -116,11 +117,16 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 	 *                       {@link EngineTuning#cylinderPhaseOffsetDegrees}
 	 * @param crankshaftPos  the section carrying this cylinder's throw
 	 * @param cylinderPos    directly above it
+	 * @param crankshaft     the section itself, which owns this part of the engine's
+	 *                       bearing wear. Resolved here rather than looked up at
+	 *                       each call site so that the wear the simulation reads and
+	 *                       the wear the controller writes back are the same
+	 *                       snapshot. Null when the section's chunk is not loaded
 	 * @param blockEntity    null when the Cylinder is missing or its chunk is not
 	 *                       loaded
 	 */
 	public record Cylinder(int index, BlockPos crankshaftPos, BlockPos cylinderPos,
-		@Nullable CylinderBlockEntity blockEntity) {
+		@Nullable CrankshaftBlockEntity crankshaft, @Nullable CylinderBlockEntity blockEntity) {
 
 		public boolean hasPiston() {
 			return blockEntity != null && blockEntity.hasPistonAssembly();
@@ -128,6 +134,16 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 
 		public boolean hasSparkPlug() {
 			return blockEntity != null && blockEntity.hasSparkPlug();
+		}
+
+		/** Compression wear of the Piston Assembly in this bore. 0 when there is none. */
+		public float pistonWear() {
+			return blockEntity == null ? 0.0F : blockEntity.getPistonWear();
+		}
+
+		/** Bearing wear of the crankshaft section under this cylinder. */
+		public float bearingWear() {
+			return crankshaft == null ? 0.0F : crankshaft.getBearingWear();
 		}
 	}
 
@@ -344,8 +360,9 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 			BlockPos cylinderPos = cylinderPos(section);
 			if (!level.isLoaded(cylinderPos))
 				loaded = false;
-			cylinders.add(
-				new Cylinder(index, section, cylinderPos, blockEntity(level, cylinderPos, CylinderBlockEntity.class)));
+			cylinders.add(new Cylinder(index, section, cylinderPos,
+				blockEntity(level, section, CrankshaftBlockEntity.class),
+				blockEntity(level, cylinderPos, CylinderBlockEntity.class)));
 		}
 
 		BlockPos lastSection = cylinders.get(cylinders.size() - 1)
@@ -403,7 +420,7 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 	 * engine nobody can see.
 	 */
 	public static EngineComponents detached(BlockPos pos, Axis axis) {
-		return new EngineComponents(pos, axis, List.of(new Cylinder(0, pos, cylinderPos(pos), null)),
+		return new EngineComponents(pos, axis, List.of(new Cylinder(0, pos, cylinderPos(pos), null, null)),
 			// Nothing about this "engine" was verified against a world, so the honest
 			// status is the one that says exactly that - and it is fail-closed, which a
 			// bare COMPLETE would not have been.
@@ -565,5 +582,53 @@ public record EngineComponents(BlockPos controllerPos, Axis axis,
 	/** Lubrication implied by the sump, treating a missing sump as an empty one. */
 	public LubricationState lubrication() {
 		return oilSump == null ? LubricationState.DRY : oilSump.getLubricationState();
+	}
+
+	/**
+	 * Whether this engine is breathing through a filter.
+	 *
+	 * <p>An engine with no Carburetor at all counts as unfiltered, which is
+	 * consistent rather than punitive: it cannot burn anything either, so the only
+	 * cylinder wear it can accumulate is from being motored - and being motored with
+	 * an open intake really is unfiltered.
+	 */
+	public boolean hasAirFilter() {
+		return carburetor != null && carburetor.hasAirFilter();
+	}
+
+	/**
+	 * The condition of every part of this engine, in the form the simulation wants
+	 * it.
+	 *
+	 * <p><b>The single place the engine's condition is read out of the world.</b>
+	 * Bearing wear comes from the Crankshaft sections, compression wear from the
+	 * Cylinders, filtration from the Carburetor - each from the block that owns it,
+	 * in this one already-resolved snapshot, so the wear the simulation acts on this
+	 * tick and the wear the controller writes back at the end of it cannot be two
+	 * different readings.
+	 *
+	 * <p>The average bearing figure is what the engine's friction is derived from,
+	 * and it is an average rather than a sum on purpose: four sections share one
+	 * crankshaft, so an inline-4 is not four times as stiff as an inline-1 merely
+	 * for having four of them. The worst is carried alongside for the diagnostics,
+	 * which have to point at the section the player should go and look at.
+	 */
+	public EngineWearInputs resolveWear() {
+		float[] pistonWear = new float[EngineTuning.MAX_CYLINDERS];
+		float bearingTotal = 0.0F;
+		float worstBearing = 0.0F;
+		int sections = 0;
+		for (Cylinder cylinder : cylinders) {
+			if (cylinder.index() < pistonWear.length)
+				pistonWear[cylinder.index()] = cylinder.pistonWear();
+			if (cylinder.crankshaft() == null)
+				continue;
+			float wear = cylinder.bearingWear();
+			bearingTotal += wear;
+			worstBearing = Math.max(worstBearing, wear);
+			sections++;
+		}
+		float averageBearing = sections == 0 ? 0.0F : bearingTotal / sections;
+		return new EngineWearInputs(pistonWear, averageBearing, worstBearing, hasAirFilter());
 	}
 }

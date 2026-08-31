@@ -957,10 +957,10 @@ public final class EngineState {
 		// count - and therefore its Stress Capacity - is zero from this instant.
 		java.util.Arrays.fill(ticksSinceCombustion, -1);
 		activeCylinderMask = 0;
-		// A stopped engine supplies nothing, immediately. Left behind, this would be
-		// a multiplier on a generated speed of zero - harmless arithmetic, but a
-		// figure the diagnostics would print and a player would have to explain.
-		publishedCapacityFactor = 0.0F;
+		// The capacity is deliberately NOT zeroed here. updatePublishedCapacity runs a
+		// few lines later in the same tick and will take it to zero itself, which keeps
+		// hasCapacityFactorChanged() an honest report of whether the figure moved -
+		// and it is that flag the block entity refreshes Create's cache from.
 		resetStartAttempt();
 	}
 
@@ -1852,7 +1852,18 @@ public final class EngineState {
 	 * <p>Synchronised rather than recomputed, so no client-side approximation of
 	 * the predicate can ever exist to disagree with the server's.
 	 */
+	/**
+	 * Forces the generation flag from outside the simulation.
+	 *
+	 * <p>Used when the world takes the engine apart under it, and on the client,
+	 * which is told the server's answer rather than deriving one. An engine that is
+	 * not generating supplies no capacity by definition, so the multiplier goes with
+	 * it - otherwise a section mined out of a running inline-4 would leave its
+	 * flywheel holding a figure nobody would ever revise.
+	 */
 	public void setActivelyGenerating(boolean activelyGenerating) {
+		if (!activelyGenerating)
+			publishedCapacityFactor = 0.0F;
 		this.activelyGenerating = activelyGenerating;
 	}
 
