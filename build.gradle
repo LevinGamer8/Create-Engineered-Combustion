@@ -119,6 +119,7 @@ var simulationTestClasses = [
     "LastPowerStrokeTests",
     "EngineCoastDownTests",
     "EngineWearTests",
+    "EngineEventTests",
 ]
 
 var simulationTestTasks = simulationTestClasses.collect { className ->
