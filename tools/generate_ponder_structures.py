@@ -171,15 +171,24 @@ def me(path):
 
 
 def place_engine(structure, origin, sections, axis="x", flywheel_at="end",
-                 carburetor=True, oil_sump=True, cylinders=True):
+                 carburetor=True, oil_sump=True, cylinders=True,
+                 accessories_on="first"):
     """Stamps a whole inline engine into a structure, in the game's own layout.
 
     `origin` is the first crankshaft section. Sections run along `axis`, and the
     Flywheel goes beyond whichever end `flywheel_at` names - both ends are valid
     in the real game, and the assembly scene shows that.
+
+    `accessories_on` picks which section carries the single Carburetor and Oil
+    Sump. It exists for the inline scene, which grows an engine one section at a
+    time and therefore has to START from a section that is already a complete,
+    runnable engine - which means the Carburetor, the Oil Sump and the Flywheel
+    all have to be on the same end.
     """
     step = (1, 0, 0) if axis == "x" else (0, 0, 1)
     positions = [tuple(origin[i] + step[i] * n for i in range(3)) for n in range(sections)]
+
+    accessory_index = sections - 1 if accessories_on == "last" else 0
 
     for index, crank in enumerate(positions):
         # JOINED says a section has a neighbour further along the run, which is
@@ -193,9 +202,9 @@ def place_engine(structure, origin, sections, axis="x", flywheel_at="end",
         # axis here would produce a state the game cannot load.
         if cylinders:
             structure.set(offset(crank, OFFSETS["cylinder"]), block(me("cylinder")))
-        if carburetor and index == 0:
+        if carburetor and index == accessory_index:
             structure.set(offset(crank, OFFSETS["carburetor"]), block(me("carburetor")))
-        if oil_sump and index == 0:
+        if oil_sump and index == accessory_index:
             structure.set(offset(crank, OFFSETS["oil_sump"]), block(me("oil_sump")))
 
     if flywheel_at is not None:
@@ -257,11 +266,18 @@ def starting_an_engine():
 
 
 def inline_engines():
-    """Room for four sections, a Flywheel, and a fifth section that is refused."""
+    """Room for four sections, a Flywheel, and a fifth section that is refused.
+
+    The Carburetor and Oil Sump sit on the LAST section, beside the Flywheel,
+    because the scene reveals that end first and grows away from it - so the very
+    first thing shown is a complete inline-1 rather than a crankshaft with no fuel
+    or oil, which is not an engine and must not be presented as one.
+    """
     size = (9, 6, 5)
     s = Structure(size)
     base_plate(s, size)
-    place_engine(s, (2, 2, 2), sections=4, axis="x", flywheel_at="end")
+    place_engine(s, (2, 2, 2), sections=4, axis="x", flywheel_at="end",
+                 accessories_on="last")
     # The fifth. Placed in the file so the storyboard can show it appearing and
     # being rejected; it is never part of a valid engine.
     s.set((1, 2, 2), block(me("crankshaft"), axis="x", joined="false", lit="false"))

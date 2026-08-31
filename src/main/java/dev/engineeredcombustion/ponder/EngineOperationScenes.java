@@ -35,6 +35,15 @@ public class EngineOperationScenes {
 	private static final BlockPos FLYWHEEL = new BlockPos(4, 2, 2);
 	private static final BlockPos HAND_CRANK = new BlockPos(2, 2, 2);
 
+	/**
+	 * The inline scene's Carburetor, on the far section beside the Flywheel.
+	 *
+	 * <p>That end rather than the near one because the scene reveals it first and
+	 * grows away from it - see the structure generator's note on {@code
+	 * accessories_on}.
+	 */
+	private static final BlockPos CARBURETOR_R4 = new BlockPos(5, 4, 2);
+
 	/** B5. Starting an Engine. */
 	public static void startingAnEngine(SceneBuilder scene, SceneBuildingUtil util) {
 		scene.title("starting_an_engine", "Starting an Engine");
@@ -170,12 +179,18 @@ public class EngineOperationScenes {
 		scene.showBasePlate();
 		scene.idle(10);
 
-		// Start with the R1 at the far end and grow towards the camera.
+		// Start with a COMPLETE inline-1 at the far end and grow towards the camera.
+		//
+		// Complete matters: the structure puts this engine's Oil Sump, Carburetor
+		// and Flywheel on the x = 5 section, so the first thing the player sees is a
+		// whole valid engine rather than a bare crankshaft that could not run. The
+		// growth steps below then add only crankshaft sections and cylinders, which
+		// is exactly what growing an inline engine really is.
+		//
+		// Nothing is hidden to get here. This used to hideSection(layersFrom(1))
+		// first, which erased from the base world section before any showSection had
+		// merged into it - the null the client crashed on.
 		BlockPos first = new BlockPos(5, 2, 2);
-		scene.world()
-			.hideSection(util.select()
-				.layersFrom(1), Direction.UP);
-		scene.idle(5);
 		scene.world()
 			.showSection(util.select()
 				.fromTo(new BlockPos(5, 1, 2), new BlockPos(6, 4, 2)), Direction.DOWN);
@@ -188,12 +203,15 @@ public class EngineOperationScenes {
 			.pointAt(centre(first));
 		scene.idle(80);
 
-		// Grow to R4, one section at a time.
+		// Grow to R4, one section at a time. The whole column, so that anything the
+		// structure hangs off a section comes with it rather than being stranded
+		// invisible - the old loop revealed only y = 2..3 and left this engine's
+		// Carburetor and Oil Sump permanently unshown.
 		for (int section = 1; section <= 3; section++) {
 			int x = 5 - section;
 			scene.world()
 				.showSection(util.select()
-					.fromTo(new BlockPos(x, 2, 2), new BlockPos(x, 3, 2)), Direction.EAST);
+					.fromTo(new BlockPos(x, 1, 2), new BlockPos(x, 4, 2)), Direction.EAST);
 			scene.idle(20);
 		}
 		scene.overlay()
@@ -209,7 +227,7 @@ public class EngineOperationScenes {
 			.text("One crankshaft, one Carburetor, one Oil Sump, one Flywheel - and several cylinders.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(new BlockPos(5, 4, 2)));
+			.pointAt(centre(CARBURETOR_R4));
 		scene.idle(110);
 
 		// Firing order - each cylinder at its own point in the rotation.
@@ -282,14 +300,17 @@ public class EngineOperationScenes {
 		scene.scaleSceneView(0.9F);
 		scene.showBasePlate();
 		scene.idle(10);
-		// The redstone half is hidden to begin with: manual control is taught
-		// first, and taught as sufficient.
-		scene.world()
-			.hideSection(util.select()
-				.fromTo(new BlockPos(5, 1, 2), new BlockPos(6, 1, 2)), Direction.UP);
+		// Manual control is taught first and taught as sufficient, so the redstone
+		// half of the scene simply is not shown yet.
+		//
+		// It is NOT hidden. This used to hide the redstone and then show
+		// layersFrom(1), which was wrong twice over: hideSection erases from the
+		// base world section, which is still empty this early and crashed; and
+		// layersFrom(1) contains the redstone anyway, so the show would have put it
+		// straight back. Revealing only the engine says the same thing and is true.
 		scene.world()
 			.showSection(util.select()
-				.layersFrom(1), Direction.DOWN);
+				.fromTo(new BlockPos(3, 1, 2), new BlockPos(4, 4, 2)), Direction.DOWN);
 		scene.idle(20);
 
 		scene.overlay()

@@ -66,6 +66,38 @@ and the game is not touched. Starting is genuinely multi-cycle and partly random
 the scene shows cranking, then firing attempts, then a catch, at a readable pace,
 without reaching into the simulation to make real starts deterministic.
 
+### The section lifecycle, and the crash it caused
+
+The first real in-game test of this milestone hard-crashed the client:
+
+```
+NullPointerException: Cannot invoke "Selection.substract(Selection)"
+because "this.section" is null
+    at WorldSectionElementImpl.erase(WorldSectionElementImpl.java:112)
+    from PonderSceneBuilder$PonderWorldInstructions.lambda$hideSection$3
+```
+
+Read out of Ponder 1.0.82's own source, the lifecycle is:
+
+1. `PonderScene` builds its base `WorldSectionElement` with the **no-arg**
+   constructor, so its `section` field is `null`, and `setEmpty()` puts it back to
+   `null` on every replay.
+2. `showSection(sel, dir)` schedules a 15-tick fade. Only when that fade
+   **completes** does `mergeOnto(baseWorldSection)` run and give the base a
+   non-null selection.
+3. `hideSection(sel, dir)` immediately calls `getBaseWorldSection().erase(sel)`,
+   and `erase()` dereferences `section`.
+
+Three scenes called `hideSection` in their opening moments — as a way of saying
+"start with this hidden" — and every one of them dereferenced that null. **Ponder
+structure blocks are not visible until a `showSection` reveals them**, so hiding
+them was never necessary in the first place; the fix is to show less, not to hide
+more. Two other `hideSection` calls, which genuinely remove a Flywheel the scene
+had already shown, were correct and are unchanged.
+
+`validate_ux.py` now encodes that rule (§10), and no scene uses independent
+sections or `ElementLink`s at all.
+
 ### The structures are generated, not hand-built
 
 Ponder stages each scene on a vanilla structure NBT at
@@ -354,6 +386,10 @@ Maven host, because none of what it checks is compiled.
 | No stale Ponder keys | A translation for a line that no longer exists |
 | Structures load, and use real block states | A palette entry the game cannot load |
 | Structure geometry matches `EngineComponents` | A tutorial teaching a layout the game refuses |
+| **`hideSection` never runs before the base section exists** | **The 1.0.82 client crash: erasing from a base `WorldSectionElement` whose `section` is still null** |
+| `hideSection` only hides selections a `showSection` revealed | A hide that does nothing, or an attempt to keep something hidden that was never shown |
+| `hideSection` is not mixed with independent sections | Selection-based hiding silently missing an independent element |
+| `hideIndependentSection` has an `ElementLink` behind it | A hide aimed at a section that was never created |
 | Tooltip lines numbered from 1 without gaps | A line the reader stops before reaching |
 
 `EngineEventTests` covers the rules the validator cannot see: reload safety, the
@@ -389,9 +425,11 @@ The following are therefore **NOT PERFORMED**, and nothing in this document
 should be read as claiming otherwise:
 
 - **Ponder scenes have not been viewed in Minecraft.** They compile, their
-  structures load as valid NBT with real block states, and every translation key
-  resolves — but nobody has watched one. Camera framing, pacing, text overlap and
-  whether the highlights land on the right blocks are all unverified.
+  structures load as valid NBT with real block states, every translation key
+  resolves, and the section-lifecycle rule that caused the first crash is now
+  statically enforced — but nobody has watched one *since the fix*. Camera
+  framing, pacing, text overlap and whether the highlights land on the right
+  blocks are all unverified, and static analysis cannot execute Ponder.
 - **Advancements have not been earned in Minecraft.** The trigger compiles, the
   JSON validates, and the event rules are unit-tested — but no advancement has
   actually fired in a running game.

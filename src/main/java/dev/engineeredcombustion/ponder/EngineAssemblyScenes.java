@@ -5,7 +5,6 @@ import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
 import net.createmod.ponder.api.scene.SceneBuilder;
 import net.createmod.ponder.api.scene.SceneBuildingUtil;
-import net.createmod.ponder.api.scene.Selection;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.ItemStack;
@@ -45,10 +44,17 @@ public class EngineAssemblyScenes {
 		scene.showBasePlate();
 		scene.idle(10);
 
-		// Everything starts hidden; each step reveals exactly its own component, so
-		// the player watches an engine appear in the order they would build it.
-		hideEverything(scene, util);
-		scene.idle(5);
+		// Nothing above the base plate is shown yet, and nothing needs hiding to
+		// keep it that way: a Ponder structure's blocks are not visible until a
+		// showSection reveals them. Each step below reveals exactly its own
+		// component, so the player watches an engine appear in the order they would
+		// build it.
+		//
+		// This is where the 1.0.82 crash was. hideSection(Selection) erases that
+		// Selection from the scene's BASE WorldSectionElement, and the base element
+		// starts life empty - its `section` field is literally null until a
+		// showSection's fade-in completes and merges into it. Calling hideSection
+		// first therefore dereferenced null inside WorldSectionElementImpl.erase.
 
 		// STEP 1 - the crankshaft.
 		scene.world()
@@ -301,14 +307,6 @@ public class EngineAssemblyScenes {
 			.pointAt(centre(CARBURETOR));
 		scene.idle(100);
 		scene.markAsFinished();
-	}
-
-	/** Hides every block above the base plate, so a scene can build itself up. */
-	static void hideEverything(SceneBuilder scene, SceneBuildingUtil util) {
-		Selection above = util.select()
-			.layersFrom(1);
-		scene.world()
-			.hideSection(above, Direction.UP);
 	}
 
 	/** The middle of a block, as a scene-space vector. */

@@ -419,6 +419,157 @@ def check_structure_geometry():
     ok("the ponder structures use the same engine layout as EngineComponents", started)
 
 
+# ---------------------------------------------------------------------------
+# Ponder section lifecycle
+# ---------------------------------------------------------------------------
+# Added after a real 1.21.1 client crash that every other check here missed:
+#
+#   NullPointerException: Cannot invoke "Selection.substract(Selection)"
+#   because "this.section" is null
+#       at WorldSectionElementImpl.erase(WorldSectionElementImpl.java:112)
+#       from PonderSceneBuilder$PonderWorldInstructions.lambda$hideSection$3
+#
+# The lifecycle, read out of Ponder 1.0.82's own source:
+#
+#   * PonderScene creates its base WorldSectionElement with the NO-ARG
+#     constructor, so `section` is null, and resets it to null on every replay
+#     (PonderScene.java:143 and :238).
+#   * showSection(sel, dir) schedules a DisplayWorldSectionInstruction with a
+#     15-tick fade. Only when that fade COMPLETES does it call
+#     element.mergeOnto(baseWorldSection), which is what finally gives the base
+#     a non-null selection.
+#   * hideSection(sel, dir) immediately calls getBaseWorldSection().erase(sel),
+#     and erase() dereferences `section`.
+#
+# So a hideSection is only safe once some earlier base-merging show has had 15
+# ticks to land. Anything sooner is a hard client crash, and it is a crash a
+# compiler cannot see because every one of those calls type-checks perfectly.
+#
+# This cannot execute Ponder. It reads the scene sources in order and applies
+# that one rule, plus the weaker rule that hiding a selection nobody ever showed
+# is meaningless even when it does not crash.
+
+# DisplayWorldSectionInstruction's fade length, from the Ponder source.
+BASE_MERGE_TICKS = 15
+
+
+def _call_argument(source, at):
+    """The text of a call's argument list, given the index of its opening paren."""
+    depth = 0
+    for index in range(at, len(source)):
+        if source[index] == "(":
+            depth += 1
+        elif source[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return source[at + 1:index]
+    return ""
+
+
+def _selection_text(arguments):
+    """A call's Selection argument, normalised enough to compare two of them."""
+    # Everything up to the trailing Direction / Pointing argument.
+    cut = arguments.rfind(", Direction.")
+    if cut == -1:
+        cut = len(arguments)
+    text = arguments[:cut]
+    text = text.replace("util.select()", "").replace("scene.getSceneBuildingUtil().select()", "")
+    return re.sub(r"\s+", "", text)
+
+
+def scene_section_events():
+    """Every section-lifecycle call in every scene, in source order."""
+    calls = re.compile(
+        r"\.(showSection|hideSection|showSectionAndMerge|showIndependentSectionImmediately"
+        r"|showIndependentSection|makeSectionIndependent|hideIndependentSection|glueBlockOnto)\s*\(")
+    idles = re.compile(r"scene\.(idle|idleSeconds)\s*\(\s*(\d+)")
+    plate = re.compile(r"scene\.showBasePlate\s*\(")
+
+    scenes = {}
+    for path in sorted(PONDER_SRC.glob("*.java")):
+        source = path.read_text(encoding="utf-8")
+        starts = [(m.start(), m.group(1))
+                  for m in re.finditer(r'scene\.title\("([^"]+)",\s*"[^"]+"\)', source)]
+        for index, (start, scene_id) in enumerate(starts):
+            end = starts[index + 1][0] if index + 1 < len(starts) else len(source)
+            body = source[start:end]
+            events = []
+            for match in plate.finditer(body):
+                events.append((match.start(), "showBasePlate", "", 0))
+            for match in idles.finditer(body):
+                ticks = int(match.group(2)) * (20 if match.group(1) == "idleSeconds" else 1)
+                events.append((match.start(), "idle", "", ticks))
+            for match in calls.finditer(body):
+                arguments = _call_argument(body, match.end() - 1)
+                events.append((match.start(), match.group(1), _selection_text(arguments), 0))
+            events.sort()
+            scenes[scene_id] = (path.name, events)
+    return scenes
+
+
+def check_ponder_section_lifecycle():
+    """A hideSection must never run before the base section exists."""
+    started = len(problems)
+    scenes = scene_section_events()
+    checked = 0
+
+    for scene_id, (filename, events) in sorted(scenes.items()):
+        # Ticks elapsed since the FIRST show that merges into the base section.
+        # None until one has been scheduled.
+        since_first_base_show = None
+        shown = set()
+        links_created = 0
+        independent_used = False
+
+        for _, kind, selection, ticks in events:
+            if kind == "idle":
+                if since_first_base_show is not None:
+                    since_first_base_show += ticks
+
+            elif kind in ("showBasePlate", "showSection"):
+                if since_first_base_show is None:
+                    since_first_base_show = 0
+                if kind == "showSection":
+                    shown.add(selection)
+                else:
+                    shown.add("__baseplate__")
+
+            elif kind in ("showIndependentSection", "showIndependentSectionImmediately",
+                          "makeSectionIndependent"):
+                links_created += 1
+                independent_used = True
+
+            elif kind == "hideIndependentSection":
+                if links_created == 0:
+                    problem(f"{scene_id} ({filename}): hideIndependentSection with no "
+                            f"ElementLink ever created")
+
+            elif kind == "hideSection":
+                checked += 1
+                if since_first_base_show is None:
+                    problem(f"{scene_id} ({filename}): hideSection({selection}) runs before ANY "
+                            f"showSection or showBasePlate - the base world section is still "
+                            f"null and Ponder will crash in WorldSectionElementImpl.erase")
+                elif since_first_base_show < BASE_MERGE_TICKS:
+                    problem(f"{scene_id} ({filename}): hideSection({selection}) runs only "
+                            f"{since_first_base_show} tick(s) after the first show, but the base "
+                            f"section does not exist until that fade completes at "
+                            f"{BASE_MERGE_TICKS} ticks - Ponder will crash")
+                elif selection not in shown:
+                    problem(f"{scene_id} ({filename}): hideSection({selection}) hides a selection "
+                            f"no showSection ever revealed. Ponder blocks are invisible until "
+                            f"shown, so this hides nothing - and if it is meant to keep something "
+                            f"hidden, simply do not show it")
+                if independent_used:
+                    problem(f"{scene_id} ({filename}): hideSection({selection}) is used in a scene "
+                            f"that also creates independent sections - Selection-based hiding acts "
+                            f"on the BASE section and cannot hide an independent one; use "
+                            f"hideIndependentSection(link, ...) instead")
+
+    ok(f"{len(scenes)} ponder scenes: {checked} hideSection call(s), each acting on a base "
+       f"section that exists by then", started)
+
+
 def check_tooltips(lang):
     """Tooltip lines are numbered from 1 with no gaps, or the scan stops early."""
     started = len(problems)
@@ -444,6 +595,7 @@ def main():
     check_ponder(lang)
     check_structures()
     check_structure_geometry()
+    check_ponder_section_lifecycle()
     check_tooltips(lang)
 
     print()
