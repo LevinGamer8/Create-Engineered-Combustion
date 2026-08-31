@@ -105,6 +105,11 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	 * <p>Zero is returned for anything that is not a genuinely running engine:
 	 * cranking, starting, coasting, stalling, unfuelled, unlit, or simply being
 	 * spun by the engine next door. <b>Turning is not generating.</b>
+	 *
+	 * <p>What it is multiplied by is no longer a count of cylinders but their
+	 * <i>effective</i> number - each firing cylinder weighted by the compression it
+	 * has left - so a worn engine supplies less without any cylinder having to stop
+	 * counting as active.
 	 */
 	@Override
 	public float calculateAddedStressCapacity() {
@@ -151,9 +156,10 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	 * thing, and it also ignored any datapack that had retuned the capacity.
 	 *
 	 * <p>Identical on both sides. Every input is synchronised: Create synchronises
-	 * its stress values to clients so its own goggle overlays can print them, the
-	 * published speed travels in the engine's block entity data, and the firing
-	 * cylinder count is now the server's own capacity mask.
+	 * its stress values to clients so its own goggle overlays can print them, and
+	 * both the published speed and the capacity factor travel in the engine's block
+	 * entity data - the latter because it is derived from combustion ages and
+	 * per-cylinder compression the client is never sent.
 	 */
 	public float getEngineGeneratedCapacity() {
 		return calculateAddedStressCapacity() * Math.abs(getGeneratedSpeed());

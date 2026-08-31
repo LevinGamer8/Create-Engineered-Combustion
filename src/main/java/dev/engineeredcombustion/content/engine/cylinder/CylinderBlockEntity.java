@@ -116,21 +116,17 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		return true;
 	}
 
-	/** @return false when there was nothing to remove. */
-	public boolean removePistonAssembly() {
-		if (!pistonInstalled)
-			return false;
-		setPistonInstalled(false);
-		return true;
-	}
-
 	/**
 	 * Takes the assembly out and hands back the wear to put on the item.
 	 *
-	 * <p>One call rather than a read and a remove, because the two must not be able
-	 * to happen apart: reading without removing would duplicate the wear onto an
-	 * item while the cylinder kept it, and removing without reading would destroy
-	 * it. Returns -1 when there was nothing fitted, which is distinguishable from a
+	 * <p>The only way to remove one, and one call rather than a read and a remove,
+	 * because the two must not be able to happen apart: reading without removing
+	 * would duplicate the wear onto an item while the cylinder kept it, and removing
+	 * without reading would destroy it. A plain {@code removePistonAssembly()} used
+	 * to exist beside this and is gone for exactly that reason - it was the free
+	 * repair, one call away.
+	 *
+	 * <p>Returns -1 when there was nothing fitted, which is distinguishable from a
 	 * pristine assembly's 0.
 	 */
 	public float takePistonAssemblyWear() {
@@ -149,11 +145,6 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	 */
 	public float getPistonWear() {
 		return pistonInstalled ? pistonWear : 0.0F;
-	}
-
-	/** How much compression this cylinder still has, as a fraction of a healthy one. */
-	public float getCompressionEfficiency() {
-		return EngineWearMath.compressionEfficiency(getPistonWear());
 	}
 
 	/** This cylinder's compression, in the words the player is shown. */
