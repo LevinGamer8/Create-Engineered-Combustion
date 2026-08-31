@@ -41,8 +41,14 @@ public class ECPartialModels {
 	 * Authored directly in Cylinder block space, exactly where the head's boss
 	 * leaves the hole for it, so it needs no transform at all - the same
 	 * arrangement as the Air Filter on the Carburetor.
+	 *
+	 * <p>One per axis, because the plug is screwed in beside the bore rather than
+	 * through the middle of it: the Cylinder's baked model turns with the crank
+	 * axis so its intake stays clear of the next cylinder along, and a plug that
+	 * did not turn with it would come up through the intake flange.
 	 */
-	public static final PartialModel SPARK_PLUG = block("spark_plug");
+	public static final PartialModel SPARK_PLUG_X = block("spark_plug_x");
+	public static final PartialModel SPARK_PLUG_Z = block("spark_plug_z");
 
 	/**
 	 * Main journals, crank webs, counterweights and the offset crank pin.
@@ -71,14 +77,23 @@ public class ECPartialModels {
 	 * The carburetor's throttle lever. Authored with its pivot on the block
 	 * centre so {@code rotateCentered} turns it about the throttle shaft; the
 	 * renderer then translates it onto the shaft's real position.
+	 *
+	 * <p>The quarter turn between the two variants is about that same block
+	 * centre, so the pivot is in the middle of both of them and the trick still
+	 * works on either axis - only the shaft it is translated onto, and the
+	 * direction it swings about, change with the engine.
 	 */
-	public static final PartialModel THROTTLE_LEVER = block("throttle_lever");
+	public static final PartialModel THROTTLE_LEVER_X = block("throttle_lever_x");
+	public static final PartialModel THROTTLE_LEVER_Z = block("throttle_lever_z");
 
 	/**
 	 * The air cleaner, drawn only when one is installed. Authored directly in
-	 * Carburetor block space, so it needs no transform at all.
+	 * Carburetor block space, so it needs no transform at all - one copy per axis,
+	 * because it is clamped to the air horn on the intake side rather than
+	 * standing on the middle of the block.
 	 */
-	public static final PartialModel AIR_FILTER = block("air_filter");
+	public static final PartialModel AIR_FILTER_X = block("air_filter_x");
+	public static final PartialModel AIR_FILTER_Z = block("air_filter_z");
 
 	private static PartialModel block(String path) {
 		return PartialModel.of(EngineeredCombustion.asResource("block/" + path));

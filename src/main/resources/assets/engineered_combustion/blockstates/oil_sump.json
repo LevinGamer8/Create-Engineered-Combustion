@@ -1,7 +1,14 @@
 {
   "variants": {
-    "": {
+    "axis=none": {
       "model": "engineered_combustion:block/oil_sump"
+    },
+    "axis=x": {
+      "model": "engineered_combustion:block/oil_sump"
+    },
+    "axis=z": {
+      "model": "engineered_combustion:block/oil_sump",
+      "y": 90
     }
   }
 }

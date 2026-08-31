@@ -1,7 +1,14 @@
 {
   "variants": {
-    "": {
+    "axis=none": {
       "model": "engineered_combustion:block/carburetor"
+    },
+    "axis=x": {
+      "model": "engineered_combustion:block/carburetor"
+    },
+    "axis=z": {
+      "model": "engineered_combustion:block/carburetor",
+      "y": 90
     }
   }
 }

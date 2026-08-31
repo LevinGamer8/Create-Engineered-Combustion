@@ -3,7 +3,9 @@ package dev.engineeredcombustion.client;
 import com.mojang.blaze3d.vertex.PoseStack;
 
 import dev.engineeredcombustion.content.engine.EngineTuning;
+import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlock;
 import dev.engineeredcombustion.content.engine.carburetor.CarburetorBlockEntity;
+import dev.engineeredcombustion.foundation.EngineAxis;
 import net.createmod.catnip.platform.NeoForgeCatnipServices;
 import net.createmod.catnip.render.CachedBuffers;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -54,14 +56,30 @@ public class CarburetorRenderer implements BlockEntityRenderer<CarburetorBlockEn
 	public void render(CarburetorBlockEntity be, float partialTicks, PoseStack ms, MultiBufferSource buffer, int light,
 		int overlay) {
 		BlockState state = be.getBlockState();
+		// A carburetor on an engine running along Z is drawn a quarter turn round,
+		// so that it stays on the intake side of the head it feeds. The blockstate
+		// turns the baked body; everything drawn here is a partial model or a raw
+		// box, neither of which that reaches, so each of the three has to make the
+		// same turn itself. `turned` is the single answer all three ask.
+		boolean turned = state.hasProperty(CarburetorBlock.AXIS)
+			&& state.getValue(CarburetorBlock.AXIS) == EngineAxis.Z;
 
-		renderFuelLevel(be, ms, buffer, light);
-		renderThrottleLever(be, state, ms, buffer, light);
+		renderFuelLevel(be, turned, ms, buffer, light);
+		renderThrottleLever(be, state, turned, ms, buffer, light);
 
 		if (be.hasAirFilter())
-			CachedBuffers.partial(ECPartialModels.AIR_FILTER, state)
+			CachedBuffers.partial(turned ? ECPartialModels.AIR_FILTER_Z : ECPartialModels.AIR_FILTER_X, state)
 				.light(light)
 				.renderInto(ms, buffer.getBuffer(RenderType.solid()));
+	}
+
+	/**
+	 * A quarter turn about the middle of the block, in block fractions: the same
+	 * turn a blockstate's {@code "y": 90} applies to a baked model, which maps
+	 * (x, z) to (1 - z, x).
+	 */
+	private static float turnedX(float z) {
+		return 1.0F - z;
 	}
 
 	/**
@@ -76,7 +94,8 @@ public class CarburetorRenderer implements BlockEntityRenderer<CarburetorBlockEn
 	 * texture and tint rather than an approximation of them - the amber in the
 	 * bowl is literally the fluid the engine burns.
 	 */
-	private static void renderFuelLevel(CarburetorBlockEntity be, PoseStack ms, MultiBufferSource buffer, int light) {
+	private static void renderFuelLevel(CarburetorBlockEntity be, boolean turned, PoseStack ms,
+		MultiBufferSource buffer, int light) {
 		FluidStack fluid = be.getFluid();
 		if (fluid.isEmpty())
 			return;
@@ -85,10 +104,17 @@ public class CarburetorRenderer implements BlockEntityRenderer<CarburetorBlockEn
 			return;
 
 		float surface = BOWL_Y_MIN + (BOWL_Y_MAX - BOWL_Y_MIN) * fill;
+		// The bowl is a box rather than a model, so the quarter turn is applied to
+		// its corners: the two x bounds come from the z ones, in the other order,
+		// because turning clockwise about the block's middle reverses that axis.
+		float x0 = turned ? turnedX(BOWL_Z_MAX) : BOWL_X_MIN;
+		float x1 = turned ? turnedX(BOWL_Z_MIN) : BOWL_X_MAX;
+		float z0 = turned ? BOWL_X_MIN : BOWL_Z_MIN;
+		float z1 = turned ? BOWL_X_MAX : BOWL_Z_MAX;
 		// renderBottom is false: the bowl's own floor is directly underneath, so the
 		// downward face would only ever z-fight with it.
-		NeoForgeCatnipServices.FLUID_RENDERER.renderFluidBox(fluid, BOWL_X_MIN, BOWL_Y_MIN, BOWL_Z_MIN, BOWL_X_MAX,
-			surface, BOWL_Z_MAX, buffer, ms, light, false, true);
+		NeoForgeCatnipServices.FLUID_RENDERER.renderFluidBox(fluid, x0, BOWL_Y_MIN, z0, x1,
+			surface, z1, buffer, ms, light, false, true);
 	}
 
 	/**
@@ -102,13 +128,20 @@ public class CarburetorRenderer implements BlockEntityRenderer<CarburetorBlockEn
 	 * what produces "rotate about the pivot, then move the pivot into place" - the
 	 * same trick the connecting rod uses about its wrist pin.
 	 */
-	private static void renderThrottleLever(CarburetorBlockEntity be, BlockState state, PoseStack ms,
+	private static void renderThrottleLever(CarburetorBlockEntity be, BlockState state, boolean turned, PoseStack ms,
 		MultiBufferSource buffer, int light) {
 		float angle = (float) Math.toRadians(EngineTuning.throttleLeverDegrees(be.getThrottle()));
 
-		CachedBuffers.partial(ECPartialModels.THROTTLE_LEVER, state)
-			.translate((PIVOT_X - 8.0F) / 16.0F, (PIVOT_Y - 8.0F) / 16.0F, (PIVOT_Z - 8.0F) / 16.0F)
-			.rotateCentered(angle, Direction.EAST)
+		// Turned, the shaft this lever sits on runs along Z instead of X - so the
+		// lever swings about Z, its own model is the quarter-turned copy, and the
+		// pivot it is translated onto makes the same turn. The angle does not
+		// change: turning the whole arrangement about Y carries the swing with it.
+		float pivotX = turned ? 16.0F - PIVOT_Z : PIVOT_X;
+		float pivotZ = turned ? PIVOT_X : PIVOT_Z;
+
+		CachedBuffers.partial(turned ? ECPartialModels.THROTTLE_LEVER_Z : ECPartialModels.THROTTLE_LEVER_X, state)
+			.translate((pivotX - 8.0F) / 16.0F, (PIVOT_Y - 8.0F) / 16.0F, (pivotZ - 8.0F) / 16.0F)
+			.rotateCentered(angle, turned ? Direction.SOUTH : Direction.EAST)
 			.light(light)
 			.renderInto(ms, buffer.getBuffer(RenderType.solid()));
 	}

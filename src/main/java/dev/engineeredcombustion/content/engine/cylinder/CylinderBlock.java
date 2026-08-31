@@ -3,24 +3,35 @@ package dev.engineeredcombustion.content.engine.cylinder;
 import org.jetbrains.annotations.Nullable;
 
 import dev.engineeredcombustion.content.engine.EngineComponents;
+import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlock;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
+import dev.engineeredcombustion.foundation.EngineAxis;
+import dev.engineeredcombustion.foundation.EngineCasting;
 import dev.engineeredcombustion.content.engine.WearCondition;
 import dev.engineeredcombustion.registry.ECDataComponents;
 import dev.engineeredcombustion.registry.ECItems;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.Direction.AxisDirection;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.StateDefinition;
+import net.minecraft.world.level.block.state.properties.BooleanProperty;
+import net.minecraft.world.level.block.state.properties.EnumProperty;
 import net.minecraft.world.phys.BlockHitResult;
 
 /**
@@ -48,7 +59,7 @@ import net.minecraft.world.phys.BlockHitResult;
  * fitted only a piston should never have to aim, and one who has fitted both is
  * already looking at two visibly different parts of the casting.
  */
-public class CylinderBlock extends Block implements EntityBlock {
+public class CylinderBlock extends Block implements EntityBlock, EngineCasting {
 
 	/**
 	 * Where the head casting starts, as a fraction of the block. Matches the head
@@ -58,8 +69,116 @@ public class CylinderBlock extends Block implements EntityBlock {
 	 */
 	private static final double HEAD_BOTTOM = 14.0D / 16.0D;
 
+	/**
+	 * Which way the crankshaft under this cylinder runs, or {@link EngineAxis#NONE}
+	 * when there is none.
+	 *
+	 * <p>The bore is round and would not care, but everything bolted to the head
+	 * does: the intake port and its flange are on one flank and the exhaust boss is
+	 * on the other, and on an engine those two belong on the sides of the block
+	 * that face <i>away</i> from the crank run. Otherwise the intake of one
+	 * cylinder points straight into the exhaust of the next, and a shared intake
+	 * manifold along the run has nowhere to go.
+	 *
+	 * <p>Cosmetic. It turns the baked model - see the blockstate - and it is what
+	 * {@link #MANIFOLD_NEGATIVE} and {@link #MANIFOLD_POSITIVE} are measured along.
+	 * The Carburetor above reads it to face the same way, because the two are one
+	 * intake system and must not disagree about which side that is.
+	 */
+	public static final EnumProperty<EngineAxis> AXIS = EngineAxis.PROPERTY;
+
+	/**
+	 * Whether another cylinder of the same engine sits against this one's negative
+	 * and positive faces along {@link #AXIS}.
+	 *
+	 * <p>Both are needed, unlike the crankshaft's single {@code joined}: the
+	 * crankshaft only has to decide how far one casting reaches across one seam,
+	 * where a cylinder has to know whether the shared intake manifold running past
+	 * it <i>continues</i> beyond each end or is capped there. A middle cylinder of
+	 * an inline-4 carries a length of rail spanning its whole block; the two ends
+	 * carry a capped stub.
+	 *
+	 * <p>Cosmetic, like everything else here. The engine an inline-4 runs is
+	 * resolved from crankshaft sections by {@code EngineComponents} and would be
+	 * the same if these were never set.
+	 */
+	public static final BooleanProperty MANIFOLD_NEGATIVE = BooleanProperty.create("manifold_negative");
+	public static final BooleanProperty MANIFOLD_POSITIVE = BooleanProperty.create("manifold_positive");
+
 	public CylinderBlock(Properties properties) {
 		super(properties);
+		registerDefaultState(defaultBlockState().setValue(AXIS, EngineAxis.NONE)
+			.setValue(MANIFOLD_NEGATIVE, false)
+			.setValue(MANIFOLD_POSITIVE, false));
+	}
+
+	@Override
+	protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
+		builder.add(AXIS, MANIFOLD_NEGATIVE, MANIFOLD_POSITIVE);
+	}
+
+	/**
+	 * A cylinder knows nothing about the player who placed it - only about the
+	 * crankshaft it landed on and the cylinders beside it.
+	 */
+	@Override
+	public BlockState getStateForPlacement(BlockPlaceContext context) {
+		return castingState(context.getLevel(), context.getClickedPos(), defaultBlockState());
+	}
+
+	/**
+	 * Re-knits the whole cosmetic state on any neighbour change rather than only
+	 * the side that moved.
+	 *
+	 * <p>All four inputs are one step away - the crankshaft below for the axis, and
+	 * the two cylinders along it - so this is three block state lookups inside the
+	 * chunk vanilla is already holding, and it cannot leave the three properties
+	 * describing different moments.
+	 */
+	@Override
+	protected BlockState updateShape(BlockState state, Direction direction, BlockState neighbourState,
+		LevelAccessor level, BlockPos pos, BlockPos neighbourPos) {
+		return castingState(level, pos, state);
+	}
+
+	@Override
+	public BlockState castingState(LevelReader level, BlockPos pos, BlockState state) {
+		EngineAxis alignment = alignmentOf(level, pos);
+		boolean negative = sharesManifold(level, pos, alignment, AxisDirection.NEGATIVE);
+		boolean positive = sharesManifold(level, pos, alignment, AxisDirection.POSITIVE);
+		if (state.getValue(AXIS) == alignment && state.getValue(MANIFOLD_NEGATIVE) == negative
+			&& state.getValue(MANIFOLD_POSITIVE) == positive)
+			return state;
+		return state.setValue(AXIS, alignment)
+			.setValue(MANIFOLD_NEGATIVE, negative)
+			.setValue(MANIFOLD_POSITIVE, positive);
+	}
+
+	/** The crank axis of the section under a cylinder at this position. */
+	private static EngineAxis alignmentOf(LevelReader level, BlockPos cylinderPos) {
+		BlockState below = level.getBlockState(EngineComponents.crankshaftPosFromCylinder(cylinderPos));
+		if (!(below.getBlock() instanceof CrankshaftBlock))
+			return EngineAxis.NONE;
+		return EngineAxis.of(below.getValue(CrankshaftBlock.HORIZONTAL_AXIS));
+	}
+
+	/**
+	 * Whether the intake manifold carries on past this cylinder on the given side.
+	 *
+	 * <p>It does when the neighbour is a cylinder standing on the same crank axis,
+	 * which is the same thing as being part of the same engine: adjacent crankshaft
+	 * sections sharing an axis are one engine, by
+	 * {@code EngineComponents}' own rule. Asking the neighbour's own {@link #AXIS}
+	 * rather than looking under it keeps every lookup one block away, and is why
+	 * {@link EngineAxis#NONE} exists: two cylinders standing on nothing are not an
+	 * engine and must not grow a manifold between them.
+	 */
+	private static boolean sharesManifold(LevelReader level, BlockPos pos, EngineAxis alignment,
+		AxisDirection side) {
+		if (!alignment.isAligned())
+			return false;
+		BlockState neighbour = level.getBlockState(pos.relative(alignment.towards(side)));
+		return neighbour.getBlock() instanceof CylinderBlock && neighbour.getValue(AXIS) == alignment;
 	}
 
 	@Nullable

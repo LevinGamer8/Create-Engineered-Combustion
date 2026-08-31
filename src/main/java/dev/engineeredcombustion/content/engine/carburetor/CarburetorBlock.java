@@ -4,19 +4,28 @@ import com.simibubi.create.foundation.block.IBE;
 
 import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
+import dev.engineeredcombustion.content.engine.cylinder.CylinderBlock;
+import dev.engineeredcombustion.foundation.EngineAxis;
+import dev.engineeredcombustion.foundation.EngineCasting;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECItems;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.StateDefinition;
+import net.minecraft.world.level.block.state.properties.EnumProperty;
 import net.minecraft.world.phys.BlockHitResult;
 
 import net.neoforged.neoforge.fluids.FluidUtil;
@@ -40,10 +49,53 @@ import net.neoforged.neoforge.fluids.FluidUtil;
  * </ul>
  * Breaking the carburetor drops an installed filter rather than voiding it.
  */
-public class CarburetorBlock extends Block implements IBE<CarburetorBlockEntity> {
+public class CarburetorBlock extends Block implements IBE<CarburetorBlockEntity>, EngineCasting {
+
+	/**
+	 * Which way the engine under this carburetor runs.
+	 *
+	 * <p>Taken from the Cylinder below rather than worked out again from the
+	 * crankshaft two blocks down, so the two can never face different ways: they
+	 * are one intake system - the carburetor's mounting flange lands on the head's
+	 * intake flange, and on a multi-cylinder engine both land on the shared intake
+	 * manifold - and a carburetor pointing across its own cylinder would be
+	 * plumbed into thin air.
+	 *
+	 * <p>Cosmetic: it turns the baked model, and tells the renderer which of the
+	 * paired partial models to draw for the parts that are not symmetric about the
+	 * intake - the throttle lever and the Air Filter. Nothing about fuel, throttle
+	 * or the engine reads it.
+	 */
+	public static final EnumProperty<EngineAxis> AXIS = EngineAxis.PROPERTY;
 
 	public CarburetorBlock(Properties properties) {
 		super(properties);
+		registerDefaultState(defaultBlockState().setValue(AXIS, EngineAxis.NONE));
+	}
+
+	@Override
+	protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
+		builder.add(AXIS);
+	}
+
+	@Override
+	public BlockState getStateForPlacement(BlockPlaceContext context) {
+		return castingState(context.getLevel(), context.getClickedPos(), defaultBlockState());
+	}
+
+	@Override
+	protected BlockState updateShape(BlockState state, Direction direction, BlockState neighbourState,
+		LevelAccessor level, BlockPos pos, BlockPos neighbourPos) {
+		return castingState(level, pos, state);
+	}
+
+	@Override
+	public BlockState castingState(LevelReader level, BlockPos pos, BlockState state) {
+		BlockState cylinder = level.getBlockState(pos.below());
+		EngineAxis alignment = cylinder.getBlock() instanceof CylinderBlock
+			? cylinder.getValue(CylinderBlock.AXIS)
+			: EngineAxis.NONE;
+		return state.getValue(AXIS) == alignment ? state : state.setValue(AXIS, alignment);
 	}
 
 	@Override

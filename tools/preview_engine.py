@@ -195,27 +195,66 @@ def rod_swing(theta_deg):
     return math.asin(CRANK_R * math.sin(math.radians(theta_deg)) / ROD_L)
 
 
-def assemble(theta, with_carb=True, flywheel=True, spark_plug=True):
+# The phase each cylinder of an inline-N runs at, so a preview of a four
+# cylinder engine shows four pistons at four different heights the way the real
+# one does. Must match EngineTuning.cylinderPhaseOffsetDegrees.
+def phase_offset(index, count):
+    return 360.0 / count * index
+
+
+def section(theta, index, count, carburetor, sump, spark_plug=True):
+    """One bay of an engine: crankcase, throw, bore, and whatever is bolted on.
+
+    `index` and `count` pick the same block state variants the game would: which
+    way the run continues decides the crankcase's seam geometry and which share
+    of the shared intake manifold this cylinder carries.
+    """
+    x = index * 16
+    back, ahead = index > 0, index < count - 1
+    angle = theta + phase_offset(index, count)
     q = []
-    q += quads_of("block/crankshaft.json", mk_xform())
+    q += quads_of("block/crankshaft_joined.json" if back else "block/crankshaft.json",
+                  mk_xform((x, 0, 0)))
     q += quads_of("block/crank_assembly_x.json",
-                  mk_xform(pivot=(8, 8, 8), angle=math.radians(theta), axis="x"))
-    q += quads_of("block/cylinder.json", mk_xform((0, 16, 0)))
-    # Its own model since it became an installable component, and drawn here for
-    # the same reason the block entity renderer draws it: a preview of a finished
-    # engine is a preview of one with a plug in it.
+                  mk_xform((x, 0, 0), pivot=(8, 8, 8), angle=math.radians(angle), axis="x"))
+    cylinder = "block/cylinder.json"
+    if back and ahead:
+        cylinder = "block/cylinder_manifold_both.json"
+    elif back:
+        cylinder = "block/cylinder_manifold_negative.json"
+    elif ahead:
+        cylinder = "block/cylinder_manifold_positive.json"
+    q += quads_of(cylinder, mk_xform((x, 16, 0)))
     if spark_plug:
-        q += quads_of("block/spark_plug.json", mk_xform((0, 16, 0)))
-    wl = wrist_local(theta)
-    q += quads_of("block/piston_head.json", mk_xform((0, 16 + wl - 8.0, 0)))
+        q += quads_of("block/spark_plug_x.json", mk_xform((x, 16, 0)))
+    wl = wrist_local(angle)
+    q += quads_of("block/piston_head.json", mk_xform((x, 16 + wl - 8.0, 0)))
     q += quads_of("block/connecting_rod_x.json",
-                  mk_xform((0, 16 + wl - 8.0, 0), pivot=(8, 8, 8),
-                           angle=rod_swing(theta), axis="x"))
-    if with_carb:
-        q += quads_of("block/carburetor.json", mk_xform((0, 32, 0)))
+                  mk_xform((x, 16 + wl - 8.0, 0), pivot=(8, 8, 8),
+                           angle=rod_swing(angle), axis="x"))
+    if carburetor:
+        q += quads_of("block/carburetor.json", mk_xform((x, 32, 0)))
+    if sump:
+        q += quads_of("block/oil_sump.json", mk_xform((x, -16, 0)))
+    return q
+
+
+def assemble(theta, sections=1, with_carb=True, flywheel=True, spark_plug=True,
+             sump=True):
+    """A whole inline-N, laid out exactly as EngineComponents says one is.
+
+    One crankshaft, one Carburetor, one Oil Sump and one Flywheel however many
+    cylinders it has - which is the arrangement the shared intake manifold and
+    the shared crankcase geometry exist to make legible.
+    """
+    q = []
+    for index in range(sections):
+        q += section(theta, index, sections,
+                     carburetor=with_carb and index == 0,
+                     sump=sump and index == 0, spark_plug=spark_plug)
     if flywheel:
         q += quads_of("block/flywheel_wheel_x.json",
-                      mk_xform((16, 0, 0), pivot=(8, 8, 8),
+                      mk_xform((sections * 16, 0, 0), pivot=(8, 8, 8),
                                angle=math.radians(theta), axis="x"))
     return q
 
@@ -223,13 +262,24 @@ def assemble(theta, with_carb=True, flywheel=True, spark_plug=True):
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/preview"
     os.makedirs(out, exist_ok=True)
-    views = [
-        ("3q", math.radians(-38), math.radians(20)),
-        ("side", math.radians(0), math.radians(4)),
-        ("end", math.radians(-90), math.radians(4)),
-    ]
+    # One picture per inline layout, from the two angles the shared castings
+    # read from: three-quarter for the manifold and the crankcase seams, and
+    # straight down the intake side for how long an inline-4 looks.
+    for sections in (1, 2, 3, 4):
+        span = sections * 16
+        # Both from the intake side (-Z), which is the side the Carburetor, the
+        # air cleaner and the shared manifold are all on.
+        for name, yaw, pitch in (("3q", math.radians(142), math.radians(20)),
+                                 ("intake", math.radians(180), math.radians(6))):
+            # One scale for every layout, so the four pictures can be put side
+            # by side and compared: an inline-4 has to look four times as long
+            # as an inline-1, not four times as small.
+            render(assemble(0, sections), 300 + 108 * sections, 520, yaw, pitch,
+                   (span / 2.0, 20, 8), 6.4,
+                   os.path.join(out, f"r{sections}_{name}.png"))
+            print("rendered", f"r{sections}_{name}")
+    # And the inline-1 through a revolution, which is the animation check.
     for theta in (0, 90, 180, 270):
-        for name, yaw, pitch in views:
-            render(assemble(theta), 340, 420, yaw, pitch, (12, 22, 8), 11.0,
-                   os.path.join(out, f"{name}_{theta:03d}.png"))
-            print("rendered", name, theta)
+        render(assemble(theta, 1), 340, 420, math.radians(142), math.radians(20),
+               (12, 22, 8), 11.0, os.path.join(out, f"r1_3q_{theta:03d}.png"))
+        print("rendered", f"r1_3q_{theta:03d}")

@@ -1,7 +1,44 @@
 {
   "variants": {
-    "": {
+    "axis=none,manifold_negative=false,manifold_positive=false": {
       "model": "engineered_combustion:block/cylinder"
+    },
+    "axis=none,manifold_negative=false,manifold_positive=true": {
+      "model": "engineered_combustion:block/cylinder"
+    },
+    "axis=none,manifold_negative=true,manifold_positive=false": {
+      "model": "engineered_combustion:block/cylinder"
+    },
+    "axis=none,manifold_negative=true,manifold_positive=true": {
+      "model": "engineered_combustion:block/cylinder"
+    },
+    "axis=x,manifold_negative=false,manifold_positive=false": {
+      "model": "engineered_combustion:block/cylinder"
+    },
+    "axis=x,manifold_negative=false,manifold_positive=true": {
+      "model": "engineered_combustion:block/cylinder_manifold_positive"
+    },
+    "axis=x,manifold_negative=true,manifold_positive=false": {
+      "model": "engineered_combustion:block/cylinder_manifold_negative"
+    },
+    "axis=x,manifold_negative=true,manifold_positive=true": {
+      "model": "engineered_combustion:block/cylinder_manifold_both"
+    },
+    "axis=z,manifold_negative=false,manifold_positive=false": {
+      "model": "engineered_combustion:block/cylinder",
+      "y": 90
+    },
+    "axis=z,manifold_negative=false,manifold_positive=true": {
+      "model": "engineered_combustion:block/cylinder_manifold_positive",
+      "y": 90
+    },
+    "axis=z,manifold_negative=true,manifold_positive=false": {
+      "model": "engineered_combustion:block/cylinder_manifold_negative",
+      "y": 90
+    },
+    "axis=z,manifold_negative=true,manifold_positive=true": {
+      "model": "engineered_combustion:block/cylinder_manifold_both",
+      "y": 90
     }
   }
 }

@@ -118,16 +118,37 @@ def buried_faces(elements):
 # cylinder every tick, so any plane they share with it is momentary rather than
 # a permanent shimmer, and the clearances that keep them apart are asserted by
 # the geometry in the model generator instead.
-ASSEMBLY = [
-    ("oil_sump.json", (0, -16, 0)),
-    ("crankshaft.json", (0, 0, 0)),
-    ("crank_assembly_x.json", (0, 0, 0)),
-    ("cylinder.json", (0, 16, 0)),
-    ("spark_plug.json", (0, 16, 0)),
-    ("carburetor.json", (0, 32, 0)),
-    ("air_filter.json", (0, 32, 0)),
-    ("flywheel_wheel_x.json", (16, 0, 0)),
-]
+# Two of them, because an engine has two kinds of bay and the interesting
+# joints are different in each. The inline-1 is the whole machine; the inline-4
+# bay is a middle section with a neighbour bolted to it, which is the only place
+# the shared intake manifold, the cross-seam fins and the main bearing cap ever
+# meet another block.
+ASSEMBLIES = {
+    "an inline-1": [
+        ("oil_sump.json", (0, -16, 0)),
+        ("crankshaft.json", (0, 0, 0)),
+        ("crank_assembly_x.json", (0, 0, 0)),
+        ("cylinder.json", (0, 16, 0)),
+        ("spark_plug_x.json", (0, 16, 0)),
+        ("carburetor.json", (0, 32, 0)),
+        ("air_filter_x.json", (0, 32, 0)),
+        ("flywheel_wheel_x.json", (16, 0, 0)),
+    ],
+    "a middle bay of an inline-4": [
+        ("oil_sump.json", (0, -16, 0)),
+        ("crankshaft_joined.json", (0, 0, 0)),
+        ("crank_assembly_x.json", (0, 0, 0)),
+        ("cylinder_manifold_both.json", (0, 16, 0)),
+        ("spark_plug_x.json", (0, 16, 0)),
+        ("carburetor.json", (0, 32, 0)),
+        ("air_filter_x.json", (0, 32, 0)),
+        # The section ahead of it, so the seam itself is checked: two decks, two
+        # pan lips, two galleries, two fin stacks and two halves of a manifold
+        # collar all meet in the plane at x = 16.
+        ("crankshaft_joined.json", (16, 0, 0)),
+        ("cylinder_manifold_both.json", (16, 16, 0)),
+    ],
+}
 
 
 def placed(name, offset):
@@ -143,18 +164,19 @@ def placed(name, offset):
 
 def check_assembly():
     """Coplanar overlaps between two different blocks of the built engine."""
-    parts = [(name, placed(name, offset)) for (name, offset) in ASSEMBLY]
     hits = []
-    for a in range(len(parts)):
-        for b in range(a + 1, len(parts)):
-            name_a, elements_a = parts[a]
-            name_b, elements_b = parts[b]
-            joined = elements_a + elements_b
-            for (i, j, face, area) in coplanar_overlaps(joined):
-                # only pairs that straddle the two models are new information
-                if i < len(elements_a) <= j:
-                    hits.append((name_a, name_b, i, j - len(elements_a),
-                                 face, area, joined))
+    for assembly in ASSEMBLIES.values():
+        parts = [(name, placed(name, offset)) for (name, offset) in assembly]
+        for a in range(len(parts)):
+            for b in range(a + 1, len(parts)):
+                name_a, elements_a = parts[a]
+                name_b, elements_b = parts[b]
+                joined = elements_a + elements_b
+                for (i, j, face, area) in coplanar_overlaps(joined):
+                    # only pairs that straddle the two models are new information
+                    if i < len(elements_a) <= j:
+                        hits.append((name_a, name_b, i, j - len(elements_a),
+                                     face, area, joined))
     return hits
 
 
@@ -213,7 +235,9 @@ def check_chamber():
     # top dead centre, and splitting the model must not be what quietly stops
     # that clearance from being enforced.
     fixed = [(name, element)
-             for name in ("cylinder.json", "spark_plug.json")
+             for name in ("cylinder.json", "cylinder_manifold_negative.json",
+                          "cylinder_manifold_positive.json",
+                          "cylinder_manifold_both.json", "spark_plug_x.json")
              for element in json.loads((ROOT / name).read_text())["elements"]]
     for degrees in range(0, 360, 5):
         for piston in piston_boxes(float(degrees)):
@@ -249,7 +273,10 @@ def check_chamber():
 # The Crankshaft is exempt on purpose: its main journals deliberately reach a
 # unit into the Flywheel and into whatever Shaft is bolted to the far end, which
 # is what makes the output side read as one continuous shaft.
-STACKED_ONLY_VERTICALLY = ["cylinder.json", "spark_plug.json",
+STACKED_ONLY_VERTICALLY = ["cylinder.json", "cylinder_manifold_negative.json",
+                           "cylinder_manifold_positive.json",
+                           "cylinder_manifold_both.json",
+                           "spark_plug_x.json", "spark_plug_z.json",
                            "carburetor.json", "oil_sump.json"]
 
 
@@ -344,8 +371,9 @@ def main():
     bad += len(chamber)
 
     seams = check_assembly()
-    print(f"\n{'ok ' if not seams else 'BAD'} assembled engine"
-          f" - {len(ASSEMBLY)} blocks")
+    print(f"\n{'ok ' if not seams else 'BAD'} assembled engine - "
+          + ", ".join(f"{name} ({len(parts)} blocks)"
+                      for name, parts in ASSEMBLIES.items()))
     for (name_a, name_b, i, j, face, area, joined) in seams:
         print(f"      coplanar {face:5s} area {area:6.2f}"
               f"  {name_a} #{i}  vs  {name_b} #{j}")

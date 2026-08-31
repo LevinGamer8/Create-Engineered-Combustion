@@ -55,11 +55,18 @@ public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity
 		BlockState state = be.getBlockState();
 		VertexConsumer vertices = buffer.getBuffer(RenderType.solid());
 
+		// Which way the engine runs decides both of the models below. The Cylinder's
+		// own baked model is turned with it by the blockstate, and a partial model
+		// is not - so the plug is picked here, and the rod's swing plane is picked
+		// from the same answer further down.
+		Axis axis = be.getEngineAxisForRender();
+
 		// Independent of the piston: a head can have a plug in it with nothing in
 		// the bore, and a bore can have a piston in it with no plug in the head.
 		// Both are real states a player can build, and both have to draw correctly.
 		if (be.hasSparkPlug())
-			CachedBuffers.partial(ECPartialModels.SPARK_PLUG, state)
+			CachedBuffers.partial(axis == Axis.X ? ECPartialModels.SPARK_PLUG_X : ECPartialModels.SPARK_PLUG_Z,
+				state)
 				.light(light)
 				.renderInto(ms, vertices);
 
@@ -78,7 +85,6 @@ public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity
 
 		// The rod swings in the plane containing the cylinder and perpendicular
 		// to the crankshaft, so which way it leans depends on the engine's axis.
-		Axis axis = be.getEngineAxisForRender();
 		PartialModel rod = axis == Axis.X ? ECPartialModels.CONNECTING_ROD_X : ECPartialModels.CONNECTING_ROD_Z;
 
 		CachedBuffers.partial(rod, state)

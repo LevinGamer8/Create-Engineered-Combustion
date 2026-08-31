@@ -37,6 +37,7 @@ import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
 import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
+import dev.engineeredcombustion.foundation.EngineCasting;
 import dev.engineeredcombustion.foundation.EngineConditionText;
 import dev.engineeredcombustion.network.EngineCombustionEventsPayload;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
@@ -157,6 +158,10 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * chamber. Must match {@code SPARK_PLUG_ELECTRODE} in
 	 * {@code tools/generate_engine_models.py} - it is the point that model leaves
 	 * the gap at, and a spark that misses it would be worse than no spark at all.
+	 *
+	 * <p>Authored for an engine running along X, like the model. On a Z engine the
+	 * Cylinder's baked model and its Spark Plug are both turned a quarter turn, so
+	 * this point has to turn with them - see {@link #sparkPlugGap}.
 	 */
 	private static final Vec3 SPARK_PLUG_ELECTRODE = new Vec3(11.90D / 16.0D, 13.79D / 16.0D, 8.0D / 16.0D);
 
@@ -390,6 +395,17 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private int sparkPlugMask;
 
 	/**
+	 * Whether this section has already brought its own cosmetic block states, and
+	 * those of the components stacked on it, in line with the engine around it.
+	 *
+	 * <p>Deliberately NOT saved. It asks "has this been done since the block
+	 * entity loaded", and the honest answer after a restart is no - which is the
+	 * whole point, because the thing being repaired is an engine saved by a version
+	 * that did not have the casting it is now missing.
+	 */
+	private boolean castingsKnitted;
+
+	/**
 	 * <b>This section's own</b> bearing wear, {@code [0, 1]}.
 	 *
 	 * <p>Per section rather than per engine, and that is the whole architecture of
@@ -520,6 +536,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		super.tick();
 		if (level == null)
 			return;
+
+		if (!level.isClientSide && !castingsKnitted) {
+			castingsKnitted = true;
+			knitCastings();
+		}
 
 		// Where this section sits in its engine, re-derived from the world before
 		// anything is decided on the strength of it. On the client the same two
@@ -1677,6 +1698,31 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	}
 
 	/**
+	 * Brings this section's stack of cosmetic block states back in line with the
+	 * engine around it, once, on the first tick after it loads.
+	 *
+	 * <p>The crankcase's seams, the shared intake manifold and the way the Oil Sump
+	 * and Carburetor are turned all live in block state properties maintained by
+	 * {@code updateShape}, which vanilla only calls when a neighbour changes. An
+	 * engine that was built before one of those properties existed therefore comes
+	 * back out of a save with it unset, and would keep its old, disjointed look
+	 * until the player happened to break a block next to it.
+	 *
+	 * <p>Done from here rather than from each block because the crankshaft is the
+	 * one part of the stack that ticks, and because it already knows where the rest
+	 * of the stack is. Four positions, once per section per load, each of which
+	 * writes nothing at all when the state is already right.
+	 */
+	private void knitCastings() {
+		if (level == null)
+			return;
+		EngineCasting.refresh(level, worldPosition);
+		EngineCasting.refresh(level, EngineComponents.cylinderPos(worldPosition));
+		EngineCasting.refresh(level, EngineComponents.carburetorPos(worldPosition));
+		EngineCasting.refresh(level, EngineComponents.oilSumpPos(worldPosition));
+	}
+
+	/**
 	 * The spark itself: one particle at the electrode gap, and a tiny electrical
 	 * tick.
 	 *
@@ -1691,15 +1737,31 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private void emitSpark(BlockPos cylinderPos) {
 		if (level == null)
 			return;
-		double x = cylinderPos.getX() + SPARK_PLUG_ELECTRODE.x;
-		double y = cylinderPos.getY() + SPARK_PLUG_ELECTRODE.y;
-		double z = cylinderPos.getZ() + SPARK_PLUG_ELECTRODE.z;
+		Vec3 gap = sparkPlugGap();
+		double x = cylinderPos.getX() + gap.x;
+		double y = cylinderPos.getY() + gap.y;
+		double z = cylinderPos.getZ() + gap.z;
 
 		level.addParticle(ParticleTypes.ELECTRIC_SPARK, x, y, z, 0.0D, 0.0D, 0.0D);
 
 		if (engine.getPhase() != EnginePhase.RUNNING)
 			level.playLocalSound(x, y, z, ECSounds.ENGINE_SPARK.get(), SoundSource.BLOCKS,
 				EngineTuning.SOUND_SPARK_VOLUME, 1.0F, false);
+	}
+
+	/**
+	 * The spark gap in this engine's own orientation.
+	 *
+	 * <p>The quarter turn a Z engine's Cylinder is drawn with maps the block's
+	 * (x, z) to (1 - z, x), which is what the blockstate's {@code "y": 90} does to
+	 * the baked model and what {@code rotate_y90} does to the Spark Plug's partial.
+	 * The particle has to make the same turn or it would fire beside the plug
+	 * instead of at it.
+	 */
+	private Vec3 sparkPlugGap() {
+		if (getAxis() != Axis.Z)
+			return SPARK_PLUG_ELECTRODE;
+		return new Vec3(1.0D - SPARK_PLUG_ELECTRODE.z, SPARK_PLUG_ELECTRODE.y, SPARK_PLUG_ELECTRODE.x);
 	}
 
 	// --- audio --------------------------------------------------------------

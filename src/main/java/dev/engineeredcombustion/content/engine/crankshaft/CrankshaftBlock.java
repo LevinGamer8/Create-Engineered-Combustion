@@ -3,6 +3,7 @@ package dev.engineeredcombustion.content.engine.crankshaft;
 import com.simibubi.create.content.kinetics.base.HorizontalAxisKineticBlock;
 import com.simibubi.create.foundation.block.IBE;
 
+import dev.engineeredcombustion.foundation.EngineCasting;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECDataComponents;
 import dev.engineeredcombustion.registry.ECItems;
@@ -82,7 +83,8 @@ import net.minecraft.world.phys.BlockHitResult;
  * own value UI, for choosing what redstone is allowed to drive.</li>
  * </ul>
  */
-public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<CrankshaftBlockEntity> {
+public class CrankshaftBlock extends HorizontalAxisKineticBlock
+	implements IBE<CrankshaftBlockEntity>, EngineCasting {
 
 	/**
 	 * Whether the ignition is live: the tell-tale lamp on the crankcase glows and
@@ -170,6 +172,21 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<C
 		if (direction.getAxis() != axis || direction.getAxisDirection() != AxisDirection.NEGATIVE)
 			return super.updateShape(state, direction, neighbourState, level, pos, neighbourPos);
 		return state.setValue(JOINED, isSectionOn(neighbourState, axis));
+	}
+
+	/**
+	 * The same answer {@link #updateShape} gives, asked of the world rather than
+	 * handed a neighbour.
+	 *
+	 * <p>For {@link EngineCasting#refresh}, which brings an engine saved before a
+	 * piece of this casting existed back in line on the first tick after it loads.
+	 * {@code updateShape} cannot do that on its own: it only runs when a neighbour
+	 * changes, and an engine that is standing still has no neighbours changing.
+	 */
+	@Override
+	public BlockState castingState(LevelReader level, BlockPos pos, BlockState state) {
+		boolean joined = joinsSectionTowardsNegative(level, pos, state.getValue(HORIZONTAL_AXIS));
+		return state.getValue(JOINED) == joined ? state : state.setValue(JOINED, joined);
 	}
 
 	private static boolean joinsSectionTowardsNegative(LevelReader level, BlockPos pos, Axis axis) {

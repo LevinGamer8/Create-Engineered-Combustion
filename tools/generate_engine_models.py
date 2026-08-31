@@ -115,6 +115,27 @@ def transpose(spec):
     return out
 
 
+# A quarter turn about Y, the way a blockstate's `"y": 90` turns a baked model:
+# clockwise seen from above, so north becomes east. Partial models are NOT
+# affected by that blockstate rotation - see ECPartialModels - so anything a
+# block entity renderer draws on an engine running along Z needs its own copy,
+# and this is what produces it from the X original rather than from a second
+# hand-authored table that could drift.
+FACE_ROT_Y90 = {"north": "east", "east": "south", "south": "west",
+                "west": "north", "up": "up", "down": "down"}
+
+
+def rotate_y90(spec):
+    """(x, z) -> (16 - z, x). Renames the horizontal faces to match."""
+    f, t = spec["from"], spec["to"]
+    out = dict(spec)
+    out["from"] = [16.0 - t[2], f[1], f[0]]
+    out["to"] = [16.0 - f[2], t[1], t[0]]
+    out["faces"] = {FACE_ROT_Y90[k]: v for k, v in spec["faces"].items()}
+    out["uvs"] = {FACE_ROT_Y90[k]: v for k, v in spec["uvs"].items()}
+    return out
+
+
 def shift(spec, dx, dy, dz):
     f, t = spec["from"], spec["to"]
     moved = dict(spec)
@@ -416,43 +437,96 @@ def crankcase_elements(ignition_on=False, joined=False):
     """One crankcase section.
 
     `joined` means another crankshaft section sits against this one's NEGATIVE
-    axial face, i.e. this is not the first cylinder of the engine. The only
-    thing it changes is how far the machined top deck reaches back: normally the
-    deck stops 0.5 short of the block boundary, which between two sections would
-    leave a 1-unit groove running across the top of the engine at every seam.
-    Joined, it runs 0.5 PAST the boundary instead, so it meets the neighbouring
-    section's deck face to face and an inline-4 reads as one continuous casting
-    with four bores in it.
+    axial face, i.e. this is not the first cylinder of its engine. It is what
+    turns a row of sections into ONE casting, and it does four things:
 
-    Nothing else is conditional, and deliberately. The end walls stay: two of
-    them between adjacent throws is a 4-unit main bearing web, which is exactly
-    what an inline engine has there, and their touching faces point away from
-    each other so nothing z-fights.
+    * the machined top deck, the bottom joint band, the pan lip and the oil
+      gallery all run 0.5 PAST the negative boundary instead of stopping 0.5
+      short of it, so each meets the neighbouring section's own face to face and
+      the four run unbroken from one end of an inline-4 to the other;
+    * a main bearing cap straddles the seam, so the joint reads as the bolted
+      main bearing it is rather than as two machines standing next to each
+      other;
+    * and the IGNITION SWITCH is left off. An engine has one ignition, on its
+      controller - the section at the negative end of the run, which is the only
+      section with nothing joined behind it - so an inline-4 carries one switch,
+      not four. Four identical controls in a row is the single loudest way of
+      saying "these are four separate engines", and it was never true.
+
+    Only the negative side is tested, because a seam has two sides and only one
+    of them needs to reach across it - testing both would put two decks, two
+    bands and two bearing caps in the same place.
+
+    The running tell-tale stays on every section, and deliberately: it is an
+    indicator rather than a control, and a lamp per bore is how a long engine
+    shows at a glance that it is live from wherever the player is standing.
+
+    Nothing else is conditional. The end walls stay: two of them between
+    adjacent throws is a 4-unit main bearing web, which is exactly what an inline
+    engine has there, and their touching faces point away from each other so
+    nothing z-fights.
     """
-    deck_back = -0.5 if joined else 0.5
+    # Everything that has to cross a seam starts here when there is a section
+    # behind, and 0.5 inside the block when there is not. The far end always
+    # stops at 15.5, where the next section's -0.5 meets it exactly - so an
+    # engine of any length is continuous in the middle and cleanly finished at
+    # both ends, from one flag.
+    back = -0.5 if joined else 0.5
     e = []
     # --- crankcase floor and the machined joint face the Oil Sump bolts to.
     # The pan itself is NOT here: an Oil Sump block lives at crankshaft.below()
     # and carries it, so duplicating a pan would give the engine two of them.
     e.append(el((1.5, 0.6, 2.0), (14.5, 3.0, 14.0), "case"))
-    e.append(el((1.0, 0.0, 1.5), (15.0, 1.4, 14.5), "deck"))
+    e.append(el((back, 0.0, 0.9), (15.5, 1.4, 15.1), "deck"))
+    # --- the shallow pan lip, hanging under the block.
+    # Every section has one and it crosses every seam, so the underside of an
+    # inline-4 is one continuous pan with the deep Oil Sump bolted under one
+    # bay of it - which is what the single shared sump actually is. Where a sump
+    # IS fitted this is entirely inside that block's top flange and draws
+    # nothing, so it costs the common case nothing and needs no block state to
+    # know whether a sump is there.
+    e.append(el((back, -1.0, 1.3), (15.5, 0.0, 14.7), "cast"))
+    e.append(el((back, -1.7, 2.6), (15.5, -1.0, 13.4), "cast"))
     # --- side walls, cut away so the crank is visible ---------------------
     for z0, z1 in ((0.5, 2.5), (13.5, 15.5)):
         e.append(el((1.0, 2.0, z0), (15.0, 5.0, z1), "case"))      # lower rail
         e.append(el((1.0, 12.8, z0), (15.0, 14.0, z1), "case"))    # upper rail
         e.append(el((1.0, 2.0, z0), (3.5, 14.0, z1), "case"))      # post
         e.append(el((12.5, 2.0, z0), (15.0, 14.0, z1), "case"))    # post
+    # --- the main oil gallery, along both flanks just above the joint band.
+    # It is the lubrication system made visible: one pipe fed from the one Oil
+    # Sump and running the whole length of the engine, past every bearing, so an
+    # inline-4 reads as one lubricated machine rather than as four that happen to
+    # touch. The Oil Sump's own risers come up to meet it.
+    #
+    # The union boss at each end is what saves this from needing a second block
+    # state: at a seam two of them meet and read as a coupling, and at the end of
+    # the engine the one that is left reads as the blank cap on a pipe run.
+    for za, zb in ((0.15, 0.95), (15.05, 15.85)):
+        e.append(el((back, 1.5, za), (15.5, 2.15, zb), "steel"))
+        e.append(el((0.1, 1.25, za - 0.1), (1.4, 2.4, zb + 0.1), "cast"))
+        e.append(el((14.6, 1.25, za - 0.1), (15.9, 2.4, zb + 0.1), "cast"))
     # --- end walls carrying the main bearings ------------------------------
     e.append(el((0.0, 2.0, 0.5), (2.0, 14.0, 15.5), "case"))
     e.append(el((14.0, 2.0, 0.5), (16.0, 14.0, 15.5), "case"))
     e.append(el((0.0, 3.5, 3.5), (3.5, 12.5, 12.5), "case"))
     e.append(el((12.5, 3.5, 3.5), (16.0, 12.5, 12.5), "case"))
+    # --- the main bearing cap over the seam, when there is one.
+    # Straddling the boundary rather than sitting beside it: the two end walls
+    # either side of it are one 4-unit bearing web, and this is the cap bolted
+    # over the journal running through it.
+    if joined:
+        for za, zb in ((0.05, 1.0), (15.0, 15.95)):
+            e.append(el((-1.8, 4.6, za), (1.8, 10.4, zb), "cast"))
+            for y0 in (5.2, 9.0):
+                e.append(el((-1.3, y0, za - 0.05), (-0.3, y0 + 1.0, zb + 0.05), "brass"))
+                e.append(el((0.3, y0, za - 0.05), (1.3, y0 + 1.0, zb + 0.05), "brass"))
     # --- machined top deck, with the slot the connecting rod swings through.
     # It runs 0.5 past the top of the block so the Cylinder lands on a collar
     # that plainly belongs to the crankcase rather than butting a seam.
-    e.append(el((deck_back, 13.0, 0.5), (15.5, 16.5, 2.5), "deck"))
-    e.append(el((deck_back, 13.0, 13.5), (15.5, 16.5, 15.5), "deck"))
-    e.append(el((deck_back, 13.0, 2.0), (5.0, 16.5, 14.0), "deck"))
+    e.append(el((back, 13.0, 0.5), (15.5, 16.5, 2.5), "deck"))
+    e.append(el((back, 13.0, 13.5), (15.5, 16.5, 15.5), "deck"))
+    e.append(el((back, 13.0, 2.0), (5.0, 16.5, 14.0), "deck"))
     e.append(el((11.0, 13.0, 2.0), (15.5, 16.5, 14.0), "deck"))
     # --- running tell-tale, one on each side so it reads from either flank.
     # It sits on the solid lower rail rather than over a window, so it has
@@ -463,9 +537,11 @@ def crankcase_elements(ignition_on=False, joined=False):
     lens = {"north": [0, 0, 16, 16], "south": [0, 0, 16, 16]}
     e.append(el((6.5, 2.4, 0.1), (9.5, 4.8, 1.1), "ind", uvs=lens))
     e.append(el((6.5, 2.4, 14.9), (9.5, 4.8, 15.9), "ind", uvs=lens))
-    # --- the ignition switch, on both flanks beside the tell-tale.
-    for near in (True, False):
-        e += ignition_switch_elements(ignition_on, near)
+    # --- the ignition switch, on both flanks beside the tell-tale, and only on
+    # the section that actually owns the engine's ignition.
+    if not joined:
+        for near in (True, False):
+            e += ignition_switch_elements(ignition_on, near)
     # --- head studs standing proud of the deck, so the joint the Cylinder
     # lands on plainly bolts down rather than just meeting.
     for x0, x1 in ((2.2, 3.8), (12.2, 13.8)):
@@ -485,8 +561,24 @@ SUMP_TEX = {"particle": "oil_sump", "sump": "oil_sump",
 
 
 def oil_sump_elements():
+    """The one shared pan, and the two risers that say so.
+
+    A multi-cylinder engine has ONE Oil Sump, and the thing that has to be
+    visible is that the oil in it reaches every bearing rather than only the bay
+    it hangs under. The crankcase carries the gallery that does the reaching -
+    one pipe along each flank, running the whole length of the engine - and
+    these risers are where it is fed from: they leave the pan's flange at the
+    same z as the gallery and stand up into the crankcase block to meet it.
+
+    The top flange is as wide as the block will allow rather than inset, so it
+    lands under the shallow pan lip every crankcase section hangs and the two
+    read as one pan with a deep sump bolted into one bay of it - which is what
+    the single shared sump is. A twentieth of a unit inside the boundary on each
+    side, for the same reason nothing else here touches it exactly: a face in the
+    block's own boundary plane fights with whatever is placed against it.
+    """
     e = [
-        el((0.6, 13.2, 0.6), (15.4, 16.8, 15.4), "deck"),     # bolted top flange
+        el((0.05, 13.2, 0.05), (15.95, 16.8, 15.95), "deck"),  # bolted top flange
         el((1.6, 8.5, 1.6), (14.4, 14.0, 14.4), "sump"),      # pan, tapering down
         el((2.8, 4.5, 2.8), (13.2, 9.2, 13.2), "sump"),
         el((4.2, 2.0, 4.2), (11.8, 5.2, 11.8), "sump"),
@@ -508,6 +600,16 @@ def oil_sump_elements():
     # swallowed and the handle would never appear.
     e.append(el((6.9, 9.0, 15.45), (7.9, 15.2, 15.95), "steel"))
     e.append(el((6.6, 15.2, 15.4), (8.2, 16.0, 16.0), "brass"))
+    # Oil feed risers, up to the crankcase's gallery. They stand at the same
+    # x as the gallery's union bosses and reach 1.6 into the block above, which
+    # is where that pipe runs - see crankcase_elements. Authored for a crank
+    # axis along X like everything else here; the blockstate turns the pan with
+    # the engine, so on a Z engine they come up under the gallery on that axis
+    # instead.
+    for x0, x1 in ((2.4, 3.6), (12.4, 13.6)):
+        for za, zb in ((0.2, 1.0), (15.0, 15.8)):
+            e.append(el((x0, 12.0, za), (x1, 17.6, zb), "steel"))
+            e.append(el((x0 - 0.3, 16.2, za - 0.1), (x1 + 0.3, 17.2, zb + 0.1), "brass"))
     return e
 
 
@@ -600,7 +702,7 @@ def piston_elements():
 # a texture reference that nothing uses is a texture that quietly rots.
 CYL_TEX = {"particle": "cylinder", "barrel": "cylinder", "fin": "cylinder_fin",
            "head": "cylinder_head", "deck": "crankcase_deck",
-           "steel": "journal", "case": "crankshaft"}
+           "steel": "journal", "case": "crankshaft", "brass": "brass"}
 
 # ---------------------------------------------------------------------------
 # Spark plug
@@ -693,13 +795,94 @@ def spark_plug_elements():
     ]
 
 
-def cylinder_elements():
+# ---------------------------------------------------------------------------
+# The shared intake manifold
+# ---------------------------------------------------------------------------
+# A multi-cylinder engine has ONE Carburetor, and on a real engine that is
+# entirely ordinary: the carburetor sits on a manifold, and the manifold feeds
+# every bore through a runner apiece. Without the manifold drawn, one carburetor
+# over one of four cylinders reads as three cylinders with nothing feeding them -
+# which is the single strongest reason an inline-4 used to look like four
+# one-cylinder engines standing in a row.
+#
+# It is geometry on the CYLINDER rather than a block of its own, because the
+# manifold is not a thing a player builds - it is what the engine looks like once
+# the cylinders are adjacent. Two cosmetic block state properties say which way
+# the run continues (see CylinderBlock.MANIFOLD_NEGATIVE / _POSITIVE) and each
+# section draws its own share: a rail spanning its block, a runner down into its
+# own port, and half a bolted collar at each seam, so the halves either side of a
+# seam meet as one collar and the rail runs unbroken from one end to the other.
+#
+# It lives in the block ABOVE the cylinder, at the height of the head's intake
+# flange - which is where a manifold goes, and which is empty air on every
+# section except the one carrying the Carburetor. There, the Carburetor's own
+# mounting flange lands inside the rail, so the one carburetor is visibly bolted
+# to the manifold that feeds all four.
+#
+# An inline-1 gets NONE of this: with nothing to share, its Carburetor sits
+# straight down on its head exactly as it always has.
+RAIL_Y0, RAIL_Y1 = 17.55, 19.45
+RAIL_Z0, RAIL_Z1 = 0.55, 3.95
+# Where the rail stops when the run does. Far enough inside the block to leave
+# room for the end cap, and to read as a manifold that ends rather than as one
+# that was cut off at the block boundary.
+RAIL_END_BACK, RAIL_END_AHEAD = 3.0, 13.0
+
+
+def manifold_elements(link_back, link_ahead):
+    """The rail, this cylinder's runner, and whatever finishes each end."""
+    x0 = 0.0 if link_back else RAIL_END_BACK
+    x1 = 16.0 if link_ahead else RAIL_END_AHEAD
+    e = [
+        el((x0, RAIL_Y0, RAIL_Z0), (x1, RAIL_Y1, RAIL_Z1), "deck"),   # the rail
+        # The runner: down out of the rail and onto the head's intake flange,
+        # which reaches up to 17.75 and is therefore already inside it.
+        el((4.4, 17.1, 0.75), (11.6, RAIL_Y0 + 0.15, 3.75), "head"),
+        # The joint face over this bore, so every cylinder visibly has its own
+        # runner bolted to the shared rail rather than the rail merely passing by.
+        el((4.4, 17.75, 0.15), (11.6, 19.25, 0.6), "deck"),
+    ]
+    for x in (5.2, 10.0):
+        e.append(el((x, 18.1, 0.05), (x + 0.8, 18.9, 0.35), "brass"))
+    # Half a collar at each seam, and a cap wherever the run ends.
+    if link_back:
+        e.append(el((0.0, 17.35, 0.35), (1.5, 19.65, 4.15), "head"))
+    else:
+        e.append(el((RAIL_END_BACK - 0.45, 17.45, 0.45),
+                    (RAIL_END_BACK + 0.15, 19.55, 4.05), "head"))
+    if link_ahead:
+        e.append(el((14.5, 17.35, 0.35), (16.0, 19.65, 4.15), "head"))
+    else:
+        e.append(el((RAIL_END_AHEAD - 0.15, 17.45, 0.45),
+                    (RAIL_END_AHEAD + 0.45, 19.55, 4.05), "head"))
+    return e
+
+
+def cylinder_elements(link_back=False, link_ahead=False):
+    """One cylinder, and how much of its neighbours' castings it reaches for.
+
+    `link_back` and `link_ahead` say whether another cylinder of the same engine
+    sits against this one's negative and positive axial faces. Beyond the intake
+    manifold above, they do one more thing: the cooling fins and the base flange
+    run all the way to the block boundary on a linked side instead of stopping
+    1.6 short of it, so adjacent barrels meet face to face and an inline-4 has
+    four continuous fin bands running its whole length rather than four separate
+    finned towers with a gap between each pair.
+
+    The bores themselves are untouched, and so are the seams: a player can still
+    count the cylinders, which is the point of building an engine out of them.
+    """
+    # How far the shared castings reach on each side.
+    lo = 0.0 if link_back else 1.6
+    hi = 16.0 if link_ahead else 14.4
+    base_lo = 0.0 if link_back else 1.5
+    base_hi = 16.0 if link_ahead else 14.5
     e = []
     # --- flange bolted to the crankcase deck ------------------------------
-    e.append(el((1.5, 0.0, 1.5), (14.5, 1.6, BORE_MIN), "case"))
-    e.append(el((1.5, 0.0, BORE_MAX), (14.5, 1.6, 14.5), "case"))
-    e.append(el((1.5, 0.0, 3.0), (BORE_MIN, 1.6, 13.0), "case"))
-    e.append(el((BORE_MAX, 0.0, 3.0), (14.5, 1.6, 13.0), "case"))
+    e.append(el((base_lo, 0.0, 1.5), (base_hi, 1.6, BORE_MIN), "case"))
+    e.append(el((base_lo, 0.0, BORE_MAX), (base_hi, 1.6, 14.5), "case"))
+    e.append(el((base_lo, 0.0, 3.0), (BORE_MIN, 1.6, 13.0), "case"))
+    e.append(el((BORE_MAX, 0.0, 3.0), (base_hi, 1.6, 13.0), "case"))
     for f, t in (((7.2, 1.2, 1.7), (8.8, 2.6, 3.3)),
                  ((7.2, 1.2, 12.7), (8.8, 2.6, 14.3)),
                  ((1.7, 1.2, 7.2), (3.3, 2.6, 8.8)),
@@ -721,10 +904,12 @@ def cylinder_elements():
     flat = {"up": "barrel", "down": "barrel"}
     for y0 in (2.9, 5.7, 8.5, 11.3):
         y1 = y0 + 0.9
-        e.append(el((1.6, y0, 0.6), (14.4, y1, BORE_MIN), "fin", flat, fin_uv))
-        e.append(el((1.6, y0, BORE_MAX), (14.4, y1, 15.4), "fin", flat, fin_uv))
-        e.append(el((0.6, y0, 1.6), (BORE_MIN, y1, 14.4), "fin", flat, fin_uv))
-        e.append(el((BORE_MAX, y0, 1.6), (15.4, y1, 14.4), "fin", flat, fin_uv))
+        e.append(el((lo, y0, 0.6), (hi, y1, BORE_MIN), "fin", flat, fin_uv))
+        e.append(el((lo, y0, BORE_MAX), (hi, y1, 15.4), "fin", flat, fin_uv))
+        e.append(el((0.0 if link_back else 0.6, y0, 1.6), (BORE_MIN, y1, 14.4),
+                    "fin", flat, fin_uv))
+        e.append(el((BORE_MAX, y0, 1.6), (16.0 if link_ahead else 15.4, y1, 14.4),
+                    "fin", flat, fin_uv))
     # --- head. Reaches past the top of the block so the Carburetor lands on
     # a flange belonging to the head instead of sitting on a bare block face.
     e.append(el((1.2, 14.0, 1.2), (14.8, 15.6, 14.8), "head"))
@@ -743,6 +928,8 @@ def cylinder_elements():
     # draws only when one is fitted - see spark_plug_elements. The head keeps its
     # boss either way, because the boss is the threaded seat cast into the head
     # and is there whether or not anything is screwed into it.
+    if link_back or link_ahead:
+        e += manifold_elements(link_back, link_ahead)
     return e
 
 
@@ -994,15 +1181,34 @@ def main():
           model(ROD_TEX, [transpose(x) for x in rod]))
     write("block/piston_head.json", model(PISTON_TEX, piston))
     write("block/cylinder.json", model(CYL_TEX, cyl))
-    write("block/spark_plug.json", model(SPARK_PLUG_TEX, plug))
+    # ... and the three variants that carry a share of the shared intake
+    # manifold. The blockstate picks between them from which way the engine's
+    # cylinder run continues, and turns them with the crank axis, so one set of
+    # models serves an engine built along either axis.
+    write("block/cylinder_manifold_negative.json",
+          model(CYL_TEX, cylinder_elements(link_back=True)))
+    write("block/cylinder_manifold_positive.json",
+          model(CYL_TEX, cylinder_elements(link_ahead=True)))
+    write("block/cylinder_manifold_both.json",
+          model(CYL_TEX, cylinder_elements(link_back=True, link_ahead=True)))
+    # The parts a block entity renderer draws are not turned by the blockstate,
+    # so anything whose shape is not symmetric about the cylinder axis needs one
+    # model per crank axis - the same rule the connecting rod already follows.
+    write("block/spark_plug_x.json", model(SPARK_PLUG_TEX, plug))
+    write("block/spark_plug_z.json",
+          model(SPARK_PLUG_TEX, [rotate_y90(x) for x in plug]))
     write("block/combustion_flash.json",
           model(FLASH_TEX, combustion_flash_elements()))
     write("block/oil_shale.json",
           {"parent": "minecraft:block/cube_all",
            "textures": {"all": NS + "block/oil_shale"}})
     write("block/carburetor.json", model(CARB_TEX, carb))
-    write("block/throttle_lever.json", model(THROTTLE_TEX, lever))
-    write("block/air_filter.json", model(FILTER_TEX, air_filter))
+    write("block/throttle_lever_x.json", model(THROTTLE_TEX, lever))
+    write("block/throttle_lever_z.json",
+          model(THROTTLE_TEX, [rotate_y90(x) for x in lever]))
+    write("block/air_filter_x.json", model(FILTER_TEX, air_filter))
+    write("block/air_filter_z.json",
+          model(FILTER_TEX, [rotate_y90(x) for x in air_filter]))
     write("block/flywheel_wheel_x.json", model(FLY_TEX, fly))
     write("block/flywheel_wheel_z.json",
           model(FLY_TEX, [transpose(x) for x in fly]))
