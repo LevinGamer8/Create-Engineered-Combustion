@@ -34,6 +34,7 @@ import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
 import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
+import dev.engineeredcombustion.foundation.EngineConditionText;
 import dev.engineeredcombustion.network.EngineCombustionEventsPayload;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECDataComponents;
@@ -1967,7 +1968,11 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * has to travel with the engine.
 	 */
 	public WearCondition getEngineCondition() {
-		EngineComponents components = engineComponents();
+		return conditionOf(engineComponents());
+	}
+
+	/** The same rule, for a caller that has already resolved the engine. */
+	private static WearCondition conditionOf(EngineComponents components) {
 		WearCondition condition = WearCondition.of(components.resolveWear()
 			.averageBearingWear());
 		for (EngineComponents.Cylinder cylinder : components.cylinders())
@@ -2412,8 +2417,10 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		addLayoutWarning(tooltip, components);
 		addFlywheelWarning(tooltip, components);
 		addSparkPlugWarning(tooltip, components);
+		addConditionLine(tooltip, components);
 		addFuelLines(tooltip, components.carburetor());
 		addLubricationLines(tooltip, components.oilSump());
+		addWearRiskLines(tooltip, state, components);
 
 		if (phase == EnginePhase.STARTING)
 			ECLang.translate("gui.start_progress",
@@ -2431,6 +2438,78 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (isPlayerSneaking)
 			addDiagnostics(tooltip);
 		return true;
+	}
+
+	/**
+	 * The engine's condition, in one word.
+	 *
+	 * <p>One line on the main overlay, because condition is now something a player
+	 * has to keep an eye on - and exactly one line, because the interesting part is
+	 * <i>which part</i> is worn, and that belongs behind sneak with the rest of the
+	 * diagnostics.
+	 *
+	 * <p>The <b>worst</b> of the engine's mechanical condition and any one
+	 * cylinder's compression, never an average: an inline-4 with three perfect bores
+	 * and one at the service limit is an engine that needs a piston, and averaging
+	 * would call it lightly used.
+	 */
+	private void addConditionLine(List<Component> tooltip, EngineComponents components) {
+		ECLang.translate("gui.condition", EngineConditionText.name(conditionOf(components)))
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+	}
+
+	/**
+	 * What is wearing this engine out, right now.
+	 *
+	 * <p>The condition line says an engine is tired; these say <i>why</i> it is
+	 * getting tired, which is the difference between a player who replaces a piston
+	 * every few hours and one who fits an Air Filter and stops having to. Every line
+	 * here corresponds to a real multiplier in the wear model - there is no warning
+	 * for something that does not actually cost the engine anything.
+	 *
+	 * <p>Shown only while the crank is genuinely turning, because none of them costs
+	 * a stationary engine anything, and only when they apply. A well-kept engine
+	 * doing easy work prints nothing at all, which is what keeps the presence of a
+	 * line meaningful.
+	 *
+	 * <p>Being motored by another Create source counts as operating, and that is
+	 * deliberate: an engine geared up past its rated speed by a stronger network is
+	 * being destroyed whether or not it is burning anything, and this is where a
+	 * player finds that out.
+	 */
+	private void addWearRiskLines(List<Component> tooltip, EngineState state, EngineComponents components) {
+		if (state.isAtRest())
+			return;
+
+		LubricationState lubrication = state.getLubrication();
+		if (lubrication == LubricationState.DRY)
+			addWearRisk(tooltip, "no_oil", ChatFormatting.RED);
+		else if (lubrication == LubricationState.LOW)
+			addWearRisk(tooltip, "low_oil", ChatFormatting.GOLD);
+
+		if (!components.hasAirFilter())
+			addWearRisk(tooltip, "no_air_filter", ChatFormatting.GOLD);
+
+		// Mechanical speed, not generated: the whole point of the overspeed term is
+		// the engine that something else is turning faster than it could turn itself.
+		if (EngineWearMath.isOverspeed(state.getMechanicalRpm()))
+			addWearRisk(tooltip, "overspeed", ChatFormatting.RED);
+
+		// Resolved here rather than read from the simulation's own copy, which is only
+		// ever written on the server: Create synchronises the network's stress and
+		// capacity to clients for its own overlays, so this is the same figure the
+		// engine is actually wearing against.
+		if (EngineWearMath.isHeavyLoad(readLoadFactor()))
+			addWearRisk(tooltip, "heavy_load", ChatFormatting.GOLD);
+	}
+
+	private static void addWearRisk(List<Component> tooltip, String key, ChatFormatting color) {
+		ECLang.translate("gui.wear_risk", ECLang.translate("gui.wear_risk." + key)
+			.style(color)
+			.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
 	}
 
 	/**
@@ -2724,6 +2803,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.style(firing == components.cylinderCount() ? ChatFormatting.GREEN
 				: firing == 0 ? ChatFormatting.DARK_GRAY : ChatFormatting.GOLD));
 		addCylinderStatusLine(tooltip, state);
+		addConditionDiagnostics(tooltip, components);
 		if (components.oversized())
 			ECLang.translate("gui.too_many_cylinders", ECLang.number(EngineTuning.MAX_CYLINDERS)
 				.component())
@@ -2787,6 +2867,58 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// Network load is deliberately absent. Create already reports stress on the
 		// Flywheel, which is this engine's generator, and repeating it here would be
 		// the HUD clutter this overlay keeps out of the way behind sneak.
+	}
+
+	/**
+	 * The engine's condition, taken apart into the parts it is made of.
+	 *
+	 * <p>The main overlay says "Worn"; this says which piston and which section, so
+	 * a player can go and replace the one part that needs it rather than rebuilding
+	 * an engine. That is the whole of what makes this a maintenance system rather
+	 * than a durability bar - the answer to "what is wrong with it" has to name a
+	 * component.
+	 *
+	 * <p>Three different scopes, deliberately, and they are not interchangeable:
+	 * <ul>
+	 * <li><b>Mechanical Condition</b> - the whole engine's bearings, averaged. This
+	 * is the figure its friction is derived from;</li>
+	 * <li><b>Cylinder <i>n</i> Compression</b> - one line per bore, each from that
+	 * bore's own Piston Assembly, so a single bad cylinder is visible rather than
+	 * averaged away;</li>
+	 * <li><b>Bearing Condition</b> - <i>this section's</i> own journal, and only
+	 * this one. A player walking along an inline-4 with the goggles on gets a
+	 * different reading at each crankcase, which is exactly what points at the
+	 * section to replace.</li>
+	 * </ul>
+	 *
+	 * <p>No numbers anywhere. The exact floats exist, and {@link #describeWear()}
+	 * will print them, but they are a development tool rather than a readout.
+	 */
+	private void addConditionDiagnostics(List<Component> tooltip, EngineComponents components) {
+		diagnostic(tooltip, "mechanical_condition",
+			EngineConditionText.name(components.resolveWear()
+				.mechanicalCondition()));
+
+		boolean multiCylinder = components.cylinderCount() > 1;
+		for (EngineComponents.Cylinder cylinder : components.cylinders()) {
+			// A bore with no Piston Assembly in it has no compression to report, and
+			// the Cylinder's own overlay already says the part is missing.
+			Component value = cylinder.hasPiston()
+				? EngineConditionText.name(WearCondition.of(cylinder.pistonWear()))
+				: ECLang.translate("gui.value.unavailable")
+					.style(ChatFormatting.DARK_GRAY)
+					.component();
+			if (multiCylinder)
+				ECLang.translate("gui.cylinder_compression", ECLang.number(cylinder.index() + 1)
+					.component(), value)
+					.style(ChatFormatting.DARK_GRAY)
+					.forGoggles(tooltip, 1);
+			else
+				diagnostic(tooltip, "compression", value);
+		}
+
+		// This block, not the engine. The player is looking at one crankcase.
+		diagnostic(tooltip, "bearing_condition", EngineConditionText.name(getBearingCondition()));
 	}
 
 	/**

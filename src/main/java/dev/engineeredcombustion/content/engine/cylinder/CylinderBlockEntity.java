@@ -12,6 +12,7 @@ import dev.engineeredcombustion.content.engine.EngineWearMath;
 import dev.engineeredcombustion.content.engine.WearCondition;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
+import dev.engineeredcombustion.foundation.EngineConditionText;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECItems;
 import net.minecraft.ChatFormatting;
@@ -395,13 +396,24 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 			.style(ChatFormatting.GRAY)
 			.forGoggles(tooltip, 1);
 
-		if (pistonInstalled)
+		if (pistonInstalled) {
+			// The service state of the part that is actually in the bore. This is the
+			// overlay a player checks once the engine's own reads "Worn" and they want
+			// to know which cylinder to open, so it names the condition of THIS
+			// assembly and nothing else. Omitted with no assembly fitted: there is no
+			// compression to report, and the line above has already said the part is
+			// missing.
+			ECLang.translate("gui.compression", EngineConditionText.name(getCompressionCondition()))
+				.style(ChatFormatting.GRAY)
+				.forGoggles(tooltip, 1);
+
 			ECLang.translate("gui.piston_position",
 				ECLang.number(CrankMath.pistonPosition(getCrankAngleForRender(0.0F)))
 					.style(ChatFormatting.AQUA)
 					.component())
 				.style(ChatFormatting.GRAY)
 				.forGoggles(tooltip, 1);
+		}
 		return true;
 	}
 
