@@ -221,6 +221,7 @@ public class EngineWearTests {
 		combinedAbuseIsWorseThanAnyOnePart();
 		aHealthyEngineIsAFullStrengthEngine();
 		capacityDoesNotChangeEveryTick();
+		aCriticalEngineIdlesBadlyOnPurpose();
 		reportCalibrationTable();
 
 		System.out.println();
@@ -1237,6 +1238,129 @@ public class EngineWearTests {
 		float perRevolution = EngineWearMath.cylinderWearPerRevolution(LubricationState.NORMAL, rpm, load, filtered)
 			+ EngineWearMath.cylinderWearPerCombustion(LubricationState.NORMAL, rpm, load, filtered);
 		return 1.0F / (perRevolution * rpm * 60.0F);
+	}
+
+	/**
+	 * A14. A critically worn engine cannot hold a normal idle. That is a physical
+	 * result, not a bug, and this is the test that says so.
+	 *
+	 * <p>The milestone asks explicitly that this behaviour NOT be "fixed" if it
+	 * emerges from the torque and friction model - a worn-out engine that idles
+	 * badly, stalls under load and needs throttle to stay alive is exactly right -
+	 * but that it be checked for the artifacts a numerical model could produce
+	 * instead: dithering around zero, a locked speed, generation while stalled, or
+	 * spontaneous reversal. So each of those is checked here, and the behaviour is
+	 * pinned as intended.
+	 *
+	 * <p>Speeds are averaged over a window rather than sampled. An idling engine
+	 * has a real ripple between power strokes - at critical wear it swings between
+	 * about 25 and 39 RPM - so a single instantaneous reading is noise, and
+	 * comparing two of them would be a flaky test rather than a physical claim.
+	 */
+	static void aCriticalEngineIdlesBadlyOnPurpose() {
+		section("A14  A CRITICAL ENGINE IDLES BADLY, AND THAT IS THE POINT");
+
+		float freshIdle = meanIdleRpm(0.0F, 0.0F, 0.0F);
+		float criticalIdle = meanIdleRpm(1.0F, 0.0F, 0.0F);
+		check("a fresh engine idles at about its design idle speed",
+			near(freshIdle, EngineTuning.IDLE_RPM, EngineTuning.IDLE_RPM * 0.15F),
+			String.format("%.1f RPM against a %.0f RPM design idle", freshIdle, EngineTuning.IDLE_RPM));
+		check("a critical one idles far slower, but is still running", criticalIdle < freshIdle * 0.6F
+			&& criticalIdle > 0.0F, String.format("%.1f RPM", criticalIdle));
+
+		// It stalls under a load a healthy engine shrugs off - the symptom the
+		// milestone describes, and the reason throttle stops being optional.
+		Engine criticalLoaded = settled(1.0F, 0.0F, 1.0F);
+		Engine freshLoaded = settled(0.0F, 0.0F, 1.0F);
+		check("a healthy engine carries a full load at idle", freshLoaded.state.getPhase() == EnginePhase.RUNNING,
+			String.format("%s at %.1f RPM", freshLoaded.state.getPhase(), freshLoaded.state.getSimulatedRpm()));
+		check("a critical one stalls doing the same thing",
+			criticalLoaded.state.getPhase() != EnginePhase.RUNNING,
+			String.format("%s", criticalLoaded.state.getPhase()));
+
+		// And throttle is what saves it, which is what makes the symptom playable
+		// rather than merely punishing.
+		Engine criticalThrottled = settled(1.0F, 0.5F, 1.0F);
+		check("but throttle keeps it alive under that load",
+			criticalThrottled.state.getPhase() == EnginePhase.RUNNING,
+			String.format("%s at %.1f RPM on half throttle", criticalThrottled.state.getPhase(),
+				criticalThrottled.state.getSimulatedRpm()));
+
+		// THE ARTIFACT CHECKS. None of these may be true of a stalling engine.
+		Engine engine = settled(1.0F, 0.0F, 0.0F);
+		float lowest = Float.MAX_VALUE;
+		float highest = -Float.MAX_VALUE;
+		int reversals = 0;
+		boolean generatedWhileStopped = false;
+		float previous = engine.state.getSimulatedRpm();
+		for (int tick = 0; tick < 20 * 60; tick++) {
+			engine.tickFree();
+			float rpm = engine.state.getSimulatedRpm();
+			lowest = Math.min(lowest, rpm);
+			highest = Math.max(highest, rpm);
+			if (previous > 0.0F && rpm < 0.0F || previous < 0.0F && rpm > 0.0F)
+				reversals++;
+			if (engine.state.getPhase() != EnginePhase.RUNNING && engine.state.isActivelyGenerating())
+				generatedWhileStopped = true;
+			previous = rpm;
+		}
+		check("it never dithers across zero", reversals == 0,
+			String.format("%d sign reversal(s) over a minute, RPM stayed in %.2f..%.2f", reversals, lowest,
+				highest));
+		check("and never turns backwards", lowest >= 0.0F, String.format("lowest %.4f RPM", lowest));
+		check("and never generates while it is not running", !generatedWhileStopped,
+			"generation follows the phase, not the shaft");
+		check("and it is not locked - it still ripples between power strokes", highest - lowest > 1.0F,
+			String.format("%.2f RPM of ripple", highest - lowest));
+
+		// Throttle still does what throttle does, all the way up. A locked engine
+		// would not respond at all.
+		float quarter = meanIdleRpm(1.0F, 0.25F, 0.0F);
+		float half = meanIdleRpm(1.0F, 0.5F, 0.0F);
+		float full = meanIdleRpm(1.0F, 1.0F, 0.0F);
+		check("throttle still raises its speed monotonically",
+			criticalIdle < quarter && quarter < half && half < full,
+			String.format("%.1f / %.1f / %.1f / %.1f RPM at 0, 25, 50, 100 %% throttle", criticalIdle, quarter,
+				half, full));
+
+		// REPAIR RESTORES IT. Wear lives on the parts, so replacing them is simply
+		// the wear going away - and normal idle must come straight back.
+		Engine rebuilt = settled(1.0F, 0.0F, 0.0F);
+		java.util.Arrays.fill(rebuilt.bearingWear, 0.0F);
+		java.util.Arrays.fill(rebuilt.pistonWear, 0.0F);
+		for (int tick = 0; tick < 20 * 90; tick++)
+			rebuilt.tickFree();
+		float rebuiltIdle = meanRpmOver(rebuilt, 20 * 20);
+		check("replacing the worn parts restores a normal idle completely",
+			rebuiltIdle > freshIdle * 0.9F,
+			String.format("%.1f RPM after a rebuild, against %.1f fresh", rebuiltIdle, freshIdle));
+	}
+
+	/** A settled engine at a given wear, throttle and load. */
+	static Engine settled(float wear, float throttle, float load) {
+		Engine engine = new Engine(1, 8000000, LubricationState.NORMAL);
+		engine.throttle = throttle;
+		java.util.Arrays.fill(engine.bearingWear, wear);
+		java.util.Arrays.fill(engine.pistonWear, wear);
+		start(engine, 20 * 60);
+		engine.load = load;
+		for (int tick = 0; tick < 20 * 90; tick++)
+			engine.tickFree();
+		return engine;
+	}
+
+	/** Mean free-running speed once settled - the ripple averaged out. */
+	static float meanIdleRpm(float wear, float throttle, float load) {
+		return meanRpmOver(settled(wear, throttle, load), 20 * 20);
+	}
+
+	static float meanRpmOver(Engine engine, int ticks) {
+		float total = 0.0F;
+		for (int tick = 0; tick < ticks; tick++) {
+			engine.tickFree();
+			total += engine.state.getSimulatedRpm();
+		}
+		return total / ticks;
 	}
 
 	/** P. Microscopic wear must not churn Create's kinetic bookkeeping. */

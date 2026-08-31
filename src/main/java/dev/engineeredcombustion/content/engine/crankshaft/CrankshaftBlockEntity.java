@@ -2481,30 +2481,55 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * deliberate: an engine geared up past its rated speed by a stronger network is
 	 * being destroyed whether or not it is burning anything, and this is where a
 	 * player finds that out.
+	 *
+	 * <h2>Root causes, not cascades</h2>
+	 * A warning is only worth printing if the player can act on it and if acting on
+	 * it would help. Two of these are therefore conditional on more than their own
+	 * multiplier:
+	 * <ul>
+	 * <li>The Air Filter warning is suppressed while there is no Carburetor at all.
+	 * The filter mounts on the Carburetor, so an engine missing one cannot be given
+	 * a filter, and printing
+	 * <pre>
+	 * Fuel:      No Carburetor
+	 * Wear Risk: No Air Filter
+	 * </pre>
+	 * asks the player to fix the second thing when the first is what is wrong. The
+	 * warning becomes true and useful the moment a Carburetor exists.</li>
+	 * <li>Heavy load is not shown on its own at all. After the 13.1 rebalance a full
+	 * load is 1.6x on the bearings against a baseline measured in thousands of
+	 * hours - it is work, not abuse, and an engine earning its keep must not be made
+	 * to look broken for doing so. It is only worth a line when it is <i>compounding</i>
+	 * something that genuinely is abuse, because that combination is where the wear
+	 * model actually bites.</li>
+	 * </ul>
 	 */
 	private void addWearRiskLines(List<Component> tooltip, EngineState state, EngineComponents components) {
 		if (state.isAtRest())
 			return;
 
 		LubricationState lubrication = state.getLubrication();
+		boolean poorlyLubricated = lubrication != LubricationState.NORMAL;
 		if (lubrication == LubricationState.DRY)
 			addWearRisk(tooltip, "no_oil", ChatFormatting.RED);
 		else if (lubrication == LubricationState.LOW)
 			addWearRisk(tooltip, "low_oil", ChatFormatting.GOLD);
 
-		if (!components.hasAirFilter())
+		// Only once the part it mounts on exists - see the class note above.
+		if (components.hasCarburetor() && !components.hasAirFilter())
 			addWearRisk(tooltip, "no_air_filter", ChatFormatting.GOLD);
 
 		// Mechanical speed, not generated: the whole point of the overspeed term is
 		// the engine that something else is turning faster than it could turn itself.
-		if (EngineWearMath.isOverspeed(state.getMechanicalRpm()))
+		boolean oversped = EngineWearMath.isOverspeed(state.getMechanicalRpm());
+		if (oversped)
 			addWearRisk(tooltip, "overspeed", ChatFormatting.RED);
 
 		// Resolved here rather than read from the simulation's own copy, which is only
 		// ever written on the server: Create synchronises the network's stress and
 		// capacity to clients for its own overlays, so this is the same figure the
 		// engine is actually wearing against.
-		if (EngineWearMath.isHeavyLoad(readLoadFactor()))
+		if ((poorlyLubricated || oversped) && EngineWearMath.isHeavyLoad(readLoadFactor()))
 			addWearRisk(tooltip, "heavy_load", ChatFormatting.GOLD);
 	}
 
