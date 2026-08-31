@@ -40,14 +40,20 @@ package dev.engineeredcombustion.content.engine;
  * generating: an engine that is out of fuel, unlit, mid-start or merely being
  * spun by a neighbour is turning, and contributes nothing.
  *
- * <h2>Capacity is one mask</h2>
- * {@link #getActiveCylinderMask()} is the single authority on <i>how much</i> of
- * the engine is producing that power: one bit per cylinder, derived on the server
- * from the combustion ages once per tick and synchronised as ordinary state.
- * Create's Stress Capacity multiplier, the cache-refresh trigger, the goggle
- * diagnostics and the generated-capacity readout are all
- * {@code Integer.bitCount} of that one number, so there is no arrangement in
- * which the HUD can report nothing while the flywheel reports four.
+ * <h2>Capacity is one mask and one strength</h2>
+ * {@link #getActiveCylinderMask()} is the single authority on <i>which</i>
+ * cylinders are producing that power: one bit per cylinder, derived on the server
+ * from the combustion ages once per tick and synchronised as ordinary state. The
+ * goggle diagnostics and the cache-refresh trigger read that one number, so there
+ * is no arrangement in which the HUD can report nothing while the flywheel
+ * reports four.
+ *
+ * <p>{@link #getPublishedCapacityFactor()} is the single authority on <i>how
+ * strong</i> they are: the same cylinders summed at their own compression, so an
+ * inline-4 with one tired bore supplies 3.6 cylinders' worth rather than four.
+ * Create's Stress Capacity multiplier and the generated-capacity readout are both
+ * that one number. A worn cylinder is emphatically still an active cylinder -
+ * these two are different questions and the player is shown both.
  *
  * <h2>Throttle</h2>
  * The throttle never writes a speed. It scales the torque a combustion event is
@@ -257,6 +263,72 @@ public final class EngineState {
 	 */
 	private int activeCylinderMask;
 
+	/**
+	 * The physical condition of the parts this engine is made of, as read from the
+	 * world at the top of the current tick.
+	 *
+	 * <p><b>An input, never state.</b> Bearing wear belongs to each Crankshaft
+	 * section and compression wear to each installed Piston Assembly - see
+	 * {@link EngineWearInputs} - so this is refreshed from {@link EngineInputs}
+	 * every tick and is never written to from inside the simulation. The wear a
+	 * tick <i>produces</i> is applied to those parts afterwards, by the block
+	 * entity that owns them.
+	 *
+	 * <p>Valid on both sides, with different detail. The server resolves the whole
+	 * thing; the client is told the average bearing wear only, which is all its
+	 * half of the physics needs - see {@link #setWear(EngineWearInputs)}.
+	 */
+	private EngineWearInputs wear = EngineWearInputs.PRISTINE;
+
+	/**
+	 * How many <i>healthy cylinders' worth</i> of output this engine is currently
+	 * providing, quantised, and latched.
+	 *
+	 * <h2>Two different questions, and this is the second one</h2>
+	 * {@link #activeCylinderMask} answers "which cylinders are firing". This
+	 * answers "how strong are they". A worn cylinder is still an active cylinder -
+	 * it burns its charge and it appears in the mask - it simply contributes less
+	 * than one cylinder's worth of power, and Create must be told that or a
+	 * four-cylinder engine with a dead cylinder's compression would still be
+	 * advertising four cylinders of Stress Capacity.
+	 *
+	 * <pre>
+	 * healthy inline-4         1.0 + 1.0 + 1.0 + 1.0 = 4.00
+	 * one cylinder at 60 %     1.0 + 1.0 + 0.6 + 1.0 = 3.60
+	 * one cylinder not firing  1.0 + 1.0 + 0.0 + 1.0 = 3.00
+	 * </pre>
+	 *
+	 * <h2>Why it is latched and quantised</h2>
+	 * Wear moves by about a millionth per revolution, and every capacity figure
+	 * Create is handed costs it a re-registration and a network stress recompute.
+	 * Publishing the raw sum would rebuild that bookkeeping several times a second
+	 * for a change no player could see. So this only moves when the sum crosses a
+	 * {@link EngineTuning#CAPACITY_QUANTUM} boundary - at most a few dozen times
+	 * over a cylinder's whole life - while everything that is <i>not</i> slow drift
+	 * still publishes on the tick it happens: the mask changing, a Piston Assembly
+	 * swapped, the engine catching or stalling, a forced republish.
+	 *
+	 * <p>Derived state: rebuilt from the simulation after a world load, and
+	 * synchronised to the client rather than recomputed there, so the flywheel and
+	 * the overlay can never disagree about it.
+	 */
+	private float publishedCapacityFactor;
+
+	/** Set when the next evaluation must publish the capacity whatever the quantum says. */
+	private boolean forceCapacityRepublish;
+
+	/**
+	 * Whether the last simulated tick moved {@link #publishedCapacityFactor}.
+	 *
+	 * <p>Read by the block entity to decide whether Create's cached Stress Capacity
+	 * has to be refreshed. Kept as a flag rather than returned, because
+	 * {@link #tickSimulation} already returns the <i>speed</i> question and the two
+	 * are genuinely separate events - an engine held at a steady speed by another
+	 * source can change its capacity without its published speed moving by a single
+	 * quantum, which is the whole reason the capacity refresh exists.
+	 */
+	private boolean capacityFactorChanged;
+
 	private boolean fuelAvailable;
 
 	/**
@@ -465,6 +537,9 @@ public final class EngineState {
 		this.loadFactor = inputs.loadFactor();
 		this.speedLimitRpm = inputs.speedLimitRpm();
 		this.targetRpm = inputs.targetRpm();
+		// The condition of the actual parts, resolved from the world before any of
+		// this tick's physics runs. Nothing below writes to it.
+		this.wear = inputs.wear();
 		this.fuelAvailable = fuel.hasFuel();
 		// Read every tick: the sump can be filled or drained by a pipe at any time,
 		// and lubrication has to take effect immediately rather than at some
@@ -493,6 +568,9 @@ public final class EngineState {
 		// Every cylinder is offered its own firing opportunity, at its own crank
 		// phase, and pays for its own charge; what they all feed is the single
 		// crankshaft integrated once at the bottom.
+		int activeMaskBefore = activeCylinderMask;
+		boolean generatingBefore = activelyGenerating;
+
 		boolean anyChargeIgnitable = false;
 		boolean anyPowerStrokeActive = false;
 		boolean ignitedThisTick = false;
@@ -540,7 +618,13 @@ public final class EngineState {
 					firedThisRevolution[cylinder] = true;
 					// Bought and paid for at this tick's price. Nothing may revalue it
 					// afterwards - see powerStrokeStrength.
-					powerStrokeStrength[cylinder] = strengthForNewCharges;
+					//
+					// THIS is where a worn cylinder becomes a weak cylinder, and it is
+					// deliberately the only place: latching compression into the charge
+					// covers the running power stroke and the pre-start firing kick with
+					// one multiplication, so a tired engine is both down on power and
+					// harder to start without either being written down separately.
+					powerStrokeStrength[cylinder] = strengthForNewCharges * wear.compressionEfficiency(cylinder);
 					ignitedThisTick = true;
 					ticksSinceCombustion[cylinder] = 0;
 					ticksSinceStartActivity = 0;
@@ -612,6 +696,13 @@ public final class EngineState {
 		// drag it does not get, the HUD, the audio - is a consequence of it.
 		activelyGenerating = evaluateActiveGeneration();
 
+		// And HOW MUCH of it, in cylinder-equivalents. Derived from the mask above
+		// and this tick's compression, published under a quantum so that microscopic
+		// wear cannot churn Create's kinetic bookkeeping - see
+		// publishedCapacityFactor.
+		capacityFactorChanged = updatePublishedCapacity(activeMaskBefore != activeCylinderMask
+			|| generatingBefore != activelyGenerating);
+
 		return updatePublishedRpm();
 	}
 
@@ -632,7 +723,10 @@ public final class EngineState {
 			// Sub-linearly, so more cylinders still catch sooner - which is true of
 			// real engines - without a four-cylinder engine starting the instant it
 			// is touched.
-			requiredStartCycles = EngineTuning.requiredStartCycles(rolled, cylinderCount);
+			// Scaled by the engine's compression as well, so a tired engine has to
+			// catch on more of its weaker kicks. See EngineTuning#requiredStartCycles.
+			requiredStartCycles = EngineTuning.requiredStartCycles(rolled, cylinderCount,
+				wear.averageCompressionEfficiency(cylinderCount));
 		}
 		startProgress++;
 	}
@@ -705,7 +799,22 @@ public final class EngineState {
 		// way back down, and it takes out over a revolution exactly what it puts in.
 		// That is why it can make a single-cylinder engine lumpy and an inline-4
 		// smooth without moving either one's equilibrium speed.
-		float drag = EngineTuning.frictionTorqueAt(simulatedRpm, lubrication) + loadDragTorque + coastDragTorque();
+		//
+		// Worn bearings appear here and nowhere else: they multiply the friction the
+		// engine already fights, so a tired engine loses reserve torque, sags further
+		// under load, coasts down sooner and burns more fuel holding a speed - all of
+		// it emerging from the same equilibrium a healthy engine settles into, and not
+		// one line of it subtracting RPM. It scales the coast drag too, which is what
+		// makes a worn engine's spin-down visibly shorter.
+		//
+		// Written with the multiplier applied to each drag term separately rather than
+		// to their sum, so that a pristine engine - multiplier exactly 1 - integrates
+		// bit for bit the arithmetic it always did. Float addition is not associative,
+		// and an engine's stall behaviour at low speed is close enough to the edge for
+		// one ULP to move a tick.
+		float bearingFriction = wear.bearingFrictionMultiplier();
+		float drag = EngineTuning.frictionTorqueAt(simulatedRpm, lubrication) * bearingFriction + loadDragTorque
+			+ coastDragTorque() * bearingFriction;
 		float netTorque = combustionTorque + compressionTorque - Math.signum(simulatedRpm) * drag;
 
 		float next = simulatedRpm + netTorque / EngineTuning.FLYWHEEL_INERTIA;
@@ -848,6 +957,10 @@ public final class EngineState {
 		// count - and therefore its Stress Capacity - is zero from this instant.
 		java.util.Arrays.fill(ticksSinceCombustion, -1);
 		activeCylinderMask = 0;
+		// The capacity is deliberately NOT zeroed here. updatePublishedCapacity runs a
+		// few lines later in the same tick and will take it to zero itself, which keeps
+		// hasCapacityFactorChanged() an honest report of whether the figure moved -
+		// and it is that flag the block entity refreshes Create's cache from.
 		resetStartAttempt();
 	}
 
@@ -1023,12 +1136,17 @@ public final class EngineState {
 	 * How many of this engine's cylinders burned a charge recently enough to count
 	 * as genuinely firing right now.
 	 *
-	 * <p><b>The engine's real output, counted one cylinder at a time.</b> Stress
-	 * Capacity is scaled by this, so an inline-4 supplies four times what a single
-	 * does - and an inline-4 with a dead Spark Plug supplies three quarters of
-	 * that, because the dead cylinder is not in this count. Capacity therefore
-	 * follows combustion rather than cylinder count, which is what stops a wall of
-	 * cylinders from being free power.
+	 * <p><b>The engine's real output, counted one cylinder at a time.</b> An
+	 * inline-4 with a dead Spark Plug is an engine down a cylinder, and this is the
+	 * count that says so. Capacity therefore follows combustion rather than
+	 * cylinder count, which is what stops a wall of cylinders from being free power.
+	 *
+	 * <p>It is a <i>count</i>, not the capacity itself. Since wear exists, Stress
+	 * Capacity is scaled by {@link #getPublishedCapacityFactor()} - the same
+	 * cylinders, each weighted by its own compression - because four firing
+	 * cylinders are not necessarily four cylinders' worth of power. This remains
+	 * the honest answer to "how many of them are working", which is a different
+	 * and equally useful question.
 	 *
 	 * <p>Nothing an external source does can raise it. Being spun fast is not
 	 * burning fuel, so a motored engine counts zero however quickly its pistons are
@@ -1059,6 +1177,84 @@ public final class EngineState {
 	/** Whether cylinder {@code i} is currently contributing to this engine's output. */
 	public boolean isCylinderActive(int cylinder) {
 		return cylinder >= 0 && cylinder < cylinderCount && (activeCylinderMask & (1 << cylinder)) != 0;
+	}
+
+	/**
+	 * <b>The</b> engine's output, in healthy cylinders' worth: every firing
+	 * cylinder counted at its own compression.
+	 *
+	 * <pre>
+	 * sum over cylinders of  active(i) ? compressionEfficiency(i) : 0
+	 * </pre>
+	 *
+	 * <p>The one place this sum exists. Create's Stress Capacity multiplier, the
+	 * capacity-refresh trigger and the generated-capacity readout are all the
+	 * quantised form of this number ({@link #getPublishedCapacityFactor()}), so
+	 * there is no arrangement in which the HUD can report a figure the flywheel is
+	 * not using.
+	 *
+	 * <p>Note what it is <i>not</i>: a redefinition of "active". A worn cylinder is
+	 * still active and still in the mask - it contributes 0.6 of a cylinder rather
+	 * than 0 - and an inactive cylinder contributes nothing however healthy it is.
+	 * Those are two different diagnostics and the player is shown both.
+	 */
+	public float getEffectiveCylinderCapacity() {
+		float total = 0.0F;
+		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
+			if ((activeCylinderMask & (1 << cylinder)) != 0)
+				total += wear.compressionEfficiency(cylinder);
+		return total;
+	}
+
+	/**
+	 * The latched, quantised figure Create is actually told to multiply its
+	 * registered Stress Capacity by. Zero on any engine that is not generating.
+	 *
+	 * @see #publishedCapacityFactor
+	 */
+	public float getPublishedCapacityFactor() {
+		return publishedCapacityFactor;
+	}
+
+	/** Whether the last simulated tick moved that figure. */
+	public boolean hasCapacityFactorChanged() {
+		return capacityFactorChanged;
+	}
+
+	/**
+	 * Decides whether Create's capacity multiplier needs to change.
+	 *
+	 * <p>The rule is deliberately asymmetric, because the two things that move this
+	 * number are nothing alike:
+	 * <ul>
+	 * <li><b>events</b> - a cylinder starting or stopping firing, the engine
+	 * catching or stalling, a Piston Assembly swapped, a forced republish. Real,
+	 * instantaneous, and published on the tick they happen;</li>
+	 * <li><b>wear</b> - about a millionth of a cylinder per revolution. Published
+	 * only when the sum crosses a {@link EngineTuning#CAPACITY_QUANTUM} boundary,
+	 * which over a cylinder's entire service life is a few dozen updates rather
+	 * than several a second.</li>
+	 * </ul>
+	 *
+	 * <p>There is no dithering to worry about: wear only ever increases, and
+	 * compression is a pure function of it, so the raw sum moves monotonically
+	 * between events and cannot oscillate across a boundary.
+	 *
+	 * @param immediate the capacity basis changed for a reason that is not wear
+	 * @return whether the published figure moved
+	 */
+	private boolean updatePublishedCapacity(boolean immediate) {
+		boolean force = forceCapacityRepublish || immediate;
+		forceCapacityRepublish = false;
+
+		float raw = activelyGenerating ? getEffectiveCylinderCapacity() : 0.0F;
+		float quantised = EngineWearMath.quantiseCapacity(raw);
+		if (quantised == publishedCapacityFactor)
+			return false;
+		if (!force && Math.abs(raw - publishedCapacityFactor) < EngineTuning.CAPACITY_QUANTUM)
+			return false;
+		publishedCapacityFactor = quantised;
+		return true;
 	}
 
 	/**
@@ -1192,6 +1388,10 @@ public final class EngineState {
 	 */
 	public void requestGeneratedRepublish() {
 		forceGeneratedRepublish = true;
+		// The capacity is the other half of what Create holds for this engine, and it
+		// goes stale in exactly the same moments. Forcing one without the other is how
+		// a reload could leave the right speed beside the wrong multiplier.
+		forceCapacityRepublish = true;
 	}
 
 	// ------------------------------------------------------------------------
@@ -1387,6 +1587,45 @@ public final class EngineState {
 		return lubrication;
 	}
 
+	/**
+	 * The condition of the parts this engine is made of, as of the last tick.
+	 *
+	 * <p>On the server this is the whole picture. On the client it carries the
+	 * average bearing wear and nothing else - see {@link #setWear(EngineWearInputs)}
+	 * - so per-cylinder compression is read from the Cylinder block entities that
+	 * own it rather than from here.
+	 */
+	public EngineWearInputs getWear() {
+		return wear;
+	}
+
+	/**
+	 * How much the crank turned on the last tick, in revolutions. Always positive.
+	 *
+	 * <p>The clock every wear rate is quoted against. Using the angle the crank
+	 * actually advanced by - rather than a tick count or a nominal speed - is what
+	 * makes wear follow the work the machine did: an engine held at 220 RPM by
+	 * another Create source wears its bearings for 220 RPM, and a server running
+	 * below 20 TPS wears its engines no faster per revolution than one running at
+	 * full speed.
+	 */
+	public float getRevolutionsThisTick() {
+		return Math.abs(lastAngleDeltaDegrees) / 360.0F;
+	}
+
+	/**
+	 * Whether the crankshaft has genuinely stopped - nothing is turning it and it
+	 * has no momentum left.
+	 *
+	 * <p>The condition internal service is gated on: a Piston Assembly may not be
+	 * pulled out of a bore whose piston is still moving, whether the engine is
+	 * running under its own power, coasting down, or being motored by a neighbour.
+	 */
+	public boolean isAtRest() {
+		return Math.abs(mechanicalRpm) < EngineTuning.REST_RPM
+			&& Math.abs(simulatedRpm) < EngineTuning.REST_RPM;
+	}
+
 	/** Running combustion events banked towards the next millibucket of oil. */
 	public int getCombustionEventsSinceOilDraw() {
 		return combustionEventsSinceOilDraw;
@@ -1520,6 +1759,14 @@ public final class EngineState {
 		// an engine that never unloaded.
 		ticksSincePublish = EngineTuning.NETWORK_RECONCILE_INTERVAL_TICKS;
 		forceGeneratedRepublish = true;
+		// Derived like everything else here, and NOT restored from disk beside the
+		// wear it comes from. The parts carry their own condition across a save, so
+		// rebuilding the multiplier from them is the only way it cannot come back
+		// disagreeing with the engine it describes. The first reconciled tick then
+		// replaces even this with a freshly resolved value.
+		publishedCapacityFactor = activelyGenerating ? EngineWearMath.quantiseCapacity(getEffectiveCylinderCapacity())
+			: 0.0F;
+		forceCapacityRepublish = true;
 	}
 
 	/**
@@ -1605,7 +1852,18 @@ public final class EngineState {
 	 * <p>Synchronised rather than recomputed, so no client-side approximation of
 	 * the predicate can ever exist to disagree with the server's.
 	 */
+	/**
+	 * Forces the generation flag from outside the simulation.
+	 *
+	 * <p>Used when the world takes the engine apart under it, and on the client,
+	 * which is told the server's answer rather than deriving one. An engine that is
+	 * not generating supplies no capacity by definition, so the multiplier goes with
+	 * it - otherwise a section mined out of a running inline-4 would leave its
+	 * flywheel holding a figure nobody would ever revise.
+	 */
 	public void setActivelyGenerating(boolean activelyGenerating) {
+		if (!activelyGenerating)
+			publishedCapacityFactor = 0.0F;
 		this.activelyGenerating = activelyGenerating;
 	}
 
@@ -1646,6 +1904,36 @@ public final class EngineState {
 	/** The per-cylinder combustion ages, as a copy safe to hand to NBT. */
 	public int[] copyOfTicksSinceCombustion() {
 		return ticksSinceCombustion.clone();
+	}
+
+	/**
+	 * Gives the client the part of the engine's condition its own half of the
+	 * physics needs.
+	 *
+	 * <p>Which is the average bearing wear, and only that. The client integrates a
+	 * freewheeling engine's spin-down itself - a coasting engine generates nothing,
+	 * so Create has no speed left to synchronise - and that integration fights the
+	 * engine's friction, which worn bearings multiply. Without this the two sides
+	 * would trace different curves and the periodic resync would visibly correct
+	 * the client every second.
+	 *
+	 * <p>Everything else the client shows about condition comes from the blocks
+	 * themselves: per-cylinder compression from the Cylinder block entities, each
+	 * section's bearing condition from that section. The one figure that could not
+	 * work that way is the capacity multiplier, which is derived from the combustion
+	 * ages the client is never sent - so that is synchronised outright, as
+	 * {@link #setPublishedCapacityFactor(float)}.
+	 */
+	public void setWear(EngineWearInputs wear) {
+		this.wear = wear == null ? EngineWearInputs.PRISTINE : wear;
+	}
+
+	/**
+	 * The capacity multiplier the server decided on. Client only - on the server
+	 * this is derived once per tick and never assigned from outside.
+	 */
+	public void setPublishedCapacityFactor(float publishedCapacityFactor) {
+		this.publishedCapacityFactor = Math.max(0.0F, publishedCapacityFactor);
 	}
 
 	public void setLubrication(LubricationState lubrication) {

@@ -13,7 +13,16 @@
       "entries": [
         {
           "type": "minecraft:item",
-          "name": "engineered_combustion:crankshaft"
+          "name": "engineered_combustion:crankshaft",
+          "functions": [
+            {
+              "function": "minecraft:copy_components",
+              "source": "block_entity",
+              "include": [
+                "engineered_combustion:crankshaft_bearing_wear"
+              ]
+            }
+          ]
         }
       ]
     }

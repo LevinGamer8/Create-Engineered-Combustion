@@ -120,11 +120,27 @@ public class EngineCapacityTests {
 		double capacitySu() {
 			if (!state.isActivelyGenerating())
 				return 0.0;
-			return EngineTuning.STRESS_CAPACITY_PER_RPM * state.getFiringCylinderCount()
+			return EngineTuning.STRESS_CAPACITY_PER_RPM * state.getPublishedCapacityFactor()
 				* Math.abs(state.getPublishedRpm());
 		}
 
-		/** The multiplier Create caches per source. This is the thing that went stale. */
+		/**
+		 * The multiplier Create caches per source. This is the thing that went stale.
+		 *
+		 * <p>Since wear exists it is the <i>effective</i> cylinder count - the firing
+		 * cylinders, each weighted by its own compression - rather than a plain count.
+		 * Every engine in this file is built from pristine parts, so the two are equal
+		 * here by construction, and {@link #capacityBasis()} below asserts exactly
+		 * that rather than assuming it.
+		 */
+		float capacityFactor() {
+			return state.isActivelyGenerating() ? state.getPublishedCapacityFactor() : 0.0F;
+		}
+
+		/**
+		 * How many cylinders are firing, which on a pristine engine is also what
+		 * Create's multiplier comes to.
+		 */
 		int capacityBasis() {
 			return state.isActivelyGenerating() ? state.getFiringCylinderCount() : 0;
 		}
@@ -170,6 +186,12 @@ public class EngineCapacityTests {
 		start(r4);
 		check("an inline-4 counts four firing cylinders", r4.capacityBasis() == 4,
 			r4.capacityBasis() + " firing");
+		// The engines in this file are built from new parts, so the multiplier Create
+		// is handed is exactly the count. Asserted rather than assumed, because it is
+		// the assumption every figure below rests on.
+		check("and on pristine parts the multiplier is exactly that count",
+			near(r4.capacityFactor(), r4.capacityBasis(), 1.0E-4),
+			String.format("%.4f against %d", r4.capacityFactor(), r4.capacityBasis()));
 		double fourCylinderSu = r4.capacitySu();
 		check("and its capacity is four times a single cylinder's",
 			near(fourCylinderSu,

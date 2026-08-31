@@ -4,6 +4,7 @@ import com.simibubi.create.content.kinetics.base.HorizontalAxisKineticBlock;
 import com.simibubi.create.foundation.block.IBE;
 
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
+import dev.engineeredcombustion.registry.ECDataComponents;
 import dev.engineeredcombustion.registry.ECItems;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -13,6 +14,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
@@ -186,6 +188,25 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock implements IBE<C
 	@Override
 	public boolean hideStressImpact() {
 		return true;
+	}
+
+	/**
+	 * Carries a mined crankcase's bearing condition back into the block.
+	 *
+	 * <p>Belt to {@code CrankshaftBlockEntity#applyImplicitComponents}'s braces, and
+	 * the same pair Create's own Toolbox keeps: the implicit-component path is the
+	 * mechanism, and this makes the result independent of when in the placement
+	 * sequence it runs. Both are idempotent - they write the same number from the
+	 * same stack - so having both costs nothing and guarantees that placing a worn
+	 * section really does put a worn section down.
+	 */
+	@Override
+	public void setPlacedBy(Level level, BlockPos pos, BlockState state, LivingEntity placer, ItemStack stack) {
+		super.setPlacedBy(level, pos, state, placer, stack);
+		if (level.isClientSide)
+			return;
+		if (level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft)
+			crankshaft.setBearingWear(ECDataComponents.wearOf(stack, ECDataComponents.CRANKSHAFT_BEARING_WEAR));
 	}
 
 	@Override

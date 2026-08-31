@@ -529,11 +529,38 @@ public final class EngineTuning {
 
 	/**
 	 * Firing events a start attempt needs, for a rolled base count and a cylinder
-	 * count. Always at least one.
+	 * count, on an engine whose cylinders are all healthy. Always at least one.
 	 */
 	public static int requiredStartCycles(int rolledCycles, int cylinderCount) {
+		return requiredStartCycles(rolledCycles, cylinderCount, 1.0F);
+	}
+
+	/**
+	 * The same, for an engine that has lost some of its compression.
+	 *
+	 * <p>Most of what makes a worn engine hard to start is already paid for
+	 * elsewhere: every firing kick is multiplied by that cylinder's compression, so
+	 * a tired engine is genuinely being flicked over more weakly. This is the
+	 * remainder - a worn engine also has to catch on <i>more</i> of those weaker
+	 * kicks, because each one is less likely to carry it to the next.
+	 *
+	 * <p>Scaled by how much compression is actually gone, measured against the
+	 * worst the model allows, so it is continuous rather than a threshold: a
+	 * lightly used engine asks for nothing extra, and one at the service limit for
+	 * {@link #START_CYCLES_WEAR_PENALTY} more events. Even that engine still
+	 * starts - it just takes noticeably longer, which is exactly what a tired
+	 * engine does.
+	 *
+	 * @param averageCompressionEfficiency mean compression over the engine's
+	 *                                     cylinders, {@code [MIN, 1]}
+	 */
+	public static int requiredStartCycles(int rolledCycles, int cylinderCount,
+		float averageCompressionEfficiency) {
 		float scale = 1.0F + START_CYCLES_PER_EXTRA_CYLINDER * Math.max(0, cylinderCount - 1);
-		return Math.max(1, Math.round(rolledCycles * scale));
+		float lostCompression = clamp01((1.0F - averageCompressionEfficiency)
+			/ (1.0F - MIN_COMPRESSION_EFFICIENCY));
+		int penalty = Math.round(START_CYCLES_WEAR_PENALTY * lostCompression);
+		return Math.max(1, Math.round(rolledCycles * scale) + penalty);
 	}
 
 	/**
@@ -769,6 +796,335 @@ public final class EngineTuning {
 
 	/** Wobble rate of that roughness, in radians per tick. */
 	public static final float SOUND_DRY_ROUGHNESS_RATE = 0.9F;
+
+	// --- wear: condition bands ----------------------------------------------
+	//
+	// Wear is stored as a float in [0, 1] - 0 is a part fresh out of the crate, 1
+	// is a part at its service limit - and shown to the player as one of the six
+	// bands in WearCondition. These are the boundaries, and they are the ONLY
+	// place any of them is written down: nothing in the UI, the simulation or the
+	// diagnostics compares wear against a literal.
+	//
+	// Each constant is the lowest wear that still reads as that band, so the bands
+	// are [0, .10) [.10, .30) [.30, .50) [.50, .70) [.70, .90) [.90, 1].
+
+	public static final float CONDITION_GOOD_WEAR = 0.10F;
+	public static final float CONDITION_USED_WEAR = 0.30F;
+	public static final float CONDITION_WORN_WEAR = 0.50F;
+	public static final float CONDITION_POOR_WEAR = 0.70F;
+	public static final float CONDITION_CRITICAL_WEAR = 0.90F;
+
+	// --- wear: what wear does to the machine --------------------------------
+
+	/**
+	 * Compression lost per unit of piston wear, linear and quadratic terms.
+	 *
+	 * <p>Together they define {@link EngineWearMath#compressionEfficiency(float)}:
+	 *
+	 * <pre>
+	 * efficiency = 1 - LINEAR * wear - QUADRATIC * wear^2
+	 * </pre>
+	 *
+	 * <p>Chosen to hit the shape the milestone asks for - full compression when
+	 * pristine, about 0.90 when moderately worn, about 0.81 when worn, and 0.65 at
+	 * the service limit - with a curve that gets worse faster as the rings go,
+	 * which is what a real engine does. It is smooth and strictly decreasing
+	 * everywhere in {@code [0, 1]}, so nothing anywhere sees a cliff.
+	 */
+	public static final float COMPRESSION_LOSS_LINEAR = 0.25F;
+	public static final float COMPRESSION_LOSS_QUADRATIC = 0.10F;
+
+	/**
+	 * Compression a cylinder keeps at the service limit, and the floor the curve
+	 * above is clamped to.
+	 *
+	 * <p>Deliberately well above zero. A critically worn cylinder is a bad
+	 * cylinder, not a dead one: it still fires, still consumes its charge, still
+	 * counts as an active cylinder, and still contributes - it simply contributes
+	 * two thirds of what it should. Wear must not be able to kill an engine in
+	 * this milestone, and this constant is where that promise is kept.
+	 */
+	public static final float MIN_COMPRESSION_EFFICIENCY = 0.65F;
+
+	/**
+	 * How much more internal friction a critically worn set of bearings costs,
+	 * as a fraction of the healthy figure.
+	 *
+	 * <p>0.8 means a pristine engine multiplies its friction by 1.0 and one at the
+	 * service limit by 1.8. That is applied to the friction torque the engine
+	 * already solves its equilibrium against, so every consequence emerges rather
+	 * than being written down: a worn engine loses reserve torque, sags further
+	 * under load, coasts down sooner, and needs more combustion events - and
+	 * therefore more fuel - to hold the same speed. Nothing anywhere subtracts RPM.
+	 */
+	public static final float MAX_EXTRA_BEARING_FRICTION = 0.8F;
+
+	// --- wear: how fast it accumulates --------------------------------------
+	//
+	// Everything here is per REVOLUTION, never per tick. That is the whole reason
+	// the rates are honest: an engine wears because it turned, so a server running
+	// at 15 TPS wears its engines at the same rate per revolution as one at 20,
+	// and a fast engine wears faster than a slow one without a single line saying
+	// so. It also means an externally motored engine wears its bearings exactly as
+	// a running one does at the same speed, which is the physically true answer.
+	//
+	// THE ANCHOR. A healthy engine - normal oil, Air Filter fitted - at half
+	// throttle (128 RPM) under half load reaches the service limit in about 39
+	// hours of CONTINUOUS running. Idling with nothing hung off it takes about 120
+	// hours; sitting at full throttle against a full load takes about 17. Those
+	// are the numbers the constants below were solved for, and the milestone's
+	// gameplay target - tens of hours for a well-kept engine, never two - is
+	// exactly that anchor.
+
+	/**
+	 * Bearing wear a healthy engine accumulates per revolution of the crankshaft.
+	 *
+	 * <p>2e-6 is 500,000 revolutions to the service limit before any multiplier.
+	 * At 128 RPM that is about 65 hours, which the RPM and load factors below then
+	 * shorten to the ~39 hours quoted above.
+	 */
+	public static final float BASE_BEARING_WEAR_PER_REVOLUTION = 2.0E-6F;
+
+	/**
+	 * Piston and ring wear from the piston simply moving in its bore, per
+	 * revolution.
+	 *
+	 * <p>Charged to every cylinder that has a Piston Assembly in it, firing or
+	 * not, because a piston being pushed up and down a bore wears whether or not
+	 * anything is burning above it. This is the wear an externally motored engine
+	 * gets - see {@link #CYLINDER_WEAR_PER_COMBUSTION} for the half it does not.
+	 */
+	public static final float BASE_CYLINDER_WEAR_PER_REVOLUTION = 0.5E-6F;
+
+	/**
+	 * Piston and ring wear from one charge actually burning in that cylinder.
+	 *
+	 * <p>Charged per combustion event and nowhere else, so an engine that is not
+	 * burning anything cannot accumulate it however fast it is being spun. That is
+	 * the same rule the Stress Capacity follows, for the same reason: being turned
+	 * is not running.
+	 *
+	 * <p>Twice the motion figure, so about two thirds of a running cylinder's wear
+	 * comes from combustion and a third from motion. A firing cylinder therefore
+	 * wears at 1.5e-6 per revolution against the bearings' 2e-6 - slightly slower,
+	 * which leaves the bearings as the pacing item on a well-kept engine and the
+	 * cylinders as the pacing item on an unfiltered one.
+	 */
+	public static final float CYLINDER_WEAR_PER_COMBUSTION = 1.0E-6F;
+
+	/**
+	 * Wear multipliers per lubrication state, applied to <b>both</b> bearing and
+	 * cylinder wear.
+	 *
+	 * <p>Separate from {@link #FRICTION_MULTIPLIER_NORMAL} and its neighbours, and
+	 * deliberately much larger. Those say how much harder an unlubricated engine
+	 * is to turn; these say how much of itself it destroys doing it, and the two
+	 * are not the same physics. Low oil is a bad idea; running dry is ruinous.
+	 *
+	 * <p>Sized so that a dry engine at full throttle - which settles near 111 RPM,
+	 * because the friction multiplier is holding it down - moves a band roughly
+	 * every ten minutes and reaches the service limit in about an hour and three
+	 * quarters. Harmful within minutes, as the milestone asks, and never instant.
+	 */
+	public static final float WEAR_MULTIPLIER_OIL_NORMAL = 1.0F;
+	public static final float WEAR_MULTIPLIER_OIL_LOW = 4.0F;
+	public static final float WEAR_MULTIPLIER_OIL_DRY = 40.0F;
+
+	/**
+	 * Cylinder wear multiplier for an engine breathing through an open intake.
+	 *
+	 * <p>Applies to cylinder wear only - both the motion half and the combustion
+	 * half, because both are about air being drawn down the bore - and never to
+	 * the bearings. Unfiltered air is abrasive to rings and bores; it is not what
+	 * kills a main bearing.
+	 *
+	 * <p>The Air Filter stays optional, and this is what makes that choice
+	 * interesting rather than free: an unfiltered engine runs perfectly and wears
+	 * its cylinders four times as fast, which is measured in hours rather than
+	 * seconds. Filter durability is deliberately not part of this milestone.
+	 */
+	public static final float WEAR_MULTIPLIER_UNFILTERED = 4.0F;
+
+	/**
+	 * Speed at which the engine is designed to run continuously - its own
+	 * full-throttle target.
+	 *
+	 * <p>Below it {@link EngineWearMath#rpmWearFactor(float)} adds only a gentle
+	 * stress term; above it the overspeed term takes over. Named separately from
+	 * {@link #FULL_THROTTLE_RPM} even though it is the same number, because they
+	 * are two different statements: one is what the throttle asks for, the other
+	 * is what the bearings were sized for.
+	 */
+	public static final float RATED_CONTINUOUS_RPM = FULL_THROTTLE_RPM;
+
+	/**
+	 * Extra wear at the rated speed from mechanical stress alone, on top of simply
+	 * completing more revolutions.
+	 *
+	 * <p>Quadratic in {@code rpm / RATED}, so idling is charged almost nothing
+	 * (1.04x) and full throttle a modest 1.35x. A real engine is harder on itself
+	 * near its limit than a straight per-revolution count would suggest, and this
+	 * is that, kept small enough that revving is a choice rather than a punishment.
+	 */
+	public static final float RPM_STRESS_COEFFICIENT = 0.35F;
+
+	/**
+	 * How sharply wear climbs once the engine is turned faster than it was built
+	 * for, quadratic in the fraction over.
+	 *
+	 * <p>The engine's own governor cannot get here: it takes combustion torque
+	 * away well below {@link #MAX_RPM}. Only an external Create source can, and
+	 * that is exactly the situation this is for - an engine geared up by a network
+	 * far stronger than itself is being destroyed, and should be.
+	 *
+	 * <p>At Create's default 256 RPM ceiling the factor is about 4x, on top of
+	 * four times the revolutions of an idling engine: roughly sixteen times the
+	 * wear rate, which makes sustained overspeed the fastest way to ruin a
+	 * well-oiled engine. It is also continuous and quadratic through the rated
+	 * speed, so a spike one RPM over costs essentially nothing - there is no
+	 * cliff to fall off.
+	 */
+	public static final float OVERSPEED_WEAR_COEFFICIENT = 24.0F;
+
+	/**
+	 * How much a fully loaded network adds to bearing wear, and to cylinder wear.
+	 *
+	 * <p>Bearings carry the load, so they feel it much more: a full load is 1.9x
+	 * on the bearings and 1.4x in the bores. Both are linear in the engine's
+	 * existing normalised load factor - the network's absolute stress figure is
+	 * deliberately never used here, because it scales with speed and the wear
+	 * model already has a speed term.
+	 */
+	public static final float BEARING_LOAD_WEAR_COEFFICIENT = 0.9F;
+	public static final float CYLINDER_LOAD_WEAR_COEFFICIENT = 0.4F;
+
+	// --- wear: what the player is warned about ------------------------------
+
+	/**
+	 * Load above which the goggles say the engine is working hard enough for it to
+	 * matter. Purely a display threshold; the wear itself is continuous.
+	 */
+	public static final float HEAVY_LOAD_WARNING_FACTOR = 0.75F;
+
+	/**
+	 * How far over the rated speed the engine has to be before the goggles call it
+	 * overspeed, as a fraction.
+	 *
+	 * <p>A margin rather than an exact comparison, so an engine sitting on its
+	 * full-throttle target with the usual couple of RPM of combustion ripple does
+	 * not flicker a warning at the player.
+	 */
+	public static final float OVERSPEED_WARNING_MARGIN = 0.05F;
+
+	// --- wear: what Create is told ------------------------------------------
+
+	/**
+	 * Step the engine's effective cylinder capacity is reported to Create in,
+	 * measured in cylinder-equivalents.
+	 *
+	 * <p>Create caches one capacity number per source and re-propagating it is not
+	 * free, while wear moves by something like 1e-6 per revolution - so publishing
+	 * the raw figure would rebuild the kinetic network's stress bookkeeping
+	 * several times a second for a change no player could ever see. Quantising to
+	 * a hundredth of a cylinder turns a whole cylinder's lifetime into at most 35
+	 * updates, which is the entire point.
+	 *
+	 * <p>Everything that is <i>not</i> slow drift still publishes at once: a
+	 * cylinder starting or stopping firing, a Piston Assembly swapped, the engine
+	 * catching or stalling, the structure changing. See
+	 * {@code EngineState#updatePublishedCapacity}.
+	 */
+	public static final float CAPACITY_QUANTUM = 0.01F;
+
+	/**
+	 * Step the synchronised wear figures are quantised to before the block entity
+	 * decides whether the client needs telling.
+	 *
+	 * <p>Same reasoning as the capacity quantum, applied to the wire instead of to
+	 * Create: the server owns the exact value and saves it exactly, and the client
+	 * only ever needs enough to name a condition band and trace the same
+	 * coast-down curve. A hundredth is far finer than either needs.
+	 */
+	public static final float WEAR_SYNC_QUANTUM = 0.01F;
+
+	// --- wear: starting ------------------------------------------------------
+
+	/**
+	 * Most extra firing events a start attempt asks for because the engine has
+	 * lost compression, on top of the healthy count.
+	 *
+	 * <p>Scaled by how much compression is actually gone, so a moderately worn
+	 * engine is barely harder to start and one at the service limit takes three
+	 * more cycles. That is on top of the weaker firing kicks worn cylinders
+	 * already produce, which is where most of the difficulty comes from - this is
+	 * only what stops a badly worn engine from catching as decisively as a new one.
+	 */
+	public static final float START_CYCLES_WEAR_PENALTY = 3.0F;
+
+	// --- wear: sound ---------------------------------------------------------
+
+	/**
+	 * Depth of the slow chatter a mechanically worn engine gets, as a fraction of
+	 * its pitch, at the service limit.
+	 *
+	 * <p>Reuses the existing dry-engine roughness mechanism rather than adding a
+	 * sound asset: a pure function of game time, so it cannot desynchronise
+	 * between players and adds no state anywhere. It fades in from
+	 * {@link #CONDITION_WORN_WEAR} so that a healthy engine is untouched, and it
+	 * is deliberately smaller and slower than the dry wobble - a tired bearing, not
+	 * a cartoon.
+	 */
+	public static final float SOUND_WEAR_ROUGHNESS = 0.025F;
+
+	/** Wobble rate of that chatter, in radians per tick. Slower than the dry wobble. */
+	public static final float SOUND_WEAR_ROUGHNESS_RATE = 0.31F;
+
+	// --- wear: development ---------------------------------------------------
+
+	/**
+	 * System property that multiplies every wear rate, for development and manual
+	 * testing only.
+	 *
+	 * <p>Real wear is measured in tens of hours, which makes testing it by playing
+	 * impossible. Setting {@code -Dengineered_combustion.wearMultiplier=2000} on a
+	 * development client compresses a whole engine's life into a couple of
+	 * minutes, which is what the milestone's manual test matrix needs.
+	 *
+	 * <p>A JVM property rather than a command or a config, deliberately: it cannot
+	 * be reached from inside a running game, so there is no cheat button on a
+	 * Survival server, and it needs no new command surface. It is read once, at
+	 * class initialisation, and it is ignored unless it parses to a positive
+	 * number no larger than {@link #MAX_WEAR_MULTIPLIER}.
+	 */
+	public static final String WEAR_MULTIPLIER_PROPERTY = "engineered_combustion.wearMultiplier";
+
+	/** Ceiling on that property, so a typo cannot make wear meaningless. */
+	public static final float MAX_WEAR_MULTIPLIER = 100000.0F;
+
+	private static final float WEAR_MULTIPLIER = readWearMultiplier();
+
+	/**
+	 * Global multiplier on every accumulated wear increment. 1 in any normal game.
+	 *
+	 * @see #WEAR_MULTIPLIER_PROPERTY
+	 */
+	public static float wearRateMultiplier() {
+		return WEAR_MULTIPLIER;
+	}
+
+	private static float readWearMultiplier() {
+		try {
+			String raw = System.getProperty(WEAR_MULTIPLIER_PROPERTY);
+			if (raw == null)
+				return 1.0F;
+			float parsed = Float.parseFloat(raw.trim());
+			return parsed > 0.0F && parsed <= MAX_WEAR_MULTIPLIER ? parsed : 1.0F;
+		} catch (RuntimeException ignored) {
+			// A malformed or unreadable property must never stop an engine from
+			// running. The honest fallback is the shipping rate.
+			return 1.0F;
+		}
+	}
 
 	// --- helpers ------------------------------------------------------------
 

@@ -105,25 +105,34 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	 * <p>Zero is returned for anything that is not a genuinely running engine:
 	 * cranking, starting, coasting, stalling, unfuelled, unlit, or simply being
 	 * spun by the engine next door. <b>Turning is not generating.</b>
+	 *
+	 * <p>What it is multiplied by is no longer a count of cylinders but their
+	 * <i>effective</i> number - each firing cylinder weighted by the compression it
+	 * has left - so a worn engine supplies less without any cylinder having to stop
+	 * counting as active.
 	 */
 	@Override
 	public float calculateAddedStressCapacity() {
-		// Scaled by the number of cylinders that are GENUINELY FIRING, which is the
-		// whole of how a bigger engine is a more powerful one. An inline-4 supplies
-		// four times what a single does because four charges burn per revolution
-		// instead of one; an inline-4 with a dead Spark Plug supplies three quarters
-		// of that; and a dry engine being spun by a neighbour supplies nothing at
-		// all, however many cylinders it has, because none of them are burning.
+		// Scaled by the cylinders that are GENUINELY FIRING, each weighted by how much
+		// compression it has left. That is the whole of how a bigger engine is a more
+		// powerful one and how a tired engine is a weaker one, in one number:
 		//
-		// Cylinder count alone is deliberately never the multiplier. That would make
-		// a wall of unfuelled crankcases free power - the exploit this mod already
-		// closed once, at four times the scale.
-		int firing = firingCylinders();
-		if (firing <= 0) {
+		//   healthy inline-4        1.0 + 1.0 + 1.0 + 1.0 = 4.00
+		//   one bore worn out       1.0 + 1.0 + 0.65 + 1.0 = 3.65
+		//   one Spark Plug pulled   1.0 + 1.0 + 0.0 + 1.0 = 3.00
+		//   motored by a neighbour                          0.00
+		//
+		// The last line is the exploit this mod closed once and must keep closed: a
+		// dry engine being spun supplies nothing however many cylinders it has,
+		// because none of them are burning. Cylinder count alone is deliberately never
+		// the multiplier, and neither is cylinder HEALTH - a worn cylinder that is
+		// firing still contributes, it just contributes less.
+		float cylinders = capacityFactor();
+		if (cylinders <= 0.0F) {
 			lastCapacityProvided = 0.0F;
 			return 0.0F;
 		}
-		float capacity = super.calculateAddedStressCapacity() * firing;
+		float capacity = super.calculateAddedStressCapacity() * cylinders;
 		lastCapacityProvided = capacity;
 		return capacity;
 	}
@@ -147,9 +156,10 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	 * thing, and it also ignored any datapack that had retuned the capacity.
 	 *
 	 * <p>Identical on both sides. Every input is synchronised: Create synchronises
-	 * its stress values to clients so its own goggle overlays can print them, the
-	 * published speed travels in the engine's block entity data, and the firing
-	 * cylinder count is now the server's own capacity mask.
+	 * its stress values to clients so its own goggle overlays can print them, and
+	 * both the published speed and the capacity factor travel in the engine's block
+	 * entity data - the latter because it is derived from combustion ages and
+	 * per-cylinder compression the client is never sent.
 	 */
 	public float getEngineGeneratedCapacity() {
 		return calculateAddedStressCapacity() * Math.abs(getGeneratedSpeed());
@@ -195,17 +205,21 @@ public class EngineFlywheelBlockEntity extends GeneratingKineticBlockEntity {
 	}
 
 	/**
-	 * How many cylinders of the engine on the other side of this flywheel are
-	 * actually burning fuel. Zero for a flywheel with no engine of its own.
+	 * How many healthy cylinders' worth of output the engine on the other side of
+	 * this flywheel is providing. Zero for a flywheel with no engine of its own.
 	 *
 	 * <p>The crankshaft this flywheel touches may be a follower of a four-cylinder
 	 * engine; it answers for the whole engine, not for its own bore.
+	 *
+	 * <p>The generation gate is kept in front of it deliberately, as belt to the
+	 * simulation's braces: the engine already publishes 0 when it is not generating,
+	 * and this makes a dead engine's capacity impossible rather than merely correct.
 	 */
-	private int firingCylinders() {
+	private float capacityFactor() {
 		if (!isEngineGenerating())
-			return 0;
+			return 0.0F;
 		CrankshaftBlockEntity crankshaft = getAdjacentCrankshaft();
-		return crankshaft == null ? 0 : crankshaft.getFiringCylinderCountFor(worldPosition);
+		return crankshaft == null ? 0.0F : crankshaft.getCapacityFactorFor(worldPosition);
 	}
 
 	/** Called by the crankshaft when the engine's rotational output changed. */
