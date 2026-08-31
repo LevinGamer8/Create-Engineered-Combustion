@@ -2,14 +2,18 @@ package dev.engineeredcombustion.content.engine.cylinder;
 
 import org.jetbrains.annotations.Nullable;
 
+import dev.engineeredcombustion.content.engine.EngineComponents;
+import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
+import dev.engineeredcombustion.foundation.ECLang;
+import dev.engineeredcombustion.registry.ECDataComponents;
 import dev.engineeredcombustion.registry.ECItems;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -69,9 +73,15 @@ public class CylinderBlock extends Block implements EntityBlock {
 		if (!(level.getBlockEntity(pos) instanceof CylinderBlockEntity cylinder))
 			return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
 
-		if (stack.is(ECItems.PISTON_ASSEMBLY.get()))
-			return install(cylinder.hasPistonAssembly(), cylinder::installPistonAssembly, state, level, pos, player,
-				stack);
+		if (stack.is(ECItems.PISTON_ASSEMBLY.get())) {
+			// The assembly's own condition comes in with it. A freshly crafted part
+			// carries none and restores this cylinder's compression completely; one
+			// that has been in an engine before is exactly as tired as it was when it
+			// came out, which is the whole of the no-free-repair rule.
+			float wear = ECDataComponents.wearOf(stack, ECDataComponents.PISTON_WEAR);
+			return install(cylinder.hasPistonAssembly(), () -> cylinder.installPistonAssembly(wear), state, level,
+				pos, player, stack);
+		}
 		if (stack.is(ECItems.SPARK_PLUG.get()))
 			return install(cylinder.hasSparkPlug(), cylinder::installSparkPlug, state, level, pos, player, stack);
 		return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
@@ -118,13 +128,69 @@ public class CylinderBlock extends Block implements EntityBlock {
 		// the answer is that part, wherever the player hit the block.
 		boolean takePlug = plug && (!piston || hitOnHead(pos, hitResult));
 
+		// Pulling a piston out of a turning engine is not a thing anyone does. The
+		// plug is not covered: it screws into the head from outside and taking one out
+		// of a running engine is a perfectly ordinary way to shut a cylinder down.
+		if (!takePlug && !engineIsAtRest(level, pos)) {
+			if (!level.isClientSide)
+				ECLang.translate("gui.stop_engine_before_servicing")
+					.style(ChatFormatting.RED)
+					.sendStatus(player);
+			// Claimed rather than passed, so the click does not fall through to placing
+			// a block against the cylinder the player was trying to service.
+			return InteractionResult.sidedSuccess(level.isClientSide);
+		}
+
 		if (!level.isClientSide) {
-			boolean removed = takePlug ? cylinder.removeSparkPlug() : cylinder.removePistonAssembly();
-			if (removed)
-				recover(level, pos, state, player, takePlug ? ECItems.SPARK_PLUG.get()
-					: ECItems.PISTON_ASSEMBLY.get());
+			if (takePlug) {
+				if (cylinder.removeSparkPlug())
+					recover(level, pos, state, player, new ItemStack(ECItems.SPARK_PLUG.get()));
+			} else {
+				// One call takes the part out AND hands back its condition, so the two
+				// can never happen apart - see CylinderBlockEntity#takePistonAssemblyWear.
+				float wear = cylinder.takePistonAssemblyWear();
+				if (wear >= 0.0F)
+					recover(level, pos, state, player, pistonAssembly(wear));
+			}
 		}
 		return InteractionResult.sidedSuccess(level.isClientSide);
+	}
+
+	/**
+	 * A Piston Assembly item carrying the condition the one that came out was in.
+	 *
+	 * <p>The single place a removed assembly becomes an item, so a part recovered by
+	 * hand and one recovered by mining the cylinder are indistinguishable - which
+	 * they must be, or one of the two routes would be a free repair.
+	 */
+	private static ItemStack pistonAssembly(float wear) {
+		ItemStack stack = new ItemStack(ECItems.PISTON_ASSEMBLY.get());
+		ECDataComponents.setWear(stack, ECDataComponents.PISTON_WEAR, wear);
+		return stack;
+	}
+
+	/**
+	 * Whether the engine this cylinder belongs to has genuinely stopped.
+	 *
+	 * <p>Asked of the crankshaft below, which resolves its engine's controller, so
+	 * the answer is about the whole engine rather than this one section: an inline-4
+	 * turning at 190 RPM is not a machine to be reaching into, whichever bore the
+	 * player is looking at.
+	 *
+	 * <p>It asks about <i>rotation</i>, not about the engine phase, so it covers an
+	 * engine being motored by another Create source and one coasting down after the
+	 * fuel ran out, neither of which is "running" and both of which have a piston
+	 * moving in the bore. A cylinder with no crankshaft under it is not part of any
+	 * engine, so there is nothing to stop.
+	 */
+	private static boolean engineIsAtRest(Level level, BlockPos pos) {
+		BlockPos crankshaftPos = EngineComponents.crankshaftPosFromCylinder(pos);
+		if (!level.isLoaded(crankshaftPos))
+			return true;
+		if (!(level.getBlockEntity(crankshaftPos) instanceof CrankshaftBlockEntity crankshaft))
+			return true;
+		return crankshaft.getEngineState()
+			.isAtRest();
 	}
 
 	/** Whether the click landed on the head casting rather than on the barrel. */
@@ -133,8 +199,7 @@ public class CylinderBlock extends Block implements EntityBlock {
 	}
 
 	/** Hands a removed part back, dropping it only when the inventory is full. */
-	private static void recover(Level level, BlockPos pos, BlockState state, Player player, Item item) {
-		ItemStack recovered = new ItemStack(item);
+	private static void recover(Level level, BlockPos pos, BlockState state, Player player, ItemStack recovered) {
 		if (!player.getInventory()
 			.add(recovered))
 			popResource(level, pos, recovered);
@@ -151,8 +216,11 @@ public class CylinderBlock extends Block implements EntityBlock {
 	@Override
 	public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
 		if (!state.is(newState.getBlock()) && level.getBlockEntity(pos) instanceof CylinderBlockEntity cylinder) {
+			// With its condition on it. Breaking the cylinder is the other way a worn
+			// assembly leaves an engine, and it must be worth exactly what pulling it
+			// out by hand is worth - otherwise mining the block would be the repair.
 			if (cylinder.hasPistonAssembly())
-				popResource(level, pos, new ItemStack(ECItems.PISTON_ASSEMBLY.get()));
+				popResource(level, pos, pistonAssembly(cylinder.getPistonWear()));
 			if (cylinder.hasSparkPlug())
 				popResource(level, pos, new ItemStack(ECItems.SPARK_PLUG.get()));
 		}

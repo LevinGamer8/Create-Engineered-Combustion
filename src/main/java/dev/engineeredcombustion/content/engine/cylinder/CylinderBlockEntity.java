@@ -8,6 +8,8 @@ import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
 
 import dev.engineeredcombustion.content.engine.CrankMath;
 import dev.engineeredcombustion.content.engine.EngineComponents;
+import dev.engineeredcombustion.content.engine.EngineWearMath;
+import dev.engineeredcombustion.content.engine.WearCondition;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
@@ -47,9 +49,41 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 
 	private static final String KEY_PISTON_INSTALLED = "PistonInstalled";
 	private static final String KEY_SPARK_PLUG_INSTALLED = "SparkPlugInstalled";
+	private static final String KEY_PISTON_WEAR = "PistonWear";
 
 	private boolean pistonInstalled;
 	private boolean sparkPlugInstalled;
+
+	/**
+	 * Compression wear of the Piston Assembly currently in this bore, {@code [0, 1]}.
+	 *
+	 * <p><b>The part's wear, being kept for it while it is installed.</b> It arrives
+	 * with the item and leaves with the item - see
+	 * {@link #installPistonAssembly(float)} and {@link #takePistonAssemblyWear()} -
+	 * which is what makes pulling a tired piston out and pushing it back in do
+	 * nothing at all. The cylinder bore itself is deliberately not modelled
+	 * separately yet, which is why fitting a new assembly restores this cylinder's
+	 * compression completely.
+	 *
+	 * <p>Meaningless while no assembly is fitted, and forced to zero then, so an
+	 * empty bore can never hand its previous occupant's wear to the next one.
+	 *
+	 * <p>Absent from an old world's save data, and {@code getFloat} answers 0 for a
+	 * missing key - which is exactly right: nothing that existed before this
+	 * milestone has ever worn.
+	 */
+	private float pistonWear;
+
+	/**
+	 * The last wear figure the client was told, quantised.
+	 *
+	 * <p>Wear moves by about a millionth per revolution and the client only ever
+	 * needs enough of it to name a condition band, so the server keeps the exact
+	 * value and synchronises a hundredth. Without this a running engine would send a
+	 * block entity update for every cylinder on every tick, which is precisely the
+	 * traffic the combustion payload was introduced to remove.
+	 */
+	private float syncedPistonWear;
 
 	/** Client-side render cache only; never used for game logic. */
 	@Nullable
@@ -63,10 +97,20 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		return pistonInstalled;
 	}
 
-	/** @return false when a piston assembly is already installed. */
-	public boolean installPistonAssembly() {
+	/**
+	 * Fits an assembly that has already done {@code wear} worth of work.
+	 *
+	 * <p>Zero for a freshly crafted part, and whatever the item was carrying for one
+	 * that has been in an engine before. <b>This is the no-free-repair rule</b>: the
+	 * cylinder does not decide the condition of the part it is given, it is told.
+	 *
+	 * @return false when an assembly is already installed
+	 */
+	public boolean installPistonAssembly(float wear) {
 		if (pistonInstalled)
 			return false;
+		pistonWear = EngineWearMath.clampWear(wear);
+		syncedPistonWear = EngineWearMath.quantiseWear(pistonWear);
 		setPistonInstalled(true);
 		return true;
 	}
@@ -77,6 +121,74 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 			return false;
 		setPistonInstalled(false);
 		return true;
+	}
+
+	/**
+	 * Takes the assembly out and hands back the wear to put on the item.
+	 *
+	 * <p>One call rather than a read and a remove, because the two must not be able
+	 * to happen apart: reading without removing would duplicate the wear onto an
+	 * item while the cylinder kept it, and removing without reading would destroy
+	 * it. Returns -1 when there was nothing fitted, which is distinguishable from a
+	 * pristine assembly's 0.
+	 */
+	public float takePistonAssemblyWear() {
+		if (!pistonInstalled)
+			return -1.0F;
+		float wear = pistonWear;
+		setPistonInstalled(false);
+		return wear;
+	}
+
+	/**
+	 * Wear of the assembly in this bore, or 0 when there is none.
+	 *
+	 * <p>Server-exact; the client's copy is quantised to a hundredth, which is finer
+	 * than any condition band it is used to name.
+	 */
+	public float getPistonWear() {
+		return pistonInstalled ? pistonWear : 0.0F;
+	}
+
+	/** How much compression this cylinder still has, as a fraction of a healthy one. */
+	public float getCompressionEfficiency() {
+		return EngineWearMath.compressionEfficiency(getPistonWear());
+	}
+
+	/** This cylinder's compression, in the words the player is shown. */
+	public WearCondition getCompressionCondition() {
+		return WearCondition.of(getPistonWear());
+	}
+
+	/**
+	 * Wears the installed assembly by one tick's worth of work.
+	 *
+	 * <p>Called from the engine controller on the server, once per tick, with the
+	 * increment the pure wear model computed - see
+	 * {@code CrankshaftBlockEntity#accumulateWear}. Nothing is decided here; this
+	 * only keeps the number.
+	 *
+	 * <p>It deliberately does <b>not</b> synchronise on every call. The exact value
+	 * is kept on the server and written to disk; the client is told only when the
+	 * quantised figure actually moves, which over a whole piston's service life is a
+	 * hundred updates rather than one per tick.
+	 */
+	public void addPistonWear(float delta) {
+		if (!pistonInstalled || delta <= 0.0F || level == null || level.isClientSide)
+			return;
+		float updated = EngineWearMath.clampWear(pistonWear + delta);
+		if (updated == pistonWear)
+			return;
+		pistonWear = updated;
+
+		float quantised = EngineWearMath.quantiseWear(pistonWear);
+		if (quantised == syncedPistonWear)
+			return;
+		syncedPistonWear = quantised;
+		// setChanged as part of the update: this is the point at which the value on
+		// disk would be meaningfully stale, and it is rare enough to be free.
+		setChanged();
+		level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
 	}
 
 	public boolean hasSparkPlug() {
@@ -103,6 +215,13 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 
 	private void setPistonInstalled(boolean installed) {
 		pistonInstalled = installed;
+		if (!installed) {
+			// An empty bore has no condition. Leaving the old figure behind would hand
+			// the next assembly fitted here the previous one's wear - which is the
+			// no-free-repair rule running backwards, and just as wrong.
+			pistonWear = 0.0F;
+			syncedPistonWear = 0.0F;
+		}
 		onInstalledPartsChanged();
 	}
 
@@ -203,6 +322,12 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		// false for a missing key - so an existing world loads its engines with no
 		// plug fitted, which is exactly right: nobody has ever installed one.
 		sparkPlugInstalled = tag.getBoolean(KEY_SPARK_PLUG_INSTALLED);
+		// Absent on a cylinder saved before wear existed, and getFloat answers 0 for a
+		// missing key - so every piston in every existing world comes back pristine,
+		// which is the only honest answer for a part that has never been worn by
+		// anything.
+		pistonWear = pistonInstalled ? EngineWearMath.clampWear(tag.getFloat(KEY_PISTON_WEAR)) : 0.0F;
+		syncedPistonWear = EngineWearMath.quantiseWear(pistonWear);
 	}
 
 	@Override
@@ -210,6 +335,12 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 		super.saveAdditional(tag, registries);
 		tag.putBoolean(KEY_PISTON_INSTALLED, pistonInstalled);
 		tag.putBoolean(KEY_SPARK_PLUG_INSTALLED, sparkPlugInstalled);
+		// The server's exact figure, both to disk and to the client. It is one float
+		// on a packet that is only sent when something about this cylinder actually
+		// changed, so there is nothing to save by quantising it here - the saving is
+		// in not sending the packet, which addPistonWear does.
+		if (pistonInstalled)
+			tag.putFloat(KEY_PISTON_WEAR, pistonWear);
 	}
 
 	@Override

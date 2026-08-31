@@ -7,6 +7,7 @@ import com.mojang.logging.LogUtils;
 import dev.engineeredcombustion.network.ECPackets;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECBlocks;
+import dev.engineeredcombustion.registry.ECDataComponents;
 import dev.engineeredcombustion.registry.ECCreativeTabs;
 import dev.engineeredcombustion.registry.ECFluids;
 import dev.engineeredcombustion.registry.ECItems;
@@ -42,6 +43,10 @@ public class EngineeredCombustion {
 		ECItems.register(modEventBus);
 		ECBlockEntityTypes.register(modEventBus);
 		ECCreativeTabs.register(modEventBus);
+		// The wear an engine part carries when it is not installed in anything. See
+		// ECDataComponents: this is what stops breaking and replacing a worn part from
+		// being a free repair.
+		ECDataComponents.register(modEventBus);
 		ECSounds.register(modEventBus);
 
 		modEventBus.addListener(EngineeredCombustion::commonSetup);
