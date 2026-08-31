@@ -86,10 +86,19 @@ public final class EngineWearMath {
 	 * How much harder a worn engine is to turn, as a multiple of its healthy
 	 * internal friction.
 	 *
-	 * <p>Linear in the engine's <i>average</i> bearing wear - see
+	 * <pre>
+	 * multiplier = 1 + LINEAR * wear + QUADRATIC * wear^2
+	 * </pre>
+	 *
+	 * <p>In the engine's <i>average</i> bearing wear - see
 	 * {@link EngineWearInputs#averageBearingWear()} for why the average rather than
 	 * the worst - from 1.0 pristine to
 	 * {@code 1 + MAX_EXTRA_BEARING_FRICTION} at the service limit.
+	 *
+	 * <p>Mostly quadratic, so a healthy engine pays essentially nothing and a
+	 * critically worn one pays all of it. That is the same shape as
+	 * {@link #compressionEfficiency(float)} and for the same reason: wear must be a
+	 * consequence of abuse, not a slow tax on playing normally.
 	 *
 	 * <p>Multiplies the friction torque the engine already fights, so the
 	 * consequences are the ones a real worn engine has and none of them had to be
@@ -98,7 +107,9 @@ public final class EngineWearMath {
 	 * - to hold any given speed.
 	 */
 	public static float bearingFrictionMultiplier(float averageBearingWear) {
-		return 1.0F + clampWear(averageBearingWear) * EngineTuning.MAX_EXTRA_BEARING_FRICTION;
+		float wear = clampWear(averageBearingWear);
+		return 1.0F + EngineTuning.BEARING_FRICTION_LINEAR * wear
+			+ EngineTuning.BEARING_FRICTION_QUADRATIC * wear * wear;
 	}
 
 	// --- operating conditions to wear rate ----------------------------------
@@ -133,16 +144,26 @@ public final class EngineWearMath {
 	 * factor    = 1 + RPM_STRESS * stress^2 + OVERSPEED * overspeed^2
 	 * </pre>
 	 *
-	 * <p>Two quadratics that meet at the rated speed, so the curve is continuous
-	 * and has a continuous slope through it: an engine that ticks one RPM over its
-	 * rating is charged essentially nothing extra, and there is no threshold
-	 * anywhere for a governor oscillation to trip.
+	 * <p>Two quadratics that meet at the rated speed. The factor is continuous
+	 * there - smooth to seven digits either side - and the overspeed term starts
+	 * from zero slope, so an engine that ticks one RPM over its rating is charged
+	 * about a sixth of a percent extra and there is no threshold anywhere for a
+	 * governor oscillation to trip.
+	 *
+	 * <p>The slope does step at the join, by about 0.0036 per RPM, because the
+	 * stress term stops growing where it clamps. That step is <i>downwards</i> -
+	 * the penalty briefly gets cheaper per RPM as the engine passes its rating,
+	 * before the overspeed term takes over - so it is a kink in the player's
+	 * favour and not a cliff. Removing it would mean letting the stress term keep
+	 * climbing above the rating, which would double-count the same overspeed the
+	 * second term already charges for.
 	 *
 	 * <p>Below the rating the penalty is mild by design - about 1.04x at idle,
 	 * 1.35x flat out - because the per-revolution accounting has already charged a
 	 * fast engine three times as much as a slow one. Above it the second term
 	 * takes over hard, which is what makes an engine geared up by a network far
-	 * stronger than itself the fastest way to destroy one.
+	 * stronger than itself the fastest way to destroy one, and after the 13.1
+	 * rebalance the only way to destroy a well-lubricated one at all.
 	 *
 	 * <p>Uses the <b>mechanical</b> speed, always. An engine being motored at 220
 	 * RPM is really turning at 220 RPM, whatever it thinks it is generating.

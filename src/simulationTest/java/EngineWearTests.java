@@ -216,7 +216,12 @@ public class EngineWearTests {
 		wornEngineIsHarderToStartButStillStarts();
 		motoredDryEngineWearsBearingsAndNotCombustion();
 		healthyWearIsSlowEnoughToPlayWith();
+		poorLubricationIsTheRealThreat();
+		overspeedIsTheAbuseThatMattersOnGoodOil();
+		combinedAbuseIsWorseThanAnyOnePart();
+		aHealthyEngineIsAFullStrengthEngine();
 		capacityDoesNotChangeEveryTick();
+		reportCalibrationTable();
 
 		System.out.println();
 		if (failures > 0) {
@@ -338,11 +343,37 @@ public class EngineWearTests {
 		check("and moves smoothly - no cliff anywhere", largestStep < 1.0E-3F,
 			String.format("largest step %.2e over a 1e-4 change in wear", largestStep));
 
-		// The shape the milestone asks for.
-		check("moderately worn is around 0.90", near(EngineWearMath.compressionEfficiency(0.35F), 0.90F, 0.01F),
-			String.format("%.3f at 0.35 wear", EngineWearMath.compressionEfficiency(0.35F)));
-		check("worn is around 0.81", near(EngineWearMath.compressionEfficiency(0.60F), 0.81F, 0.01F),
-			String.format("%.3f at 0.60 wear", EngineWearMath.compressionEfficiency(0.60F)));
+		// The shape 13.1 asks for: almost nothing at the healthy end, all of it at
+		// the worn end. A GOOD engine must not feel second-hand, and the trap this
+		// guards against is reading 10 % wear as 10 % power loss.
+		float atGood = EngineWearMath.compressionEfficiency(EngineTuning.CONDITION_GOOD_WEAR);
+		float atUsed = EngineWearMath.compressionEfficiency(EngineTuning.CONDITION_USED_WEAR);
+		float atWorn = EngineWearMath.compressionEfficiency(EngineTuning.CONDITION_WORN_WEAR);
+		float atPoor = EngineWearMath.compressionEfficiency(EngineTuning.CONDITION_POOR_WEAR);
+		float atCritical = EngineWearMath.compressionEfficiency(EngineTuning.CONDITION_CRITICAL_WEAR);
+
+		check("a GOOD engine is essentially at full compression", atGood >= 0.98F,
+			String.format("%.4f at the GOOD boundary", atGood));
+		check("a USED engine has lost only a little", atUsed >= 0.94F && atUsed < atGood,
+			String.format("%.4f at the USED boundary", atUsed));
+		check("a WORN engine has lost something clearly noticeable", atWorn <= 0.92F && atWorn >= 0.85F,
+			String.format("%.4f at the WORN boundary", atWorn));
+		check("a POOR engine is badly down", atPoor <= 0.85F && atPoor >= 0.78F,
+			String.format("%.4f at the POOR boundary", atPoor));
+		check("and a CRITICAL one is severely down", atCritical <= 0.75F,
+			String.format("%.4f at the CRITICAL boundary", atCritical));
+
+		// The curve must accelerate: each band costs more than the one before it, or
+		// the loss is really linear wearing a quadratic's clothes.
+		float goodCost = 1.0F - atGood;
+		float usedCost = atGood - atUsed;
+		float wornCost = atUsed - atWorn;
+		float poorCost = atWorn - atPoor;
+		float criticalCost = atPoor - atCritical;
+		check("and every band costs more compression than the one before it",
+			goodCost < usedCost && usedCost < wornCost && wornCost < poorCost && poorCost < criticalCost,
+			String.format("%.4f < %.4f < %.4f < %.4f < %.4f", goodCost, usedCost, wornCost, poorCost,
+				criticalCost));
 
 		// J. The floor is a real floor, and it is where it was designed to be.
 		float atLimit = EngineWearMath.compressionEfficiency(1.0F);
@@ -394,10 +425,26 @@ public class EngineWearTests {
 		check("cylinders: normal < low < dry", normalBore < lowBore && lowBore < dryBore,
 			String.format("%.3e < %.3e < %.3e", normalBore, lowBore, dryBore));
 
-		check("running dry is severe rather than merely worse", dry / normal >= 25.0F,
-			String.format("%.0fx normal", dry / normal));
-		check("but not instantly destructive - a dry engine survives minutes, not seconds",
-			dry / normal <= 40.0F, String.format("%.0fx normal", dry / normal));
+		// LOW is a clear step, not a rounding error, and DRY is a different league
+		// again. The absolute multipliers are large because the healthy baseline is
+		// tiny; what matters is the ORDER and the resulting lifetimes, both checked
+		// against real durations below and in section O.
+		check("low oil is clearly worse than normal, not marginally", low / normal >= 10.0F,
+			String.format("%.0fx normal", low / normal));
+		check("and still short of total failure", low / normal <= 25.0F,
+			String.format("%.0fx normal", low / normal));
+		check("running dry is dramatically worse than merely low", dry / low >= 20.0F,
+			String.format("%.0fx low oil", dry / low));
+
+		// The bound that actually matters: a brief mistake must cost nothing a
+		// player could ever see. Thirty seconds of an empty sump, at the engine's
+		// own dry top speed, must not move it out of PRISTINE.
+		float thirtyDrySeconds = EngineWearMath.bearingWearPerRevolution(LubricationState.DRY, 111.0F, 0.0F)
+			* 111.0F * 0.5F;
+		check("but a brief dry moment is still forgiven",
+			WearCondition.of(thirtyDrySeconds) == WearCondition.PRISTINE,
+			String.format("%.5f wear -> %s after thirty dry seconds", thirtyDrySeconds,
+				WearCondition.of(thirtyDrySeconds)));
 
 		// And through a real engine: the same run, three oil states.
 		float dryWear = runAndMeasureBearingWear(LubricationState.DRY);
@@ -424,7 +471,8 @@ public class EngineWearTests {
 		float unfiltered = EngineWearMath.cylinderWearPerRevolution(LubricationState.NORMAL, rpm, 0.0F, false);
 		check("an unfiltered cylinder wears faster", filtered < unfiltered,
 			String.format("%.3e < %.3e", filtered, unfiltered));
-		check("by the intended several-times factor", near(unfiltered / filtered, 4.0F, 0.01F),
+		check("by the intended several-times factor",
+			unfiltered / filtered >= 5.0F && unfiltered / filtered <= 10.0F,
 			String.format("%.1fx", unfiltered / filtered));
 
 		float filteredBurn = EngineWearMath.cylinderWearPerCombustion(LubricationState.NORMAL, rpm, 0.0F, true);
@@ -496,24 +544,73 @@ public class EngineWearTests {
 		check("and nothing exactly at it", EngineWearMath.overspeedFraction(rated) == 0.0F, "0 at the rating");
 
 		// Continuity, sampled finely across the join and well past it.
-		float previous = EngineWearMath.rpmWearFactor(rated - 20.0F);
-		float largestStep = 0.0F;
-		for (int step = 1; step <= 40000; step++) {
-			float rpm = rated - 20.0F + step * 0.01F;
+		//
+		// The property being asserted is that the factor never JUMPS: between two
+		// speeds 0.01 RPM apart it may only move by what the curve's own steepness
+		// there allows. A cliff would blow straight through that bound; a merely
+		// steep quadratic cannot.
+		//
+		// Deliberately not a second-difference test. The curve has one harmless kink
+		// - the stress term stops growing where it clamps at the rating, so the slope
+		// steps DOWN by about 0.0036 per RPM exactly as the overspeed term starts
+		// from zero slope. That is a change of steepness in the player's favour, not
+		// a discontinuity in the wear rate, and the value either side of the rating
+		// is smooth to seven digits. Sampling is capped a little past Create's 256
+		// RPM ceiling because beyond that the factor is large enough that float ULP
+		// noise, not the curve, would be what a fine-grained test measured.
+		float sampleStep = 0.01F;
+		float from = rated - 20.0F;
+		float to = 300.0F;
+		int samples = Math.round((to - from) / sampleStep);
+		float previous = EngineWearMath.rpmWearFactor(from);
+		float worstExcess = 0.0F;
+		float worstAt = from;
+		for (int step = 1; step <= samples; step++) {
+			float rpm = from + step * sampleStep;
 			float now = EngineWearMath.rpmWearFactor(rpm);
-			largestStep = Math.max(largestStep, Math.abs(now - previous));
+			// The steepest the curve can analytically be over this pair, plus a few
+			// ULP of headroom for the float arithmetic itself.
+			float slope = 2.0F * EngineTuning.OVERSPEED_WEAR_COEFFICIENT
+				* EngineWearMath.overspeedFraction(rpm) / EngineTuning.RATED_CONTINUOUS_RPM
+				+ 2.0F * EngineTuning.RPM_STRESS_COEFFICIENT / EngineTuning.RATED_CONTINUOUS_RPM;
+			float allowed = slope * sampleStep + 8.0F * Math.ulp(now);
+			float excess = Math.abs(now - previous) - allowed;
+			if (excess > worstExcess) {
+				worstExcess = excess;
+				worstAt = rpm;
+			}
 			previous = now;
 		}
-		check("the factor is continuous through the rating and beyond", largestStep < 0.01F,
-			String.format("largest step %.5f over a 0.01 RPM change", largestStep));
+		check("the factor never jumps, through the rating or beyond it", worstExcess <= 0.0F,
+			String.format("%d samples from %.0f to %.0f RPM, worst overshoot %.3e at %.2f RPM", samples, from,
+				to, Math.max(worstExcess, 0.0F), worstAt));
 
-		// A one-RPM excursion must cost essentially nothing.
+		// And the value itself is smooth across the join, which is the statement the
+		// kink above could otherwise be mistaken for breaking.
+		float justUnder = EngineWearMath.rpmWearFactor(rated - 0.01F);
+		float justOver = EngineWearMath.rpmWearFactor(rated + 0.01F);
+		check("and it is smooth to either side of the rating itself",
+			Math.abs(justOver - justUnder) < 1.0E-4F,
+			String.format("%.7f just under, %.7f just over", justUnder, justOver));
+
+		// A one-RPM excursion must cost essentially nothing. Stated as a fraction,
+		// because that is what "essentially nothing" means when the baseline moves:
+		// half a percent more wear for a whole RPM over the rating.
 		float atRating = EngineWearMath.rpmWearFactor(rated);
 		float oneOver = EngineWearMath.rpmWearFactor(rated + 1.0F);
-		check("one RPM over the rating is not a cliff", oneOver - atRating < 0.001F,
-			String.format("%.5f -> %.5f", atRating, oneOver));
+		check("one RPM over the rating is not a cliff", oneOver / atRating < 1.005F,
+			String.format("%.5f -> %.5f, %.3f%% more", atRating, oneOver, (oneOver / atRating - 1.0F) * 100.0F));
 
-		// But sustained overspeed genuinely is the fastest way to ruin an engine.
+		// Nor is a governor ripple. The engine may legitimately overshoot its target
+		// on the way up, all the way to its own MAX_RPM, and that must not be a
+		// meaningful cost either.
+		float atGovernorCeiling = EngineWearMath.rpmWearFactor(EngineTuning.MAX_RPM);
+		check("nor is the engine's own overshoot ceiling", atGovernorCeiling / atRating < 1.5F,
+			String.format("%.3fx at the engine's own %.0f RPM limit", atGovernorCeiling / atRating,
+				EngineTuning.MAX_RPM));
+
+		// But sustained overspeed genuinely is the fastest way to ruin an engine, and
+		// after the rebalance it is the ONLY way to ruin a well-oiled one.
 		float atCreateCeiling = EngineWearMath.rpmWearFactor(256.0F);
 		check("Create's default ceiling is several times as hard on it", atCreateCeiling > 3.0F,
 			String.format("%.2fx at 256 RPM", atCreateCeiling));
@@ -835,54 +932,297 @@ public class EngineWearTests {
 
 	/** O. A well-kept engine must not become a maintenance chore. */
 	static void healthyWearIsSlowEnoughToPlayWith() {
-		section("O  A WELL-KEPT ENGINE LASTS TENS OF HOURS");
+		section("O  A WELL-KEPT ENGINE LASTS PRACTICALLY FOREVER");
 
-		// Half throttle under half load: an engine doing real work, looked after.
-		float hoursToLimit = hoursToServiceLimit(EngineTuning.IDLE_RPM * 2.0F, 0.5F, LubricationState.NORMAL, true);
-		check("a looked-after engine doing real work lasts tens of hours", hoursToLimit >= 30.0F,
-			String.format("%.1f hours of continuous running to the service limit", hoursToLimit));
+		// THE CALIBRATION POINT of the 13.1 rebalance: full throttle, half load,
+		// normal oil, Air Filter fitted. An engine doing real work, looked after.
+		float rpm = EngineTuning.FULL_THROTTLE_RPM;
+		float bearing100 = bearingWearOver(rpm, 0.5F, LubricationState.NORMAL, 100.0F);
+		float bearing250 = bearingWearOver(rpm, 0.5F, LubricationState.NORMAL, 250.0F);
+		float piston100 = cylinderWearOver(rpm, 0.5F, LubricationState.NORMAL, true, 100.0F);
+		float piston250 = cylinderWearOver(rpm, 0.5F, LubricationState.NORMAL, true, 250.0F);
 
-		// Idling with nothing hung off it: longer still.
+		check("a hundred hours of real work barely marks the bearings", bearing100 <= 0.05F,
+			String.format("%.4f bearing wear -> %s", bearing100, WearCondition.of(bearing100)));
+		check("nor the bores", piston100 <= 0.05F,
+			String.format("%.4f piston wear -> %s", piston100, WearCondition.of(piston100)));
+		check("two hundred and fifty hours is still a healthy engine", bearing250 <= 0.10F,
+			String.format("%.4f bearing wear -> %s", bearing250, WearCondition.of(bearing250)));
+		check("bores included", piston250 <= 0.10F,
+			String.format("%.4f piston wear -> %s", piston250, WearCondition.of(piston250)));
+
+		// The headline claim, and the one the whole rebalance exists to make true.
+		float hoursToLimit = hoursToServiceLimit(rpm, 0.5F, LubricationState.NORMAL, true);
+		check("major internal replacement is not routine maintenance", hoursToLimit >= 1000.0F,
+			String.format("%.0f hours of continuous running to the service limit", hoursToLimit));
+
+		// Ten and fifty hours - a real playthrough - must be invisible.
+		float bearing10 = bearingWearOver(rpm, 0.5F, LubricationState.NORMAL, 10.0F);
+		float bearing50 = bearingWearOver(rpm, 0.5F, LubricationState.NORMAL, 50.0F);
+		check("ten hours leaves it pristine", WearCondition.of(bearing10) == WearCondition.PRISTINE,
+			String.format("%.4f -> %s", bearing10, WearCondition.of(bearing10)));
+		check("and so does fifty", WearCondition.of(bearing50) == WearCondition.PRISTINE,
+			String.format("%.4f -> %s", bearing50, WearCondition.of(bearing50)));
+
+		// Slower is gentler, monotonically, at every horizon. 64 < 128 < 192.
+		boolean orderedEverywhere = true;
+		for (float hours : new float[] { 10.0F, 50.0F, 100.0F, 250.0F }) {
+			float slow = bearingWearOver(64.0F, 0.5F, LubricationState.NORMAL, hours);
+			float middling = bearingWearOver(128.0F, 0.5F, LubricationState.NORMAL, hours);
+			float fast = bearingWearOver(192.0F, 0.5F, LubricationState.NORMAL, hours);
+			orderedEverywhere &= slow < middling && middling < fast;
+		}
+		check("64 RPM is gentler than 128, which is gentler than 192, at every horizon",
+			orderedEverywhere,
+			String.format("%.4f < %.4f < %.4f at 250 h",
+				bearingWearOver(64.0F, 0.5F, LubricationState.NORMAL, 250.0F),
+				bearingWearOver(128.0F, 0.5F, LubricationState.NORMAL, 250.0F),
+				bearingWearOver(192.0F, 0.5F, LubricationState.NORMAL, 250.0F)));
+
+		// Idling with nothing hung off it is gentler still.
 		float idleHours = hoursToServiceLimit(EngineTuning.IDLE_RPM, 0.0F, LubricationState.NORMAL, true);
 		check("and idling is longer still", idleHours > hoursToLimit,
 			String.format("%.0f hours at idle", idleHours));
 
-		// Thirty minutes of that work must barely register.
-		float halfHour = EngineWearMath.bearingWearPerRevolution(LubricationState.NORMAL,
-			EngineTuning.IDLE_RPM * 2.0F, 0.5F) * EngineTuning.IDLE_RPM * 2.0F * 30.0F;
-		check("half an hour of it leaves the engine pristine",
-			WearCondition.of(halfHour) == WearCondition.PRISTINE,
-			String.format("%.4f wear -> %s", halfHour, WearCondition.of(halfHour)));
+		// USEFUL LOAD IS NOT ABUSE. Flat out against a full load is allowed to be
+		// harder, but it must stay in the same league - an engine doing its job well
+		// must never be within sight of an engine being mistreated.
+		float hardHours = hoursToServiceLimit(rpm, 1.0F, LubricationState.NORMAL, true);
+		check("working it flat out is harder on it", hardHours < hoursToLimit,
+			String.format("%.0f hours flat out under full load", hardHours));
+		check("but full load is work, not abuse - still over a thousand hours", hardHours >= 1000.0F,
+			String.format("%.0f hours", hardHours));
+		check("and never close to what mistreating it costs",
+			hardHours > hoursToServiceLimit(rpm, 1.0F, LubricationState.DRY, true) * 100.0F,
+			String.format("%.0f h loaded against %.2f h dry", hardHours,
+				hoursToServiceLimit(rpm, 1.0F, LubricationState.DRY, true)));
+	}
 
-		// Flat out against a full load is allowed to be substantially shorter, but it
-		// must still be measured in hours.
-		float hardHours = hoursToServiceLimit(EngineTuning.FULL_THROTTLE_RPM, 1.0F, LubricationState.NORMAL, true);
-		check("working it flat out is substantially harder on it", hardHours < hoursToLimit,
-			String.format("%.1f hours flat out under full load", hardHours));
-		check("but still hours rather than minutes", hardHours >= 10.0F, String.format("%.1f hours", hardHours));
+	/** O2. Low oil is a real cost; dry oil is a different thing entirely. */
+	static void poorLubricationIsTheRealThreat() {
+		section("O2  OIL IS WHAT ACTUALLY DECIDES AN ENGINE'S LIFE");
 
-		// Dry is harmful within minutes, and still not instant.
+		float rpm = EngineTuning.FULL_THROTTLE_RPM;
+
+		// LOW. Invisible for seconds, meaningful over a very long run.
+		float lowSeconds = bearingWearOver(rpm, 0.5F, LubricationState.LOW, 3.0F / 3600.0F);
+		check("three seconds of low oil is nothing at all",
+			WearCondition.of(lowSeconds) == WearCondition.PRISTINE,
+			String.format("%.6f -> %s", lowSeconds, WearCondition.of(lowSeconds)));
+		float lowHundred = bearingWearOver(rpm, 0.5F, LubricationState.LOW, 100.0F);
+		float normalHundred = bearingWearOver(rpm, 0.5F, LubricationState.NORMAL, 100.0F);
+		check("but a hundred hours of it is real damage",
+			WearCondition.of(lowHundred).isAtLeast(WearCondition.WORN),
+			String.format("%.4f -> %s, against %.4f -> %s on good oil", lowHundred,
+				WearCondition.of(lowHundred), normalHundred, WearCondition.of(normalHundred)));
+
+		// DRY. Forgiving of a moment, ruinous of an afternoon.
+		float dryFiveMinutes = bearingWearOver(111.0F, 0.0F, LubricationState.DRY, 5.0F / 60.0F);
+		check("five dry minutes is measurable but not yet damage",
+			dryFiveMinutes > 0.0F && WearCondition.of(dryFiveMinutes) == WearCondition.PRISTINE,
+			String.format("%.4f -> %s", dryFiveMinutes, WearCondition.of(dryFiveMinutes)));
 		float dryHours = hoursToServiceLimit(111.0F, 0.0F, LubricationState.DRY, true);
-		check("a dry engine is ruined in a couple of hours, not seconds",
-			dryHours > 0.5F && dryHours < 4.0F, String.format("%.2f hours dry at its own top speed", dryHours));
-		float tenDryMinutes = EngineWearMath.bearingWearPerRevolution(LubricationState.DRY, 111.0F, 0.0F)
-			* 111.0F * 10.0F;
-		float aHealthyHour = EngineWearMath.bearingWearPerRevolution(LubricationState.NORMAL, 111.0F, 0.0F)
-			* 111.0F * 60.0F;
-		check("ten dry minutes cost more than a whole healthy hour", tenDryMinutes > aHealthyHour,
-			String.format("%.4f dry against %.4f oiled", tenDryMinutes, aHealthyHour));
-		float aQuarterHourDry = tenDryMinutes * 1.5F;
-		check("and a quarter of an hour of it has visibly changed the engine",
-			WearCondition.of(aQuarterHourDry).isAtLeast(WearCondition.GOOD),
-			String.format("%.4f wear -> %s after fifteen dry minutes", aQuarterHourDry,
-				WearCondition.of(aQuarterHourDry)));
+		check("but a dry engine left running destroys itself in hours, not days",
+			dryHours > 1.0F && dryHours < 24.0F,
+			String.format("%.1f hours dry at its own top speed", dryHours));
+		check("and never in seconds", dryHours * 3600.0F > 600.0F,
+			String.format("%.0f seconds to the service limit", dryHours * 3600.0F));
 
-		// Unfiltered is meaningful over hours rather than seconds.
-		float filteredBoreHours = cylinderHoursToServiceLimit(EngineTuning.IDLE_RPM * 2.0F, 0.5F, true);
-		float unfilteredBoreHours = cylinderHoursToServiceLimit(EngineTuning.IDLE_RPM * 2.0F, 0.5F, false);
-		check("running unfiltered costs hours of bore life, not seconds",
-			unfilteredBoreHours >= 10.0F && unfilteredBoreHours < filteredBoreHours,
-			String.format("%.0f hours filtered against %.0f unfiltered", filteredBoreHours, unfilteredBoreHours));
+		// The ordering that matters, at a single fixed speed so nothing else moves.
+		float normalRate = EngineWearMath.bearingWearPerRevolution(LubricationState.NORMAL, rpm, 0.5F);
+		float lowRate = EngineWearMath.bearingWearPerRevolution(LubricationState.LOW, rpm, 0.5F);
+		float dryRate = EngineWearMath.bearingWearPerRevolution(LubricationState.DRY, rpm, 0.5F);
+		check("normal is far cheaper than low, and low far cheaper than dry",
+			lowRate / normalRate >= 10.0F && dryRate / lowRate >= 20.0F,
+			String.format("low is %.0fx normal, dry is %.0fx low", lowRate / normalRate, dryRate / lowRate));
+	}
+
+	/** O3. Overspeed is abuse; a governor ripple is not. */
+	static void overspeedIsTheAbuseThatMattersOnGoodOil() {
+		section("O3  OVERSPEED IS ABUSE - RIPPLE IS NOT");
+
+		float rated = EngineTuning.RATED_CONTINUOUS_RPM;
+		float ratedRate = EngineWearMath.bearingWearPerRevolution(LubricationState.NORMAL, rated, 0.5F);
+
+		// A brief excursion, of the size a governor actually produces. A few percent
+		// on the RATE is the right scale for four RPM over - the point is that it is
+		// a few percent and not a few multiples, and that the absolute cost below is
+		// nothing whatsoever.
+		float rippleRate = EngineWearMath.bearingWearPerRevolution(LubricationState.NORMAL, rated + 4.0F, 0.5F);
+		check("a governor ripple costs a few percent, not a multiple", rippleRate / ratedRate < 1.05F,
+			String.format("%.3f%% more wear at %.0f RPM", (rippleRate / ratedRate - 1.0F) * 100.0F, rated + 4.0F));
+
+		// What actually matters: even the engine's own hardest possible overshoot,
+		// sustained for a full minute, must not be measurable against the bands.
+		float aMinuteAtTheCeiling = bearingWearOver(EngineTuning.MAX_RPM, 0.5F, LubricationState.NORMAL,
+			1.0F / 60.0F);
+		check("and a whole minute at the engine's own overshoot ceiling is unmeasurable",
+			aMinuteAtTheCeiling < 1.0E-4F, String.format("%.7f wear after a minute at %.0f RPM",
+				aMinuteAtTheCeiling, EngineTuning.MAX_RPM));
+		check("nowhere near moving a condition band",
+			WearCondition.of(aMinuteAtTheCeiling * 60.0F) == WearCondition.PRISTINE,
+			String.format("still %s after a full hour of it",
+				WearCondition.of(aMinuteAtTheCeiling * 60.0F)));
+
+		// Slight sustained overspeed: some increased wear, and no more than that.
+		float slightly = EngineWearMath.bearingWearPerRevolution(LubricationState.NORMAL, rated * 1.1F, 0.5F);
+		check("slight sustained overspeed costs something real but modest",
+			slightly / ratedRate > 1.1F && slightly / ratedRate < 3.0F,
+			String.format("%.2fx the rate at +10 %%", slightly / ratedRate));
+
+		// Significant overspeed: strongly increasing.
+		float significantly = EngineWearMath.bearingWearPerRevolution(LubricationState.NORMAL, rated * 1.25F, 0.5F);
+		check("significant overspeed climbs steeply", significantly / slightly > 2.0F,
+			String.format("%.2fx the rate at +25 %%, against %.2fx at +10 %%", significantly / ratedRate,
+				slightly / ratedRate));
+
+		// Extreme externally imposed overspeed: the one thing that ruins a
+		// well-lubricated engine within a plausible amount of play.
+		float extremeHours = hoursToServiceLimit(256.0F, 1.0F, LubricationState.NORMAL, true);
+		float healthyHours = hoursToServiceLimit(rated, 0.5F, LubricationState.NORMAL, true);
+		check("and Create's ceiling ruins even a well-oiled engine an order of magnitude sooner",
+			extremeHours < healthyHours / 10.0F,
+			String.format("%.0f hours at 256 RPM against %.0f looked after", extremeHours, healthyHours));
+	}
+
+	/** O4. The worst damage emerges from combinations, and only from combinations. */
+	static void combinedAbuseIsWorseThanAnyOnePart() {
+		section("O4  COMBINED ABUSE IS WORSE THAN ITS PARTS");
+
+		float rated = EngineTuning.RATED_CONTINUOUS_RPM;
+		float baseline = EngineWearMath.bearingWearPerRevolution(LubricationState.NORMAL, rated, 0.5F);
+		float dryOnly = EngineWearMath.bearingWearPerRevolution(LubricationState.DRY, rated, 0.5F);
+		float fastOnly = EngineWearMath.bearingWearPerRevolution(LubricationState.NORMAL, 256.0F, 0.5F);
+		float loadedOnly = EngineWearMath.bearingWearPerRevolution(LubricationState.NORMAL, rated, 1.0F);
+		float everything = EngineWearMath.bearingWearPerRevolution(LubricationState.DRY, 256.0F, 1.0F);
+
+		check("dry and oversped and loaded together is worse than any one of them",
+			everything > dryOnly && everything > fastOnly && everything > loadedOnly,
+			String.format("%.3e against %.3e dry, %.3e fast, %.3e loaded", everything, dryOnly, fastOnly,
+				loadedOnly));
+		check("and worse than the worst of them by a wide margin",
+			everything / Math.max(dryOnly, Math.max(fastOnly, loadedOnly)) > 5.0F,
+			String.format("%.1fx the worst single factor",
+				everything / Math.max(dryOnly, Math.max(fastOnly, loadedOnly))));
+
+		// The feel this has to produce: minutes to tens of minutes, never seconds.
+		float minutesToCritical = 60.0F * EngineTuning.CONDITION_CRITICAL_WEAR
+			/ (everything * 256.0F * 60.0F);
+		check("deliberate all-out abuse ruins an engine in tens of minutes",
+			minutesToCritical > 2.0F && minutesToCritical < 60.0F,
+			String.format("%.1f minutes of dry, oversped, fully loaded running to CRITICAL", minutesToCritical));
+		float fifteenSeconds = everything * 256.0F * 0.25F;
+		check("but fifteen seconds of it still does not destroy anything",
+			WearCondition.of(fifteenSeconds) == WearCondition.PRISTINE,
+			String.format("%.4f -> %s after fifteen seconds", fifteenSeconds,
+				WearCondition.of(fifteenSeconds)));
+	}
+
+	/** O5. A healthy engine is a full-strength engine, and stays in one band. */
+	static void aHealthyEngineIsAFullStrengthEngine() {
+		section("O5  HEALTHY MEANS FULL STRENGTH, AND STAYS THERE");
+
+		// PRISTINE and GOOD must be indistinguishable from new, in both directions.
+		for (float wear : new float[] { 0.0F, 0.05F, EngineTuning.CONDITION_GOOD_WEAR, 0.2F }) {
+			float compression = EngineWearMath.compressionEfficiency(wear);
+			float friction = EngineWearMath.bearingFrictionMultiplier(wear);
+			check(String.format("at %.2f wear the engine is still essentially new", wear),
+				compression >= 0.97F && friction <= 1.05F,
+				String.format("%.4f compression, %.4fx friction", compression, friction));
+		}
+
+		// And a GOOD engine must not churn through condition categories while a
+		// player watches. A hundred hours of ordinary running from the top of
+		// PRISTINE must cross at most one boundary.
+		float from = 0.0F;
+		float to = from + bearingWearOver(EngineTuning.FULL_THROTTLE_RPM, 0.5F, LubricationState.NORMAL, 100.0F);
+		check("a hundred ordinary hours moves it at most one condition band",
+			WearCondition.of(to).ordinal() - WearCondition.of(from).ordinal() <= 1,
+			String.format("%s -> %s over a hundred hours", WearCondition.of(from), WearCondition.of(to)));
+
+		// Through a real engine, not just the curves: a lightly worn engine must
+		// settle at essentially the speed a new one does.
+		Engine fresh = new Engine(1, 400000, LubricationState.NORMAL);
+		fresh.throttle = 1.0F;
+		start(fresh, 20 * 30);
+		Engine good = new Engine(1, 400000, LubricationState.NORMAL);
+		good.throttle = 1.0F;
+		java.util.Arrays.fill(good.bearingWear, EngineTuning.CONDITION_GOOD_WEAR);
+		java.util.Arrays.fill(good.pistonWear, EngineTuning.CONDITION_GOOD_WEAR);
+		start(good, 20 * 30);
+		float freshRpm = fresh.state.getSimulatedRpm();
+		float goodRpm = good.state.getSimulatedRpm();
+		check("and a GOOD engine runs at essentially a new engine's speed",
+			goodRpm >= freshRpm * 0.97F,
+			String.format("%.1f RPM good against %.1f RPM fresh", goodRpm, freshRpm));
+		check("while a WORN one is visibly down on it", wornSettledRpm() < freshRpm * 0.97F,
+			String.format("%.1f RPM worn against %.1f RPM fresh", wornSettledRpm(), freshRpm));
+	}
+
+	/** The speed a WORN engine settles at, for the comparison above. */
+	static float wornSettledRpm() {
+		Engine worn = new Engine(1, 400000, LubricationState.NORMAL);
+		worn.throttle = 1.0F;
+		java.util.Arrays.fill(worn.bearingWear, EngineTuning.CONDITION_POOR_WEAR);
+		java.util.Arrays.fill(worn.pistonWear, EngineTuning.CONDITION_POOR_WEAR);
+		start(worn, 20 * 60);
+		return worn.state.getSimulatedRpm();
+	}
+
+	/**
+	 * A3. The calibration table the milestone asks to be reported, printed rather
+	 * than asserted - the assertions above are what hold the numbers in place, and
+	 * this is what makes them readable in a build log.
+	 */
+	static void reportCalibrationTable() {
+		section("A3  WEAR CALIBRATION TABLE (NORMAL oil, Air Filter fitted)");
+		System.out.println("     fresh engine, continuous running, wear after N hours");
+		System.out.println("     B = crankshaft bearing, P = piston / compression");
+		System.out.println();
+		System.out.println("      RPM   load        10 h      50 h     100 h     250 h   condition at 250 h");
+		for (float rpm : new float[] { 64.0F, 128.0F, 192.0F }) {
+			for (float load : new float[] { 0.0F, 0.5F, 1.0F }) {
+				StringBuilder bearings = new StringBuilder(String.format("     %4.0f   %3.0f%%   B", rpm, load * 100));
+				StringBuilder pistons = new StringBuilder("                  P");
+				for (float hours : new float[] { 10.0F, 50.0F, 100.0F, 250.0F }) {
+					bearings.append(String.format("%10.4f", bearingWearOver(rpm, load, LubricationState.NORMAL, hours)));
+					pistons.append(String.format("%10.4f",
+						cylinderWearOver(rpm, load, LubricationState.NORMAL, true, hours)));
+				}
+				bearings.append("   ")
+					.append(WearCondition.of(bearingWearOver(rpm, load, LubricationState.NORMAL, 250.0F)));
+				pistons.append("   ")
+					.append(WearCondition.of(cylinderWearOver(rpm, load, LubricationState.NORMAL, true, 250.0F)));
+				System.out.println(bearings);
+				System.out.println(pistons);
+			}
+		}
+		System.out.println();
+		System.out.printf("     service limit at 192 RPM / 50%% load:  %.0f h bearings, %.0f h pistons%n",
+			hoursToServiceLimit(192.0F, 0.5F, LubricationState.NORMAL, true),
+			cylinderHoursToServiceLimit(192.0F, 0.5F, true));
+		System.out.printf("     unfiltered pistons, same conditions:  %.0f h to the service limit%n",
+			cylinderHoursToServiceLimit(192.0F, 0.5F, false));
+		System.out.printf("     sustained LOW oil, same conditions:   %.0f h to the service limit%n",
+			hoursToServiceLimit(192.0F, 0.5F, LubricationState.LOW, true));
+		System.out.printf("     sustained DRY, engine's own dry speed: %.1f h to the service limit%n",
+			hoursToServiceLimit(111.0F, 0.0F, LubricationState.DRY, true));
+		System.out.printf("     dry + 256 RPM + full load:             %.1f min to CRITICAL%n",
+			60.0F * EngineTuning.CONDITION_CRITICAL_WEAR
+				/ (EngineWearMath.bearingWearPerRevolution(LubricationState.DRY, 256.0F, 1.0F) * 256.0F * 60.0F));
+	}
+
+	/** Bearing wear a fresh engine accumulates over N hours at fixed conditions. */
+	static float bearingWearOver(float rpm, float load, LubricationState lubrication, float hours) {
+		return EngineWearMath.bearingWearPerRevolution(lubrication, rpm, load) * rpm * 60.0F * hours;
+	}
+
+	/** The same for a firing cylinder, which pays both the motion and the combustion rate. */
+	static float cylinderWearOver(float rpm, float load, LubricationState lubrication, boolean filtered,
+		float hours) {
+		float perRevolution = EngineWearMath.cylinderWearPerRevolution(lubrication, rpm, load, filtered)
+			+ EngineWearMath.cylinderWearPerCombustion(lubrication, rpm, load, filtered);
+		return perRevolution * rpm * 60.0F * hours;
 	}
 
 	/** Hours of continuous running at these conditions before the bearings hit the limit. */
@@ -928,8 +1268,12 @@ public class EngineWearTests {
 		changes = 0;
 		previous = engine.state.getPublishedCapacityFactor();
 		float startWear = engine.pistonWear[0];
+		// 2000 ticks of this spans most of a cylinder's whole life, which against the
+		// rebalanced - and much gentler - compression curve is what it now takes to
+		// cross several capacity quanta. The old injection rate crossed none of them,
+		// which proved nothing either way.
 		for (int tick = 0; tick < 2000; tick++) {
-			engine.pistonWear[0] = EngineWearMath.clampWear(engine.pistonWear[0] + 5.0E-5F);
+			engine.pistonWear[0] = EngineWearMath.clampWear(engine.pistonWear[0] + 4.0E-4F);
 			engine.tickFree();
 			if (engine.state.getPublishedCapacityFactor() != previous) {
 				changes++;
