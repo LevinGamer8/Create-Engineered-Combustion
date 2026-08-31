@@ -124,7 +124,9 @@ running them needs nothing but a JDK. To add one, drop it in
 
 Which tests cover what — and which checks are simulation, which are Gradle, and
 which still have to be done by hand in game — is documented in
-[`docs/milestone-12-hardening.md`](docs/milestone-12-hardening.md).
+[`docs/milestone-12-hardening.md`](docs/milestone-12-hardening.md) and, for engine
+wear, in
+[`docs/milestone-13-wear-maintenance.md`](docs/milestone-13-wear-maintenance.md).
 
 ## Continuous integration
 
@@ -246,6 +248,21 @@ for what writes what, why the resolutions differ, and the two model invariants
   is shortened through separate non-firing drag rather than by weakening the
   flywheel inertia. See
   [`docs/milestone-12-hardening.md`](docs/milestone-12-hardening.md).
+* **Milestone 13** - engine wear and maintenance: engines wear out, and the wear
+  belongs to the parts rather than to the engine - each Crankshaft section keeps
+  its own bearing wear and each installed Piston Assembly its own compression
+  wear, so an inline-4 can have one tired bore and three good ones. Wear survives
+  the part becoming an item, so pulling a worn assembly out and pushing it back in
+  repairs nothing and only a freshly crafted part is new. A worn cylinder produces
+  less torque and contributes proportionally less Stress Capacity - an inline-4
+  with one dead-compression bore supplies 3.65 cylinders' worth, not four - while
+  still counting as an active cylinder, and worn bearings are felt as extra
+  friction rather than as subtracted RPM. Rates are per revolution, so a
+  looked-after engine reaches its service limit after tens of hours and a dry one
+  in under two; the Air Filter finally earns its place by quadrupling bore wear
+  when it is missing. The goggles name the worn part and the reason it is wearing,
+  and servicing needs a stopped engine. See
+  [`docs/milestone-13-wear-maintenance.md`](docs/milestone-13-wear-maintenance.md).
 
 ## License
 
