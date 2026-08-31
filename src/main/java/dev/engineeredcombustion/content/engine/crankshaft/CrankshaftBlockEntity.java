@@ -3083,16 +3083,23 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * A plain-language description of what the engine is audibly and visibly doing.
 	 *
 	 * <p>Every branch is derived from real simulation state, never guessed. A
-	 * running engine is described as rough exactly when lubrication is actually
-	 * degraded - which is also when it actually sounds rough - and as stalling
-	 * exactly when it has lost combustion and is coasting down.
+	 * running engine is described as rough exactly when it <i>is</i> rough - poor
+	 * lubrication, or bearings and bores worn past
+	 * {@link WearCondition#WORN} - which is also exactly when it sounds rough, and
+	 * as stalling exactly when it has lost combustion and is coasting down.
+	 *
+	 * <p>Wear reaching this overlay is deliberate. The exact condition stays a
+	 * goggle reading, but "that engine does not sound well" is something anyone
+	 * standing next to a machine can tell, and it is the nudge that sends a player
+	 * to fetch the goggles.
 	 */
 	private String observedStateKey(EnginePhase phase) {
 		EngineState state = getEngineState();
 		return switch (phase) {
 			case RUNNING -> state.getLubrication() == LubricationState.NORMAL
-				? "gui.observed.running_smoothly"
-				: "gui.observed.running_rough";
+				&& !getEngineCondition().isWarning()
+					? "gui.observed.running_smoothly"
+					: "gui.observed.running_rough";
 			case COASTING -> "gui.observed.stalling";
 			case STARTING -> "gui.observed.starting";
 			case CRANKING -> "gui.observed.cranking";

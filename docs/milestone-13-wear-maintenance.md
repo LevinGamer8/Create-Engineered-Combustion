@@ -184,17 +184,17 @@ from the same equilibrium a healthy engine settles into:
 - a harder start,
 - more combustion events — and therefore more fuel — to hold any given speed.
 
-Measured behaviour at 0 % throttle, single cylinder:
+Measured behaviour, single cylinder, settled after a start:
 
-| Condition | Idles at |
-| --- | --- |
-| pristine | 64 RPM |
-| critical bearings only | ~54 RPM |
-| critical compression only | ~57 RPM |
-| both critical | ~35 RPM |
-| both critical, full throttle | ~123 RPM |
+| Condition | 0 % throttle | 100 % throttle |
+| --- | --- | --- |
+| pristine | 66 RPM | 192 RPM |
+| critical bearings only | 56 RPM | |
+| critical compression only | 58 RPM | |
+| both critical | 32 RPM | 128 RPM |
 
-Even the last engine still catches and still runs. Wear never seizes anything.
+Even the last engine still catches and still runs, and replacing its parts puts it
+straight back on 63 RPM at idle. Wear never seizes anything.
 
 ---
 
@@ -568,6 +568,14 @@ friction multiplier is applied to each drag term separately rather than to their
 sum, so that a pristine engine (multiplier exactly 1) integrates the arithmetic it
 always did. Float addition is not associative, and an engine's stall behaviour at
 low speed is close enough to the edge for one ULP to move a tick.
+
+One assertion in `EngineCapacityTests` did legitimately change, and it is not a
+weakening. Its `capacitySu()` helper reproduces the arithmetic Create performs, and
+that arithmetic genuinely moved: the multiplier is now
+`getPublishedCapacityFactor()` rather than `getFiringCylinderCount()`. Every engine
+in that file is built from new parts, where the two are equal, and a check was
+added asserting exactly that rather than leaving it assumed. No expectation in the
+file was relaxed.
 
 ### Manual, in game
 
