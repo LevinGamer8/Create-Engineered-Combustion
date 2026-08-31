@@ -33,9 +33,14 @@ package dev.engineeredcombustion.content.engine;
  * @param speedLimitRpm      highest speed the engine may reach or publish,
  *                           already reconciled with Create's configured
  *                           {@code maxRotationSpeed}
+ * @param wear               the physical condition of the parts this engine is
+ *                           made of - see {@link EngineWearInputs}. An input like
+ *                           any other, because wear belongs to the Crankshaft
+ *                           sections and Piston Assemblies rather than to the
+ *                           simulation; never null, defaulting to a new engine
  */
 public record EngineInputs(boolean structureValid, boolean ignitionEnabled, int cylinderCount, int sparkPlugMask,
-	float throttle, float loadFactor, float speedLimitRpm) {
+	float throttle, float loadFactor, float speedLimitRpm, EngineWearInputs wear) {
 
 	public EngineInputs {
 		cylinderCount = Math.min(Math.max(cylinderCount, 1), EngineTuning.MAX_CYLINDERS);
@@ -43,6 +48,21 @@ public record EngineInputs(boolean structureValid, boolean ignitionEnabled, int 
 		throttle = EngineTuning.clamp01(throttle);
 		loadFactor = EngineTuning.clamp01(loadFactor);
 		speedLimitRpm = Math.min(Math.max(speedLimitRpm, EngineTuning.STALL_RPM), EngineTuning.MAX_RPM);
+		// A caller that has nothing to say about condition is describing a new
+		// engine, not an unknown one. Fail-open here is the safe direction: it can
+		// only ever understate wear, never invent it.
+		if (wear == null)
+			wear = EngineWearInputs.PRISTINE;
+	}
+
+	/**
+	 * A multi-cylinder engine whose parts are all new. Every call site that
+	 * predates wear, and every test that is not about it.
+	 */
+	public EngineInputs(boolean structureValid, boolean ignitionEnabled, int cylinderCount, int sparkPlugMask,
+		float throttle, float loadFactor, float speedLimitRpm) {
+		this(structureValid, ignitionEnabled, cylinderCount, sparkPlugMask, throttle, loadFactor, speedLimitRpm,
+			EngineWearInputs.PRISTINE);
 	}
 
 	/**
