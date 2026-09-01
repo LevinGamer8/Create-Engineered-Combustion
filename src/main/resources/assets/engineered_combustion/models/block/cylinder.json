@@ -7,8 +7,7 @@
     "head": "engineered_combustion:block/cylinder_head",
     "deck": "engineered_combustion:block/crankcase_deck",
     "steel": "engineered_combustion:block/journal",
-    "case": "engineered_combustion:block/crankshaft",
-    "brass": "engineered_combustion:block/brass"
+    "case": "engineered_combustion:block/crankshaft"
   },
   "elements": [
     {

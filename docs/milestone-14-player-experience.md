@@ -11,6 +11,12 @@ The question this milestone exists to answer:
 The intended answer is yes, and the way it is answered is by putting each piece of
 that in the place a player already knows to look for it.
 
+> **Followed by [Milestone 14.1](milestone-14-visual-coherence.md).** The first
+> real play-through found two things nothing in this document's validation could
+> see: an inline-4 that looked like four inline-1s, and Ponder scenes that pointed
+> at the wrong parts. Both are fixed there, and the highlight targets are checked
+> by the build now.
+
 ---
 
 ## 1. The information hierarchy

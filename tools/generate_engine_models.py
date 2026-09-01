@@ -702,7 +702,12 @@ def piston_elements():
 # a texture reference that nothing uses is a texture that quietly rots.
 CYL_TEX = {"particle": "cylinder", "barrel": "cylinder", "fin": "cylinder_fin",
            "head": "cylinder_head", "deck": "crankcase_deck",
-           "steel": "journal", "case": "crankshaft", "brass": "brass"}
+           "steel": "journal", "case": "crankshaft"}
+
+# The manifold's own additions, kept off the plain Cylinder rather than folded
+# into CYL_TEX: an inline-1 has no brass on it, and a texture reference nothing
+# uses is a texture that quietly rots.
+MANIFOLD_TEX = {**CYL_TEX, "brass": "brass"}
 
 # ---------------------------------------------------------------------------
 # Spark plug
@@ -1186,11 +1191,11 @@ def main():
     # cylinder run continues, and turns them with the crank axis, so one set of
     # models serves an engine built along either axis.
     write("block/cylinder_manifold_negative.json",
-          model(CYL_TEX, cylinder_elements(link_back=True)))
+          model(MANIFOLD_TEX, cylinder_elements(link_back=True)))
     write("block/cylinder_manifold_positive.json",
-          model(CYL_TEX, cylinder_elements(link_ahead=True)))
+          model(MANIFOLD_TEX, cylinder_elements(link_ahead=True)))
     write("block/cylinder_manifold_both.json",
-          model(CYL_TEX, cylinder_elements(link_back=True, link_ahead=True)))
+          model(MANIFOLD_TEX, cylinder_elements(link_back=True, link_ahead=True)))
     # The parts a block entity renderer draws are not turned by the blockstate,
     # so anything whose shape is not symmetric about the cylinder axis needs one
     # model per crank axis - the same rule the connecting rod already follows.
