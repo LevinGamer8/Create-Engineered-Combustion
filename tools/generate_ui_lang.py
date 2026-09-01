@@ -68,6 +68,14 @@ TOOLTIPS = {
         ("Required for a Cylinder to ignite fuel.",
          "Wird benötigt, damit ein Zylinder Treibstoff zündet."),
     ],
+    "camshaft": [
+        ("Install into a Crankshaft. One per engine.",
+         "Wird in eine Kurbelwelle eingebaut. Eine pro Motor."),
+        ("Opens the valves, so the cylinders can breathe.",
+         "Öffnet die Ventile, damit die Zylinder atmen können."),
+        ("Without one an engine turns, but never fires.",
+         "Ohne sie dreht sich der Motor, zündet aber nie."),
+    ],
     "redstone_control_module": [
         ("Optional engine automation.",
          "Optionale Motorautomatisierung."),
@@ -118,6 +126,9 @@ MESSAGES = {
     "gui.piston_installed": (
         "A Piston Assembly is already installed.",
         "Es ist bereits eine Kolbeneinheit eingebaut."),
+    "gui.camshaft_already_installed": (
+        "This engine already has a Camshaft.",
+        "Dieser Motor hat bereits eine Nockenwelle."),
 
     # Layout limits
     "gui.one_flywheel_only": (
@@ -141,6 +152,9 @@ MESSAGES = {
     "gui.start_no_gasoline": (
         "No Gasoline.",
         "Kein Benzin."),
+    "gui.start_no_camshaft": (
+        "This engine has no Camshaft.",
+        "Diesem Motor fehlt die Nockenwelle."),
     "gui.start_no_spark_plug": (
         "One or more cylinders have no Spark Plug.",
         "Einem oder mehreren Zylindern fehlt die Zündkerze."),

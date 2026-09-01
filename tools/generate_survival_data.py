@@ -133,6 +133,7 @@ WOOL = tag("minecraft:wool")
 ANDESITE_ALLOY = item("create:andesite_alloy")
 ANDESITE_CASING = item("create:andesite_casing")
 SHAFT = item("create:shaft")
+COGWHEEL = item("create:cogwheel")
 FLUID_PIPE = item("create:fluid_pipe")
 ELECTRON_TUBE = item("create:electron_tube")
 
@@ -231,6 +232,21 @@ RECIPES = {
         ["C", "Q", "I"],
         {"C": COPPER_INGOT, "Q": QUARTZ, "I": IRON_SHEET},
         me("spark_plug")),
+
+    # The engine's other shaft, and the recipe says so: it is the Crankshaft's own
+    # pattern with the casing swapped for a Cogwheel. That Cogwheel IS the timing
+    # drive - the reason there is no separate Timing Gear item - and swapping it in
+    # for the casing is what makes the two shafts read as a pair rather than as two
+    # unrelated parts at the same tier.
+    #
+    # Same tier as the engine internals, nothing from this mod in it, so it is
+    # craftable before an engine has ever run. That matters: an engine cannot run
+    # without one, and a component gated behind a running engine would be a
+    # circular dependency the player could not break.
+    "crafting/camshaft": shaped(
+        ["AIA", "SCS", "AIA"],
+        {"A": ANDESITE_ALLOY, "I": IRON_SHEET, "S": SHAFT, "C": COGWHEEL},
+        me("camshaft")),
 
     # The expensive one, and deliberately: redstone control is optional
     # automation on an engine that runs perfectly without it, so it is the one

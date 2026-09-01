@@ -1094,6 +1094,48 @@ def air_filter_elements():
 
 
 # ===========================================================================
+# CAMSHAFT - the valvetrain, one per engine
+# ===========================================================================
+# The ITEM's geometry. What the player sees in the world is the running gear the
+# Crankshaft and Cylinder renderers draw - a shaft along the intake flank, a
+# pushrod and a rocker per valve - and none of that would read as one object in
+# an inventory slot. So this is the part as it looks in the hand: a journal with
+# four pairs of lobes on it and the timing cogwheel at one end, which is exactly
+# what the recipe makes and exactly what it does.
+#
+# Authored along X, like every other shaft in this file, and turned into the
+# standard item pose by the display block below.
+CAM_TEX = {"particle": "journal", "steel": "journal", "web": "crank_web",
+           "gear": "cast_iron"}
+
+# Lobe pairs, one per cylinder the mod supports. Spaced on the same 3.2 pitch the
+# crank webs use, so the two shafts read as parts of one engine.
+CAM_LOBE_X = (3.4, 6.6, 9.8, 13.0)
+
+
+def camshaft_elements():
+    e = [
+        # The journal, running the length of the part and out at both ends -
+        # a camshaft is supported at both ends and driven from one.
+        el((0.0, 7.0, 7.0), (16.0, 9.0, 9.0), "steel"),
+    ]
+    for i, x in enumerate(CAM_LOBE_X):
+        # Two lobes per cylinder - intake and exhaust - and each PAIR is turned a
+        # little further round than the last. That stagger is the firing order
+        # made visible: a player looking along the shaft is looking at 1-3-4-2.
+        lean = 0.55 * i
+        e.append(el((x - 1.0, 6.4, 6.4), (x + 0.2, 9.6, 9.6), "web"))
+        e.append(el((x - 1.0, 9.6 - lean, 6.9), (x + 0.2, 10.9 - lean, 9.1), "web"))
+        e.append(el((x + 0.4, 6.4, 6.4), (x + 1.6, 9.6, 9.6), "web"))
+        e.append(el((x + 0.4, 9.6 - lean, 6.9), (x + 1.6, 10.9 - lean, 9.1), "web"))
+    # The timing drive, integrated: there is no separate Timing Gear item, and
+    # this is where that decision is visible.
+    e.append(el((0.6, 4.6, 4.6), (2.2, 11.4, 11.4), "gear"))
+    e.append(el((0.2, 6.2, 6.2), (2.6, 9.8, 9.8), "steel"))
+    return e
+
+
+# ===========================================================================
 # REDSTONE CONTROL MODULE - an item, plugged into a placed Crankshaft
 # ===========================================================================
 # Never drawn in the world: the module lives inside the crankcase's control
@@ -1261,6 +1303,12 @@ def main():
     # other bolt-on parts do. A steeper pitch than the default puts the board's
     # face - the part carrying the redstone and the tube - towards the camera
     # instead of showing it edge-on.
+    # The Camshaft, turned so the lobes and the timing gear are both visible: at
+    # the standard 30/225 the shaft is looked down on and the lobe stagger - the
+    # firing order made visible - flattens into the journal behind it.
+    write("item/camshaft.json",
+          model(CAM_TEX, camshaft_elements(), display=gui_scale(1.05, (20, 200, 0))))
+
     write("item/redstone_control_module.json",
           model(MODULE_TEX, control_module_elements(),
                 display=gui_scale(1.2, (40, 225, 0))))

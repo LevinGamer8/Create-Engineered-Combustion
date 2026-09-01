@@ -34,7 +34,9 @@ package dev.engineeredcombustion.prototype.assembly;
  * <i>"an engine-wide answer there would have every section of an inline-4 drop a
  * module the player only ever crafted one of."</i></li>
  * <li><b>Handover moves, never copies.</b> Controller migration sets the successor's
- * flag <i>and clears its own</i>.</li>
+ * flag <i>and clears its own</i>. Where the successor already had one - two equipped
+ * engines merged - the loser is ejected as a loose item rather than stranded on a
+ * follower, which conserves the same total and puts it where the player can see it.</li>
  * <li><b>Destruction drops from the holder.</b> Exactly the section whose flag is
  * set emits the item, whatever destroyed it.</li>
  * </ol>
@@ -196,13 +198,23 @@ public final class InstalledComponentOwnership {
 			if (!present[position] || !flag[position])
 				continue;
 			int controller = controllerOf(position);
-			if (controller == position || flag[controller])
-				// Either it is already the owner, or the run's controller has one of its
-				// own. The second case is what merging two equipped engines produces: the
-				// spare stays where it is rather than being destroyed, and it comes back
-				// the moment that section is broken. Untidy, and conservative, which is
-				// the correct order of priorities.
+			if (controller == position)
 				continue;
+			if (flag[controller]) {
+				// MERGING TWO EQUIPPED ENGINES. The run's controller already has one of
+				// its own, so this is a duplicate - two engines each carrying the same
+				// one-per-engine part, pushed together.
+				//
+				// It used to be left where it stood: conserved, but invisible, and
+				// recoverable only by a player who happened to mine that particular
+				// section. It is EJECTED now, as a real item, next to the section it is
+				// leaving. The ledger is identical either way - one flag becomes one
+				// loose item, never zero and never two - and the difference is entirely
+				// that the player can see where their spare went.
+				flag[position] = false;
+				looseItems++;
+				continue;
+			}
 			flag[position] = false;
 			flag[controller] = true;
 		}

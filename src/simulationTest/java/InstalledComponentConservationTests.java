@@ -176,25 +176,35 @@ public class InstalledComponentConservationTests {
 		world.withSection(4);
 		check("they are now one engine", world.runCount() == 1, world.toString());
 		check("its controller carries a component", world.engineHasComponent(7), world.toString());
-		check("the second is NOT destroyed - it is a stranded spare", world.installedFlags() == 2,
-			world.toString());
 		check("total conserved through the merge", world.totalComponents() == 2, world.toString());
 
-		// And the spare is recoverable: break the section holding it.
-		// A spare is a section that holds a flag but is not its run's controller. The
-		// engine-wide read is true everywhere in the run, so it cannot find one - which
-		// is precisely why a drop must consult the LOCAL flag.
-		int spare = -1;
-		for (int position = 0; position < 9; position++)
-			if (world.sectionHasComponent(position) && world.controllerOf(position) != position)
-				spare = position;
-		check("the spare sits on an identifiable section", spare > 0, "section " + spare);
-		world.destroySection(spare);
-		check("breaking it returns the item rather than deleting it", world.looseItems() == 1,
+		// THE DUPLICATE COMES OUT. One engine can only hold one, so the loser is
+		// ejected as a real item rather than left stranded on a follower where only a
+		// player who happened to mine that section would ever find it. Neither
+		// destroyed nor duplicated: one flag became one loose item.
+		check("exactly one stays installed", world.installedFlags() == 1, world.toString());
+		check("and the duplicate is ejected, not stranded and not destroyed",
+			world.looseItems() == 1, world.toString());
+		check("no section other than the controller holds one", !anyStrandedSpare(world),
+			world.toString());
+
+		// And the engine goes on working with the one it kept.
+		check("the engine keeps working with the one it kept", world.engineHasComponent(1),
+			world.toString());
+
+		// Putting it back in is refused - the engine already has one - so the ledger
+		// cannot be inflated by re-installing the item that just came out.
+		check("re-installing it into the same engine is refused", !world.install(3),
 			world.toString());
 		check("total still conserved", world.totalComponents() == 2, world.toString());
-		check("and the engine keeps working with the one it had", world.engineHasComponent(1),
-			world.toString());
+	}
+
+	/** Whether any section holds a flag without being its run's controller. */
+	static boolean anyStrandedSpare(InstalledComponentOwnership world) {
+		for (int position = 0; position < 9; position++)
+			if (world.sectionHasComponent(position) && world.controllerOf(position) != position)
+				return true;
+		return false;
 	}
 
 	/**

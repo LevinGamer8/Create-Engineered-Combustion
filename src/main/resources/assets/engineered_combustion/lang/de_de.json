@@ -8,6 +8,7 @@
   "block.engineered_combustion.oil_shale": "Ölschiefer",
   "item.engineered_combustion.piston_assembly": "Kolbeneinheit",
   "item.engineered_combustion.spark_plug": "Zündkerze",
+  "item.engineered_combustion.camshaft": "Nockenwelle",
   "item.engineered_combustion.crushed_oil_shale": "Zerkleinerter Ölschiefer",
   "item.engineered_combustion.petroleum_residue": "Ölrückstand",
   "item.engineered_combustion.incomplete_piston_assembly": "Unfertige Kolbeneinheit",
@@ -299,5 +300,10 @@
   "engineered_combustion.ponder.starting_an_engine.text_6": "Scrolle am Vergaser, um das Gas von 0 % bis 100 % einzustellen.",
   "engineered_combustion.ponder.starting_an_engine.text_7": "Mehr Gas erhöht das verfügbare Drehmoment und die geregelte Betriebsdrehzahl.",
   "engineered_combustion.ponder.starting_an_engine.text_8": "Die Zündung beendet die Verbrennung.",
-  "engineered_combustion.ponder.starting_an_engine.text_9": "Der Motor dreht im Auslauf weiter, erzeugt aber keine Leistung mehr."
+  "engineered_combustion.ponder.starting_an_engine.text_9": "Der Motor dreht im Auslauf weiter, erzeugt aber keine Leistung mehr.",
+  "engineered_combustion.tooltip.camshaft.1": "Wird in eine Kurbelwelle eingebaut. Eine pro Motor.",
+  "engineered_combustion.tooltip.camshaft.2": "Öffnet die Ventile, damit die Zylinder atmen können.",
+  "engineered_combustion.tooltip.camshaft.3": "Ohne sie dreht sich der Motor, zündet aber nie.",
+  "engineered_combustion.gui.camshaft_already_installed": "Dieser Motor hat bereits eine Nockenwelle.",
+  "engineered_combustion.gui.start_no_camshaft": "Diesem Motor fehlt die Nockenwelle."
 }

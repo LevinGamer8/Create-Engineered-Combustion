@@ -8,6 +8,7 @@
   "block.engineered_combustion.oil_shale": "Oil Shale",
   "item.engineered_combustion.piston_assembly": "Piston Assembly",
   "item.engineered_combustion.spark_plug": "Spark Plug",
+  "item.engineered_combustion.camshaft": "Camshaft",
   "item.engineered_combustion.crushed_oil_shale": "Crushed Oil Shale",
   "item.engineered_combustion.petroleum_residue": "Petroleum Residue",
   "item.engineered_combustion.incomplete_piston_assembly": "Incomplete Piston Assembly",
@@ -299,5 +300,10 @@
   "engineered_combustion.ponder.starting_an_engine.text_6": "Scroll on the Carburetor to set the throttle, from 0% to 100%.",
   "engineered_combustion.ponder.starting_an_engine.text_7": "More throttle increases available torque and the governed operating speed.",
   "engineered_combustion.ponder.starting_an_engine.text_8": "Ignition stops combustion.",
-  "engineered_combustion.ponder.starting_an_engine.text_9": "The engine keeps turning while it coasts, but is no longer producing power."
+  "engineered_combustion.ponder.starting_an_engine.text_9": "The engine keeps turning while it coasts, but is no longer producing power.",
+  "engineered_combustion.tooltip.camshaft.1": "Install into a Crankshaft. One per engine.",
+  "engineered_combustion.tooltip.camshaft.2": "Opens the valves, so the cylinders can breathe.",
+  "engineered_combustion.tooltip.camshaft.3": "Without one an engine turns, but never fires.",
+  "engineered_combustion.gui.camshaft_already_installed": "This engine already has a Camshaft.",
+  "engineered_combustion.gui.start_no_camshaft": "This engine has no Camshaft."
 }
