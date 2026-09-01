@@ -9,6 +9,12 @@ cold by someone who has never seen the conversation that produced it.
 > and, in the course of measuring rather than reasoning, **overturned four of
 > them**. Where the two disagree, 15A.1 wins; the superseded passages below are
 > marked inline.
+>
+> **Two companion documents complete the design.**
+> `milestone-15-valvetrain-design.md` (15A.2) decides what the player builds and
+> sees; `milestone-15-production-migration.md` (15A.3) decides how existing worlds
+> convert and gives the class-level 15B blueprint. 15A.3 also corrects one claim
+> in section 15 below.
 
 The engine the mod ships today fires **once per cylinder per 360°**. A real
 four-stroke fires **once per cylinder per 720°**:
@@ -753,10 +759,21 @@ nothing to migrate. Cylinder 2's throw genuinely moves from 240° (R3) to 180°
 
 The last row is the one to be careful about. A player placing a crankcase at the
 negative end makes a *new* section the controller, and the old controller becomes
-index 1. The existing code already transfers simulation state on controller
-change; 15B must add the cycle angle and armed mask to whatever it transfers.
-**Not transferring the cycle angle would reset every engine's phase whenever it
-grew at the negative end** — the failure §24 of the brief asks about.
+index 1.
+
+> **CORRECTED by 15A.3.** This paragraph originally said the existing code
+> "already transfers simulation state on controller change". It does not.
+> `migrateControllerConfigurationTo` transfers **configuration only** — ignition,
+> control module, control mode — and states outright that *"what deliberately does
+> not move: the running engine state, the crank angle, the momentum and the
+> redstone signal. A shape change stops the engine by design."*
+>
+> The recommendation stands but its justification changes: 15B should **add** the
+> cycle position and the arming latches to that transfer, not because the method
+> already carries similar state, but because a valvetrain makes the omission newly
+> visible — a stopped engine still has a position, and resetting it would jump
+> every valve to a different stroke in front of the player. See
+> `milestone-15-production-migration.md` §7.
 
 New cylinders start **disarmed**, so an added cylinder inhales before it fires.
 Correct, and free.

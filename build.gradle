@@ -135,6 +135,8 @@ var simulationTestClasses = [
     "FourStrokeBalanceTests",
     // Milestone 15A.2 valvetrain prototype.
     "ValvetrainTests",
+    // Milestone 15A.3 legacy save migration prototype.
+    "EngineMigrationTests",
 ]
 
 var simulationTestTasks = simulationTestClasses.collect { className ->
