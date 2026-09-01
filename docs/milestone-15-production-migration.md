@@ -262,6 +262,111 @@ exists for exactly this purpose.
 
 ---
 
+## 7a. Removal architecture audit — what the wrench branch must not break
+
+This section is an audit of the **existing** removal code at `f015e58`, not of
+anything this branch changes. It exists because the wrench/dismantle branch is
+about to modify exactly the code the conservation invariant depends on.
+
+### There is already one canonical destruction path
+
+Audited: every `popResource` call site in production, every `onRemove` override,
+and every place the mod destroys a block itself.
+
+| Path | Call sites | Reached by |
+| --- | --- | --- |
+| **`Block#onRemove`** | `CrankshaftBlock`, `CylinderBlock`, `CarburetorBlock`, `OilSumpBlock` | pickaxe, creative, explosion, piston, `/setblock`, **and any wrench that removes the block normally** |
+| **`useItemOn` service removal** | the same three blocks | a deliberate right-click, engine stopped |
+| **Controller handover** | `migrateControllerConfigurationTo` | move-and-clear; **emits no item at all** |
+| The block's own item | **loot table** + `copy_components` | carries wear on the stack |
+
+> **The mod destroys no engine block itself.** There is no `destroyBlock`,
+> `removeBlock` or `setBlock(AIR)` anywhere in `src/main/java`. Every destruction
+> today therefore originates outside the mod and funnels through `onRemove` — which
+> is already the single canonical path the future invariant needs.
+
+That is the good news: **the architecture the wrench branch is building on is
+correct.** The risk is entirely in what the wrench branch does next.
+
+### The one thing that would break it
+
+Create's `IWrenchable` is not resolvable in this sandbox (the proxy blocks
+`maven.createmod.net`), so this is stated as a **contract to verify**, not as a
+claim about Create's internals:
+
+> **Requirement.** The wrench dismantle must remove the block through a path that
+> runs `Block#onRemove`, and must **not** hand-write its own item drop for
+> installed components.
+>
+> **The check:** wrench a Crankshaft holding a Redstone Control Module. Exactly one
+> module must appear. Two means the wrench added a second drop path on top of the
+> canonical one; zero means it bypassed `onRemove` entirely.
+
+Both failure modes are cheap to introduce and expensive to notice, because today
+only one engine-wide component exists and it is optional.
+
+### The three rules, and why they are enough
+
+| # | Rule | Where it already lives |
+| --- | --- | --- |
+| 1 | **Local flag, controller read.** The drop test reads the section's own field; "does this engine have one" resolves through the controller | `hasControlModule()` vs `engineHasControlModule()` |
+| 2 | **Handover moves, never copies.** Set the successor, clear the original | `migrateControllerConfigurationTo` |
+| 3 | **Destruction drops from the holder**, whatever the cause | `onRemove` |
+
+Production states rule 1's rationale outright: *"an engine-wide answer there would
+have every section of an inline-4 drop a module the player only ever crafted one
+of."* Rule 2's likewise: *"One module, one owner. Clearing it here is what makes
+the transfer a move rather than a duplication."*
+
+### The invariant, made executable
+
+`InstalledComponentOwnership` models these rules with no reference to any
+particular item, and `InstalledComponentConservationTests` drives them through
+every audited case:
+
+```
+installed flags across every surviving run  +  loose item stacks  =  constant
+```
+
+| Audited case | Result |
+| --- | --- |
+| 1 — controller destroyed, sections survive | item **drops**; survivors get none; **not** silently reassigned |
+| 2 — engine extended, controller changes | flag **moves**; old owner left holding nothing |
+| 3 — R4 shrinks to R3 at the far end | nothing drops, nothing moves |
+| 4 — middle section splits the engine | the run holding it keeps it; the orphan must be serviced |
+| 5, 6, 7 — pickaxe / wrench / creative | **identical ledgers** — three ways to reach one behaviour |
+| merge of two equipped engines | both conserved; the spare is stranded but **recoverable** |
+| 48 000 random structural events | total never moves |
+
+The last section of the test file removes each rule in turn and shows the ledger
+going out of balance, so the guarantees are demonstrably load-bearing rather than
+trivially true.
+
+### One case the audit list did not name
+
+**Joining two engines that each already have a component.** The merged engine's
+controller keeps its own; the other becomes a *stranded spare* on a follower
+section — invisible to the engine-wide read, but still carried by that section's
+local flag, so breaking it returns the item.
+
+Untidy and conservative, which is the correct order of priorities: nothing is
+duplicated and nothing is deleted. Making it tidy (auto-ejecting the spare on
+merge) is possible later and is **not** required for the invariant.
+
+### Does a future engine-wide component need a special hook?
+
+**No.** A future part following the Control Module's three rules needs:
+
+* one `boolean` on `CrankshaftBlockEntity`, saved and loaded;
+* one line in `migrateControllerConfigurationTo` (set successor, clear self);
+* one line in `CrankshaftBlock#onRemove` (`if (local flag) popResource(...)`);
+* one branch in `useItemOn` for install/remove.
+
+**No new dismantling system, no second drop path, no hook.** The requirement on
+the wrench branch is therefore purely negative: *do not create a second path.*
+
+---
+
 ## 8. Camshaft service interaction
 
 Modelled on the four existing installable parts, so it needs no new player

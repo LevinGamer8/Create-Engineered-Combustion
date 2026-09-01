@@ -105,7 +105,7 @@ sourceSets {
             include "dev/engineeredcombustion/content/engine/*.java"
             exclude "dev/engineeredcombustion/content/engine/EngineComponents.java"
             exclude "dev/engineeredcombustion/content/engine/CombustionAudio.java"
-            include "dev/engineeredcombustion/prototype/fourstroke/*.java"
+            include "dev/engineeredcombustion/prototype/**/*.java"
             include "*.java"
         }
         compileClasspath = files()
@@ -137,6 +137,8 @@ var simulationTestClasses = [
     "ValvetrainTests",
     // Milestone 15A.3 legacy save migration prototype.
     "EngineMigrationTests",
+    // Engine-wide installed-component ownership and conservation.
+    "InstalledComponentConservationTests",
 ]
 
 var simulationTestTasks = simulationTestClasses.collect { className ->
