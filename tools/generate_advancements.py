@@ -119,7 +119,11 @@ ADVANCEMENTS = [
         id="some_assembly_required", parent="keep_it_slippery", icon=me("cylinder"), frame="task",
         en=("Some Assembly Required", "Put the pieces together."),
         de=("Zusammenbau erforderlich", "Setz die Teile zusammen."),
-        # The STRUCTURE becoming valid, not a part being crafted.
+        # The STRUCTURE becoming COMPLETE, not a part being crafted - and since
+        # Milestone 15B "complete" includes the Camshaft. An engine without one is
+        # mechanically valid and can never fire, so awarding this for it would
+        # congratulate the player at exactly the moment they are about to spend
+        # twenty minutes cranking a machine that was never going to catch.
         criteria=engine(event="assembled"),
     ),
     dict(

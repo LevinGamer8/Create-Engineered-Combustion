@@ -132,7 +132,10 @@ public final class EngineEventTracker {
 	 *
 	 * @param phase            the engine's phase after this tick
 	 * @param generating       whether it is contributing Stress Capacity right now
-	 * @param structureValid   whether it is a valid engine at all
+	 * @param structureValid   whether it is a COMPLETE engine: mechanically valid
+	 *                         AND carrying the Camshaft it needs to run. The two are
+	 *                         deliberately combined by the caller rather than split
+	 *                         here - see {@code CrankshaftBlockEntity}
 	 * @param cylinderCount    how many cylinders the engine has
 	 * @param activeCylinders  how many of them are actually firing
 	 * @param lubrication      the sump's state
@@ -160,6 +163,12 @@ public final class EngineEventTracker {
 
 		// --- transitions ------------------------------------------------------
 
+		// "You have built an engine", and since Milestone 15B that means a COMPLETE
+		// one. An engine with no Camshaft is mechanically valid - it turns, it is
+		// assembled correctly, nothing about it is broken - and it can never fire.
+		// Awarding "Some Assembly Required" for one would congratulate the player at
+		// exactly the moment they are about to spend twenty minutes cranking a machine
+		// that was never going to catch.
 		if (structureValid && !previouslyValid)
 			events.add(EngineEventRecord.of(EngineEvent.ASSEMBLED, cylinderCount, activeCylinders, overall));
 

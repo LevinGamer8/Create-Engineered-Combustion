@@ -36,6 +36,7 @@ import dev.engineeredcombustion.content.engine.control.EngineControlState;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
 import dev.engineeredcombustion.content.engine.fourstroke.EngineSchema;
+import dev.engineeredcombustion.content.engine.fourstroke.FourStrokePhase;
 import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.foundation.EngineCasting;
@@ -2280,8 +2281,14 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 		EngineWearInputs wear = engine.getWear();
 		int cylinders = components.cylinderCount();
+		// COMPLETE, not merely mechanically valid: the two differ by the Camshaft, and
+		// the difference is exactly the one an advancement about having built an engine
+		// must not ignore. Everything else the tracker gates on "valid" - the running,
+		// the moving, the wearing - is about an engine that is doing something, and an
+		// engine with no valvetrain cannot do any of it either.
+		boolean engineComplete = engine.isStructureValid() && camshaftInstalled;
 		List<EngineEventRecord> events = eventTracker.tick(engine.getPhase(), engine.isActivelyGenerating(),
-			engine.isStructureValid(), cylinders, Integer.bitCount(engine.getActiveCylinderMask()),
+			engineComplete, cylinders, Integer.bitCount(engine.getActiveCylinderMask()),
 			engine.getLubrication(), engine.getMechanicalRpm(), engine.getLoadFactor(), wornThisTick,
 			wear.mechanicalCondition(), worstCompressionCondition(wear, cylinders),
 			wear.overallCondition(cylinders));
@@ -2936,6 +2943,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		addControlLines(tooltip, control);
 		addLayoutWarning(tooltip, components);
 		addFlywheelWarning(tooltip, components);
+		addCamshaftWarning(tooltip);
 		addSparkPlugWarning(tooltip, components);
 		addConditionLine(tooltip, components);
 		addFuelLines(tooltip, components.carburetor());
@@ -3189,6 +3197,35 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	}
 
 	/**
+	 * The missing Camshaft, and <b>only</b> when it is missing.
+	 *
+	 * <p>Above the plug warning because it is upstream of it. An engine with no
+	 * Camshaft never draws a charge, so a player told about the plug first would
+	 * go and fix the second thing wrong with the machine and watch it still fail
+	 * to catch.
+	 *
+	 * <p>Phrased as a <i>part</i> that is absent, never as an engine that is
+	 * invalid, because the engine is not invalid. It is assembled correctly, it
+	 * turns, its structure lines all read green, and it cannot fire. Calling that
+	 * broken would send the player hunting a layout fault that does not exist.
+	 */
+	private void addCamshaftWarning(List<Component> tooltip) {
+		if (engineHasCamshaft())
+			return;
+		// SPECIFICALLY, and above the plug warning, because it is upstream of it: an
+		// engine with no Camshaft cannot draw a charge at all, so telling the player
+		// about a missing plug first would send them to fix the second thing wrong
+		// with it. And it is NOT phrased as the engine being invalid - it is a
+		// complete, turnable machine with a part missing, and calling that broken
+		// would send the player looking for a structure fault that is not there.
+		ECLang.translate("gui.camshaft", ECLang.translate("gui.value.missing")
+			.style(ChatFormatting.RED)
+			.component())
+			.style(ChatFormatting.GRAY)
+			.forGoggles(tooltip, 1);
+	}
+
+	/**
 	 * The missing plug, and <b>only</b> when it is missing.
 	 *
 	 * <p>A fitted plug is the normal state of every working engine, so a line
@@ -3348,6 +3385,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			.style(firing == components.cylinderCount() ? ChatFormatting.GREEN
 				: firing == 0 ? ChatFormatting.DARK_GRAY : ChatFormatting.GOLD));
 		addCylinderStatusLine(tooltip, state);
+		addFourStrokeDiagnostics(tooltip, state);
 		addConditionDiagnostics(tooltip, components);
 		if (components.oversized())
 			ECLang.translate("gui.too_many_cylinders", ECLang.number(EngineTuning.MAX_CYLINDERS)
@@ -3464,6 +3502,54 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 		// This block, not the engine. The player is looking at one crankcase.
 		diagnostic(tooltip, "bearing_condition", EngineConditionText.name(getBearingCondition()));
+	}
+
+	/**
+	 * Where the engine is in its four-stroke cycle, and which stroke each cylinder is
+	 * on. <b>Sneak view only.</b>
+	 *
+	 * <h2>Why this is worth a line at all</h2>
+	 * A four-stroke's most confusing property is that three quarters of what it does
+	 * makes no power. A player watching one cylinder of an inline-4 sit apparently
+	 * idle for a revolution, or watching an engine turn over with nothing happening
+	 * because its Camshaft is out, has no way to tell a fault from the machine
+	 * working - unless it says which stroke each bore is on. This is the readout the
+	 * Ponder scene teaches the vocabulary for.
+	 *
+	 * <h2>And why the cycle angle is here and not on the front</h2>
+	 * "Cycle 137 degrees" is a developer's number. It goes behind sneak, beside the
+	 * crank angle it is the other half of, and it earns its place there for one
+	 * reason: it is the ONLY way to see the difference between a client that is in
+	 * phase and one that is a stroke out - the piston looks identical either way.
+	 */
+	private void addFourStrokeDiagnostics(List<Component> tooltip, EngineState state) {
+		if (!state.hasCamshaft()) {
+			// Named, rather than left to be inferred from four cylinders reporting
+			// nothing. The stroke lines below would be perfectly honest - the engine
+			// really is turning through them - and perfectly misleading.
+			diagnostic(tooltip, "camshaft", ECLang.translate("gui.value.missing")
+				.style(ChatFormatting.RED));
+			return;
+		}
+		diagnostic(tooltip, "cycle_angle", ECLang.number(state.getCycleAngleDegrees())
+			.text("\u00b0")
+			.style(ChatFormatting.WHITE));
+		diagnostic(tooltip, "camshaft_angle", ECLang.number(state.getCamshaftAngleDegrees())
+			.text("\u00b0")
+			.style(ChatFormatting.WHITE));
+		for (int cylinder = 0; cylinder < state.getCylinderCount(); cylinder++) {
+			FourStrokePhase stroke = state.getCylinderPhase(cylinder);
+			// The arming latch beside the stroke, because together they are the whole
+			// answer to "why has that cylinder not fired": a cylinder on COMPRESSION
+			// with no charge is about to misfire, and no other pair of readings says
+			// so.
+			LangBuilder value = ECLang.translate("gui.stroke." + stroke.getId())
+				.style(state.isArmed(cylinder) ? ChatFormatting.GREEN : ChatFormatting.GRAY);
+			ECLang.translate("gui.cylinder_stroke", ECLang.number(cylinder + 1)
+				.component(), value.component())
+				.style(ChatFormatting.DARK_GRAY)
+				.forGoggles(tooltip, 2);
+		}
 	}
 
 	/**
