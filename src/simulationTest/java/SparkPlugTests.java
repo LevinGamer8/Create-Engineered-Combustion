@@ -158,19 +158,20 @@ public class SparkPlugTests {
 		// The ordering the brief insists on: fuel must never be what decides
 		// whether the plug sparks.
 		//
-		// Measured per REVOLUTION, not per tick. The coil fires once per
-		// revolution, so a fuelled engine that has caught and accelerated
-		// naturally sparks more often per second than a dry one being cranked by
-		// hand - that is the engine turning faster, not fuel enabling the spark.
-		// One spark per revolution in both cases is the invariant that says the
-		// two gates are still in the right order.
+		// Measured per REVOLUTION, not per tick. The coil fires once per four-stroke
+		// CYCLE - two revolutions - so a fuelled engine that has caught and
+		// accelerated naturally sparks more often per second than a dry one being
+		// cranked by hand; that is the engine turning faster, not fuel enabling the
+		// spark. Half a spark per revolution in both cases is the invariant that says
+		// the two gates are still in the right order, and the halving from one is
+		// exactly what makes this a four-stroke.
 		{
 			Run dry = crank(new EngineState(), true, true, new Tank(0), crankRpm, 400);
 			Run wet = crank(new EngineState(), true, true, new Tank(4000), crankRpm, 400);
 			double dryPer = dry.sparks() / dry.revolutions();
 			double wetPer = wet.sparks() / wet.revolutions();
 			check("EXTRA   fuel does not gate the spark (sparks per revolution)",
-				Math.abs(dryPer - 1.0) < 0.05 && Math.abs(wetPer - 1.0) < 0.05,
+				Math.abs(dryPer - 0.5) < 0.05 && Math.abs(wetPer - 0.5) < 0.05,
 				String.format("dry %.3f/rev over %.1f rev, fuelled %.3f/rev over %.1f rev",
 					dryPer, dry.revolutions(), wetPer, wet.revolutions()));
 		}

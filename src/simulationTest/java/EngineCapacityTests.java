@@ -201,10 +201,11 @@ public class EngineCapacityTests {
 		// Pull the Spark Plug out of cylinder 3.
 		r4.sparkPlugMask = 0b0111;
 		// Its last charge has to age out of the firing window before it stops counting;
-		// that is the same allowance a single-cylinder engine has always had.
-		int allowance = EngineTuning.generationCombustionAllowanceTicks(r4.state.getSimulatedRpm());
-		for (int tick = 0; tick <= allowance + 2; tick++)
-			r4.tickFree();
+		// that is the same allowance every cylinder has. Run until it does rather than
+		// for a budget computed once: the allowance is scaled by the CURRENT speed, and
+		// an engine that has just lost a cylinder slows down, so a budget taken before
+		// the loss is always slightly too short.
+		ageOutTo(r4, 3);
 
 		check("pulling one plug drops it to three firing cylinders", r4.capacityBasis() == 3,
 			r4.capacityBasis() + " firing");
@@ -214,8 +215,7 @@ public class EngineCapacityTests {
 
 		// Two plugs out.
 		r4.sparkPlugMask = 0b0011;
-		for (int tick = 0; tick <= allowance + 2; tick++)
-			r4.tickFree();
+		ageOutTo(r4, 2);
 		check("pulling a second plug drops it to two", r4.capacityBasis() == 2, r4.capacityBasis() + " firing");
 
 		// Put them both back. Capacity may only return once the cylinders have
@@ -223,7 +223,10 @@ public class EngineCapacityTests {
 		r4.sparkPlugMask = 0b1111;
 		check("refitting the plugs does not restore capacity by itself", r4.capacityBasis() == 2,
 			r4.capacityBasis() + " firing on the tick the plugs went back in");
-		for (int tick = 0; tick < 60; tick++)
+		// Long enough for both to come round to their own firing opportunity again,
+		// which on a four-stroke is up to a whole 720-degree cycle away rather than one
+		// revolution.
+		for (int tick = 0; tick < 200; tick++)
 			r4.tickFree();
 		check("but it returns once those cylinders fire again", r4.capacityBasis() == 4,
 			r4.capacityBasis() + " firing");
@@ -319,10 +322,9 @@ public class EngineCapacityTests {
 		after.state.setLayout(4, 0b0011);
 		after.state.restoreAfterLoad(true);
 
-		// The first reconciled tick re-derives everything from the world.
-		int allowance = EngineTuning.generationCombustionAllowanceTicks(savedRpm);
-		for (int tick = 0; tick <= allowance + 2; tick++)
-			after.tickFree();
+		// The first reconciled tick re-derives everything from the world, and the two
+		// unplugged cylinders then have to age out of the firing window.
+		ageOutTo(after, 2);
 
 		check("after the reload only the two plugged cylinders count", after.capacityBasis() == 2,
 			after.capacityBasis() + " firing");
@@ -474,6 +476,27 @@ public class EngineCapacityTests {
 			}
 		}
 		return changes;
+	}
+
+	/**
+	 * Runs the engine until its capacity basis has fallen to {@code target}, or until
+	 * the longest allowance the model permits has passed.
+	 *
+	 * <p>Run to a target rather than for a budget computed once: the allowance is
+	 * scaled by the CURRENT speed, and an engine that has just lost a cylinder slows
+	 * down, so a budget taken before the loss is always slightly too short.
+	 *
+	 * <p>Bounded by {@link EngineTuning#GENERATION_COMBUSTION_LIMIT_TICKS}, which is
+	 * the allowance at the slowest speed an engine can still be running at - so a
+	 * cylinder that has not aged out by then never will, and the check that follows
+	 * fails honestly rather than the loop spinning.
+	 */
+	static void ageOutTo(Engine engine, int target) {
+		for (int tick = 0; tick <= EngineTuning.GENERATION_COMBUSTION_LIMIT_TICKS; tick++) {
+			engine.tickFree();
+			if (engine.capacityBasis() <= target)
+				return;
+		}
 	}
 
 	// ---------------------------------------------------------------- harness

@@ -352,9 +352,17 @@ public class EngineReloadTests {
 			back.speed = targetRpm > 100.0F ? 184.0F : 68.0F;
 
 			back.run(1);
+			// The property is that the engine PUBLISHED its own output rather than
+			// leaving Create holding whatever it happened to be holding - not that the
+			// number changed. Those were the same test while a firing engine's speed
+			// was smooth; a four-stroke single ripples about 15 RPM peak to peak at
+			// idle, so the parked value is now sometimes a value the engine would
+			// legitimately publish, and "it differs" started failing on a coincidence.
 			check(String.format("throttle %3.0f%%  reconciles on the first tick", throttle * 100.0F),
-				reloaded.state.isActivelyGenerating() && back.speed != 184.0F && back.speed != 68.0F,
-				String.format("Create was holding %.0f, now %.0f", targetRpm > 100.0F ? 184.0F : 68.0F, back.speed));
+				reloaded.state.isActivelyGenerating()
+					&& near(back.speed, reloaded.state.getPublishedRpm(), 0.01F),
+				String.format("Create was holding %.0f, now %.0f (engine publishes %.0f)",
+					targetRpm > 100.0F ? 184.0F : 68.0F, back.speed, reloaded.state.getPublishedRpm()));
 
 			back.run(400);
 			check(String.format("throttle %3.0f%%  settles back on its operating point", throttle * 100.0F),
@@ -383,26 +391,41 @@ public class EngineReloadTests {
 		Network net = started(engine);
 		engine.loadFactor = 1.0F;
 		net.run(1200);
-		float loadedRpm = net.speed;
+		// Averaged over several cycles. A loaded four-stroke single is the roughest
+		// operating point the mod has - one bang per two revolutions against a full
+		// load - so a single sample of the published speed lands anywhere in a couple
+		// of quanta, and the equilibrium this test is about is the mean of that.
+		float loadedRpm = meanNetworkSpeed(net, 400);
 
 		check("loaded engine sags below its target", loadedRpm < EngineTuning.IDLE_RPM - 2.0F,
-			String.format("%.0f RPM on the network against a target of %.0f", loadedRpm,
+			String.format("%.1f RPM on the network against a target of %.0f", loadedRpm,
 				engine.state.getTargetRpm()));
 
 		Engine reloaded = new Engine(engine.tank.mb, 25);
 		Network back = saveAndReload(net, reloaded);
 		back.run(600);
+		float reloadedRpm = meanNetworkSpeed(back, 400);
 		check("reload restores the loaded equilibrium, not the target",
-			near(back.speed, loadedRpm, 2.0F) && back.speed < EngineTuning.IDLE_RPM - 2.0F,
-			String.format("%.0f RPM on the network, was %.0f before the save; target is still %.0f", back.speed,
+			near(reloadedRpm, loadedRpm, 2.0F) && reloadedRpm < EngineTuning.IDLE_RPM - 2.0F,
+			String.format("%.1f RPM on the network, was %.1f before the save; target is still %.0f", reloadedRpm,
 				loadedRpm, reloaded.state.getTargetRpm()));
 		check("and the engine is genuinely sitting below its target",
 			reloaded.state.getOutputRpm() < EngineTuning.IDLE_RPM - 2.0F
 				&& near(reloaded.state.getPublishedRpm(), reloaded.state.getOutputRpm(),
-					EngineTuning.NETWORK_RPM_FINE_DELTA),
+					EngineTuning.NETWORK_RPM_QUANTUM + EngineTuning.NETWORK_RPM_FINE_DELTA),
 			String.format("engine output %.1f, published %.0f", reloaded.state.getOutputRpm(),
 				reloaded.state.getPublishedRpm()));
 		System.out.println();
+	}
+
+	/** The mean speed Create is held at over a run: several four-stroke cycles of it. */
+	static float meanNetworkSpeed(Network net, int ticks) {
+		float total = 0.0F;
+		for (int tick = 0; tick < ticks; tick++) {
+			net.run(1);
+			total += net.speed;
+		}
+		return total / ticks;
 	}
 
 	/** TEST 5 and TEST 8 - a stopped engine, and one with the ignition off. */

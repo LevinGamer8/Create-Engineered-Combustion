@@ -169,7 +169,12 @@ public class MultiCylinderTests {
 	static void phaseOffsets() {
 		System.out.println("PART 1 - crank phases\n");
 
-		float[][] expected = { { 0 }, { 0, 180 }, { 0, 120, 240 }, { 0, 90, 180, 270 } };
+		// THE FOUR-STROKE CRANKS, and the inline-4 is the visible change: cylinders 1
+		// and 4 share a throw and so do 2 and 3, the flat-plane crank every inline-4
+		// four-stroke has. They no longer say when a cylinder FIRES - that is the
+		// ignition schedule, 720 degrees wide, checked in ProductionFourStrokeTests -
+		// and separating the two is the whole of what Milestone 15B corrects.
+		float[][] expected = { { 0 }, { 0, 180 }, { 0, 120, 240 }, { 0, 180, 180, 0 } };
 		for (int count = 1; count <= EngineTuning.MAX_CYLINDERS; count++) {
 			StringBuilder actual = new StringBuilder();
 			boolean ok = true;
@@ -187,13 +192,14 @@ public class MultiCylinderTests {
 		Engine engine = new Engine(4, 1000, 1);
 		engine.state.setLayout(4, 0b1111);
 		engine.state.setCrankAngleDegrees(30.0F);
+		float[] throws4 = { 0.0F, 180.0F, 180.0F, 0.0F };
 		boolean derived = true;
 		for (int i = 0; i < 4; i++)
-			derived &= near(engine.state.localCrankAngleDegrees(i), (30.0F + 90.0F * i) % 360.0F, 0.01);
+			derived &= near(engine.state.localCrankAngleDegrees(i), (30.0F + throws4[i]) % 360.0F, 0.01);
 		engine.state.advanceCrankAngle(64.0F);
 		float moved = engine.state.getCrankAngleDegrees();
 		for (int i = 0; i < 4; i++)
-			derived &= near(engine.state.localCrankAngleDegrees(i), (moved + 90.0F * i) % 360.0F, 0.01);
+			derived &= near(engine.state.localCrankAngleDegrees(i), (moved + throws4[i]) % 360.0F, 0.01);
 		check("inline-4  every angle derives from ONE master angle", derived,
 			String.format("master %.2f -> %.2f, %.2f, %.2f, %.2f", moved, engine.state.localCrankAngleDegrees(0),
 				engine.state.localCrankAngleDegrees(1), engine.state.localCrankAngleDegrees(2),
@@ -255,10 +261,16 @@ public class MultiCylinderTests {
 				.append(String.format("R%d %.1f", count, swing[count]));
 		}
 
-		boolean singleIsLumpiest = true;
+		// The single is lumpiest, and every extra cylinder is smoother than the last.
+		// The uneven twin is deliberately only a little smoother than the single -
+		// 15.6 % speed ripple against 23.8 % at idle - which is the measured cost of
+		// choosing it for character, so it is checked as a monotone chain rather than
+		// against a fixed fraction of the single.
+		boolean monotone = true;
 		for (int count = 2; count <= EngineTuning.MAX_CYLINDERS; count++)
-			singleIsLumpiest &= swing[count] < swing[1] * 0.5F;
-		check("a single is far lumpier than any multi", singleIsLumpiest, trace + " RPM peak-to-peak");
+			monotone &= swing[count] < swing[count - 1];
+		check("a single is lumpier than a twin, and so on up the run", monotone,
+			trace + " RPM peak-to-peak");
 
 		// Not asserted as a strictly falling sequence, and deliberately: with one
 		// power event per 360 degrees, an inline-2 and an inline-4 have their

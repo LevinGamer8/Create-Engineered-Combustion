@@ -173,10 +173,24 @@ public class EngineWearTests {
 	 * every worn engine and prove nothing about wear.
 	 */
 	static boolean start(Engine engine, int crankTicks) {
+		return start(engine, crankTicks, 32.0F);
+	}
+
+	/**
+	 * The same, turned over at a chosen speed.
+	 *
+	 * <p>32 RPM is Create's Hand Crank and it is what a healthy engine is started on.
+	 * A critically worn four-stroke needs more than that - it has to reach a speed
+	 * that will carry it 720 degrees against nearly double the friction, and start
+	 * kicks alone cannot ratchet it there from 32 - so the worn cases below spin it
+	 * with a motor instead. That is a real answer a player can act on, not a test
+	 * convenience: a tired engine wants bump-starting.
+	 */
+	static boolean start(Engine engine, int crankTicks, float crankRpm) {
 		for (int tick = 0; tick < crankTicks && engine.state.getPhase() != EnginePhase.RUNNING; tick++)
-			engine.tickHeldAt(32.0F);
+			engine.tickHeldAt(crankRpm);
 		for (int tick = 0; tick < 40; tick++)
-			engine.tickHeldAt(32.0F);
+			engine.tickHeldAt(crankRpm);
 		for (int tick = 0; tick < 400; tick++)
 			engine.tickFree();
 		return engine.state.getPhase() == EnginePhase.RUNNING;
@@ -831,12 +845,22 @@ public class EngineWearTests {
 		}
 		check("and it grows with lost compression rather than switching on", monotone, "sampled 101 points");
 
-		// The engine itself. Everything at the service limit - bearings and bores -
-		// and it must still catch and still keep running afterwards, at idle and flat
-		// out alike. Badly, which is the point: it limps at about 35 RPM where a
-		// healthy engine idles at 64.
-		Engine criticalIdling = worstEngine();
-		check("even a critically worn engine still catches", start(criticalIdling, 20 * 60),
+		// The engine itself. Everything at the service limit - bearings and bores - and
+		// it must still catch and still keep running afterwards. Badly, which is the
+		// point.
+		//
+		// MILESTONE 15B MOVED ONE OF THESE, AND ONLY ONE. Average combustion torque per
+		// revolution is unchanged - a four-stroke fires half as often into twice the
+		// impulse - so every equilibrium below is exactly where 13.1 measured it. What
+		// changed is that a cylinder now coasts three strokes between bangs instead of
+		// one, and a critically worn SINGLE settles at about 32 RPM, which is not fast
+		// enough to carry it 720 degrees against 1.8x friction. So it will no longer
+		// idle: it needs throttle, and it needs more than a hand crank to start. That is
+		// what a completely worn-out single-cylinder four-stroke does, it is the one
+		// corner of the wear model the conversion reaches, and every multi-cylinder
+		// engine still idles at the service limit because its gap is shorter.
+		Engine criticalIdling = worstEngine(2);
+		check("even a critically worn engine still catches", start(criticalIdling, 20 * 90, 96.0F),
 			criticalIdling.state.getPhase() + " after cranking");
 		for (int tick = 0; tick < 20 * 30; tick++)
 			criticalIdling.tickFree();
@@ -846,25 +870,60 @@ public class EngineWearTests {
 		check("though far slower than a healthy engine's 64", criticalIdling.state.getSimulatedRpm() < 50.0F,
 			String.format("%.1f RPM", criticalIdling.state.getSimulatedRpm()));
 
-		Engine criticalWorking = worstEngine();
+		// The single at the very limit: no idle, but throttle still brings it to life.
+		// It genuinely will not hand-crank any more, which is the observable half of
+		// the same fact and is worth stating rather than leaving implied.
+		Engine handCranked = worstEngine();
+		handCranked.throttle = 1.0F;
+		check("a critically worn single will no longer start on a hand crank",
+			!start(handCranked, 20 * 90, 32.0F), handCranked.state.getPhase() + " after 90 s of cranking");
+
+		Engine criticalSingle = worstEngine();
+		criticalSingle.throttle = 1.0F;
+		start(criticalSingle, 20 * 90, 96.0F);
+		for (int tick = 0; tick < 20 * 30; tick++)
+			criticalSingle.tickFree();
+		check("a critically worn SINGLE will not idle, but throttle runs it",
+			criticalSingle.state.getPhase() == EnginePhase.RUNNING
+				&& criticalSingle.state.getSimulatedRpm() > 100.0F,
+			String.format("%.1f RPM flat out", criticalSingle.state.getSimulatedRpm()));
+
+		Engine criticalWorking = worstEngine(4);
 		criticalWorking.throttle = 1.0F;
-		start(criticalWorking, 20 * 60);
+		start(criticalWorking, 20 * 90, 96.0F);
 		for (int tick = 0; tick < 20 * 30; tick++)
 			criticalWorking.tickFree();
 		check("and opening the throttle still pulls it up", criticalWorking.state.getPhase() == EnginePhase.RUNNING
 			&& criticalWorking.state.getSimulatedRpm() > 100.0F,
 			String.format("%.1f RPM flat out", criticalWorking.state.getSimulatedRpm()));
 
+		// Graceful all the way down. The only cliff in the model is the single at the
+		// absolute limit above; everything short of it degrades smoothly, which is what
+		// makes wear something a player watches happen rather than trips over.
+		Engine nearlyWorn = new Engine(1, 400000, LubricationState.NORMAL);
+		java.util.Arrays.fill(nearlyWorn.pistonWear, 0.875F);
+		java.util.Arrays.fill(nearlyWorn.bearingWear, 0.875F);
+		start(nearlyWorn, 20 * 90, 96.0F);
+		for (int tick = 0; tick < 20 * 30; tick++)
+			nearlyWorn.tickFree();
+		check("a single one step short of the limit still idles",
+			nearlyWorn.state.getPhase() == EnginePhase.RUNNING && nearlyWorn.state.getSimulatedRpm() > 30.0F,
+			String.format("%.1f RPM at 87.5 %% wear", nearlyWorn.state.getSimulatedRpm()));
+
 		// The whole point of the milestone: this is recoverable by fitting new parts.
 		Engine repaired = worstEngine();
 		java.util.Arrays.fill(repaired.pistonWear, 0.0F);
 		java.util.Arrays.fill(repaired.bearingWear, 0.0F);
-		start(repaired, 20 * 60);
-		for (int tick = 0; tick < 20 * 30; tick++)
+		start(repaired, 20 * 90, 96.0F);
+		float total = 0.0F;
+		for (int tick = 0; tick < 400; tick++) {
 			repaired.tickFree();
+			total += repaired.state.getSimulatedRpm();
+		}
+		// Averaged: a four-stroke single swings about 15 RPM peak to peak at idle.
 		check("and replacing the worn parts restores it completely",
-			near(repaired.state.getSimulatedRpm(), EngineTuning.IDLE_RPM, 4.0F),
-			String.format("%.1f RPM after a rebuild", repaired.state.getSimulatedRpm()));
+			near(total / 400.0F, EngineTuning.IDLE_RPM, 4.0F),
+			String.format("%.1f RPM after a rebuild", total / 400.0F));
 
 		check("a fresh engine catches sooner than a worn one",
 			ticksToCatch(new Engine(1, 400000, LubricationState.NORMAL)) < ticksToCatch(worstEngine()),
@@ -874,7 +933,12 @@ public class EngineWearTests {
 
 	/** Everything this model allows to be wrong with an engine's condition, at once. */
 	static Engine worstEngine() {
-		Engine engine = new Engine(1, 400000, LubricationState.NORMAL);
+		return worstEngine(1);
+	}
+
+	/** The same, for a given number of cylinders. */
+	static Engine worstEngine(int cylinders) {
+		Engine engine = new Engine(cylinders, 400000, LubricationState.NORMAL);
 		java.util.Arrays.fill(engine.pistonWear, 1.0F);
 		java.util.Arrays.fill(engine.bearingWear, 1.0F);
 		return engine;
@@ -1253,15 +1317,22 @@ public class EngineWearTests {
 	 * pinned as intended.
 	 *
 	 * <p>Speeds are averaged over a window rather than sampled. An idling engine
-	 * has a real ripple between power strokes - at critical wear it swings between
-	 * about 25 and 39 RPM - so a single instantaneous reading is noise, and
-	 * comparing two of them would be a flaky test rather than a physical claim.
+	 * has a real ripple between power strokes - a four-stroke swings a good deal
+	 * between them - so a single instantaneous reading is noise, and comparing two of
+	 * them would be a flaky test rather than a physical claim.
+	 *
+	 * <p><b>Run on a twin since Milestone 15B.</b> The claim being pinned is "a worn
+	 * engine is weak, not locked", and it holds for every engine the mod builds. The
+	 * one exception is a <i>single</i> at the absolute service limit, which settles
+	 * below the speed that would carry it 540 degrees to its next bang and therefore
+	 * stops rather than limping - checked on its own terms in A13 rather than made the
+	 * subject of a section about graceful degradation.
 	 */
 	static void aCriticalEngineIdlesBadlyOnPurpose() {
 		section("A14  A CRITICAL ENGINE IDLES BADLY, AND THAT IS THE POINT");
 
-		float freshIdle = meanIdleRpm(0.0F, 0.0F, 0.0F);
-		float criticalIdle = meanIdleRpm(1.0F, 0.0F, 0.0F);
+		float freshIdle = meanIdleRpm(0.0F, 0.0F, 0.0F, 2);
+		float criticalIdle = meanIdleRpm(1.0F, 0.0F, 0.0F, 2);
 		check("a fresh engine idles at about its design idle speed",
 			near(freshIdle, EngineTuning.IDLE_RPM, EngineTuning.IDLE_RPM * 0.15F),
 			String.format("%.1f RPM against a %.0f RPM design idle", freshIdle, EngineTuning.IDLE_RPM));
@@ -1270,8 +1341,8 @@ public class EngineWearTests {
 
 		// It stalls under a load a healthy engine shrugs off - the symptom the
 		// milestone describes, and the reason throttle stops being optional.
-		Engine criticalLoaded = settled(1.0F, 0.0F, 1.0F);
-		Engine freshLoaded = settled(0.0F, 0.0F, 1.0F);
+		Engine criticalLoaded = settled(1.0F, 0.0F, 1.0F, 2);
+		Engine freshLoaded = settled(0.0F, 0.0F, 1.0F, 2);
 		check("a healthy engine carries a full load at idle", freshLoaded.state.getPhase() == EnginePhase.RUNNING,
 			String.format("%s at %.1f RPM", freshLoaded.state.getPhase(), freshLoaded.state.getSimulatedRpm()));
 		check("a critical one stalls doing the same thing",
@@ -1280,14 +1351,14 @@ public class EngineWearTests {
 
 		// And throttle is what saves it, which is what makes the symptom playable
 		// rather than merely punishing.
-		Engine criticalThrottled = settled(1.0F, 0.5F, 1.0F);
+		Engine criticalThrottled = settled(1.0F, 0.5F, 1.0F, 2);
 		check("but throttle keeps it alive under that load",
 			criticalThrottled.state.getPhase() == EnginePhase.RUNNING,
 			String.format("%s at %.1f RPM on half throttle", criticalThrottled.state.getPhase(),
 				criticalThrottled.state.getSimulatedRpm()));
 
 		// THE ARTIFACT CHECKS. None of these may be true of a stalling engine.
-		Engine engine = settled(1.0F, 0.0F, 0.0F);
+		Engine engine = settled(1.0F, 0.0F, 0.0F, 2);
 		float lowest = Float.MAX_VALUE;
 		float highest = -Float.MAX_VALUE;
 		int reversals = 0;
@@ -1315,9 +1386,9 @@ public class EngineWearTests {
 
 		// Throttle still does what throttle does, all the way up. A locked engine
 		// would not respond at all.
-		float quarter = meanIdleRpm(1.0F, 0.25F, 0.0F);
-		float half = meanIdleRpm(1.0F, 0.5F, 0.0F);
-		float full = meanIdleRpm(1.0F, 1.0F, 0.0F);
+		float quarter = meanIdleRpm(1.0F, 0.25F, 0.0F, 2);
+		float half = meanIdleRpm(1.0F, 0.5F, 0.0F, 2);
+		float full = meanIdleRpm(1.0F, 1.0F, 0.0F, 2);
 		check("throttle still raises its speed monotonically",
 			criticalIdle < quarter && quarter < half && half < full,
 			String.format("%.1f / %.1f / %.1f / %.1f RPM at 0, 25, 50, 100 %% throttle", criticalIdle, quarter,
@@ -1325,7 +1396,7 @@ public class EngineWearTests {
 
 		// REPAIR RESTORES IT. Wear lives on the parts, so replacing them is simply
 		// the wear going away - and normal idle must come straight back.
-		Engine rebuilt = settled(1.0F, 0.0F, 0.0F);
+		Engine rebuilt = settled(1.0F, 0.0F, 0.0F, 2);
 		java.util.Arrays.fill(rebuilt.bearingWear, 0.0F);
 		java.util.Arrays.fill(rebuilt.pistonWear, 0.0F);
 		for (int tick = 0; tick < 20 * 90; tick++)
@@ -1336,13 +1407,30 @@ public class EngineWearTests {
 			String.format("%.1f RPM after a rebuild, against %.1f fresh", rebuiltIdle, freshIdle));
 	}
 
-	/** A settled engine at a given wear, throttle and load. */
+	/** A settled single-cylinder engine at a given wear, throttle and load. */
 	static Engine settled(float wear, float throttle, float load) {
-		Engine engine = new Engine(1, 8000000, LubricationState.NORMAL);
+		return settled(wear, throttle, load, 1);
+	}
+
+	/**
+	 * The same, for a given layout.
+	 *
+	 * <p>The layout matters to exactly one thing, and only at the very limit: how far
+	 * the engine coasts between combustion events. A four-stroke single spends 540
+	 * degrees on stored momentum and a twin 180, so a critically worn single settles
+	 * below the speed that will carry it and stops, while a critically worn twin keeps
+	 * idling. Everything short of the service limit degrades identically.
+	 */
+	static Engine settled(float wear, float throttle, float load, int cylinders) {
+		Engine engine = new Engine(cylinders, 8000000, LubricationState.NORMAL);
 		engine.throttle = throttle;
 		java.util.Arrays.fill(engine.bearingWear, wear);
 		java.util.Arrays.fill(engine.pistonWear, wear);
-		start(engine, 20 * 60);
+		// Spun up by a motor rather than by hand. These tests are about how a worn
+		// engine RUNS, and a critically worn one legitimately needs more than a hand
+		// crank to get going - which is its own check, above, rather than a confound
+		// buried in every measurement below.
+		start(engine, 20 * 60, 96.0F);
 		engine.load = load;
 		for (int tick = 0; tick < 20 * 90; tick++)
 			engine.tickFree();
@@ -1351,7 +1439,12 @@ public class EngineWearTests {
 
 	/** Mean free-running speed once settled - the ripple averaged out. */
 	static float meanIdleRpm(float wear, float throttle, float load) {
-		return meanRpmOver(settled(wear, throttle, load), 20 * 20);
+		return meanIdleRpm(wear, throttle, load, 1);
+	}
+
+	/** The same, for a given layout. */
+	static float meanIdleRpm(float wear, float throttle, float load, int cylinders) {
+		return meanRpmOver(settled(wear, throttle, load, cylinders), 20 * 20);
 	}
 
 	static float meanRpmOver(Engine engine, int ticks) {

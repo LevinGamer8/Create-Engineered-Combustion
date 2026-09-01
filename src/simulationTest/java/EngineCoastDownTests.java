@@ -105,16 +105,29 @@ public class EngineCoastDownTests {
 		}
 	}
 
-	/** Runs a fuelled engine up from a hand crank until it settles, then frees it. */
+	/**
+	 * Runs a fuelled engine up from a hand crank until it settles, then frees it.
+	 *
+	 * <p>Cranks until the engine <i>catches</i> rather than for a fixed number of
+	 * ticks. A four-stroke needs twice the crank travel a two-stroke did - each
+	 * cylinder gets one firing opportunity per 720 degrees rather than per 360 - so a
+	 * fixed budget tuned to the old model simply never started the engine, and every
+	 * measurement below it silently became a measurement of a stopped one.
+	 */
 	static Engine runningEngine(int cylinders, float throttle, long seed) {
-		Engine engine = new Engine(100000, EngineTuning.OIL_CAPACITY_MB, seed);
+		Engine engine = new Engine(1000000, EngineTuning.OIL_CAPACITY_MB, seed);
 		engine.cylinders = cylinders;
 		engine.throttle = throttle;
-		for (int tick = 0; tick < 60; tick++)
-			engine.tickDriven(32.0F);
+		crankUntilRunning(engine);
 		for (int tick = 0; tick < 1200; tick++)
 			engine.tickFree();
 		return engine;
+	}
+
+	/** Turns the engine over at hand-crank speed until it catches. */
+	static void crankUntilRunning(Engine engine) {
+		for (int tick = 0; tick < 2000 && engine.state.getPhase() != EnginePhase.RUNNING; tick++)
+			engine.tickDriven(32.0F);
 	}
 
 	// ------------------------------------------------------------ measurement
@@ -254,24 +267,40 @@ public class EngineCoastDownTests {
 	static void equilibriaUnmoved() {
 		section("RUNNING EQUILIBRIA ARE UNCHANGED");
 
-		float idle = runningEngine(1, 0.0F, 4L).state.getSimulatedRpm();
+		// MEAN speed, not an instantaneous sample. A four-stroke single genuinely
+		// swings about 15 RPM peak to peak at idle - one bang per two revolutions is
+		// what makes a single sound like a single - so which tick the sample lands on
+		// moves the reading by more than the tolerance being checked. Averaging over
+		// several cycles asks the question this test is actually about: does the
+		// engine settle where it always settled.
+		float idle = meanSpeed(runningEngine(1, 0.0F, 4L));
 		check("idle is still about 64 RPM", near(idle, EngineTuning.IDLE_RPM, 4.0F),
 			String.format("%.1f RPM", idle));
 
-		float half = runningEngine(1, 0.5F, 5L).state.getSimulatedRpm();
+		float half = meanSpeed(runningEngine(1, 0.5F, 5L));
 		check("half throttle is still about 128 RPM", near(half, 128.0F, 5.0F), String.format("%.1f RPM", half));
 
-		float full = runningEngine(1, 1.0F, 6L).state.getSimulatedRpm();
+		float full = meanSpeed(runningEngine(1, 1.0F, 6L));
 		check("full throttle is still about 192 RPM", near(full, EngineTuning.FULL_THROTTLE_RPM, 6.0F),
 			String.format("%.1f RPM", full));
 
-		float idleR4 = runningEngine(4, 0.0F, 7L).state.getSimulatedRpm();
+		float idleR4 = meanSpeed(runningEngine(4, 0.0F, 7L));
 		check("an inline-4 idles at the same speed as a single", near(idleR4, EngineTuning.IDLE_RPM, 4.0F),
 			String.format("%.1f RPM", idleR4));
 
-		float fullR4 = runningEngine(4, 1.0F, 8L).state.getSimulatedRpm();
+		float fullR4 = meanSpeed(runningEngine(4, 1.0F, 8L));
 		check("and holds the same full-throttle target", near(fullR4, EngineTuning.FULL_THROTTLE_RPM, 6.0F),
 			String.format("%.1f RPM", fullR4));
+	}
+
+	/** Mean free-running speed over 400 ticks: several cycles at any throttle. */
+	static float meanSpeed(Engine engine) {
+		float total = 0.0F;
+		for (int tick = 0; tick < 400; tick++) {
+			engine.tickFree();
+			total += engine.state.getSimulatedRpm();
+		}
+		return total / 400.0F;
 	}
 
 	/**
@@ -282,8 +311,12 @@ public class EngineCoastDownTests {
 	static void startingStillWorks() {
 		section("A HAND CRANK STILL STARTS THE ENGINE");
 
-		Engine engine = new Engine(100000, EngineTuning.OIL_CAPACITY_MB, 9L);
+		Engine engine = new Engine(1000000, EngineTuning.OIL_CAPACITY_MB, 9L);
 		int ticks = 0;
+		// Thirty seconds of budget rather than fifteen. A four-stroke single gets one
+		// firing opportunity per 720 degrees, so it takes twice the crank travel to
+		// collect the same number of successful kicks - which is what a four-stroke
+		// does, and what this test now has to allow for rather than fail on.
 		while (engine.state.getPhase() != EnginePhase.RUNNING && ticks < 20 * 30) {
 			engine.tickDriven(32.0F);
 			ticks++;
@@ -332,9 +365,20 @@ public class EngineCoastDownTests {
 		section("AN INLINE-4 IS STILL SMOOTHER THAN AN INLINE-1");
 
 		float rippleR1 = rippleOf(1);
+		float rippleR2 = rippleOf(2);
+		float rippleR3 = rippleOf(3);
 		float rippleR4 = rippleOf(4);
 		check("an inline-4 ripples less than an inline-1", rippleR4 < rippleR1,
 			String.format("%.3f RPM against %.3f", rippleR4, rippleR1));
+		// THE FROZEN SMOOTHNESS LADDER, and the reason it is checked as a chain rather
+		// than as one comparison: Milestone 15B asks for the character to fall out of
+		// firing TIMING, with no per-layout smoothness multiplier anywhere. Monotone
+		// across all four is the observable form of that claim - and the uneven twin
+		// sitting correctly between the single and the triple is the part of it that a
+		// wrong sign or a wrong crank would break first.
+		check("the smoothness ladder is monotone R1 > R2 > R3 > R4",
+			rippleR1 > rippleR2 && rippleR2 > rippleR3 && rippleR3 > rippleR4,
+			String.format("R1 %.2f > R2 %.2f > R3 %.2f > R4 %.2f", rippleR1, rippleR2, rippleR3, rippleR4));
 	}
 
 	/** Peak-to-peak speed variation of a settled engine over 200 ticks. */

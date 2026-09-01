@@ -1,5 +1,7 @@
 package dev.engineeredcombustion.content.engine.fourstroke;
 
+import dev.engineeredcombustion.content.engine.EnginePhase;
+
 /**
  * The version of an engine's saved state, and the rule for migrating an old one.
  *
@@ -89,5 +91,34 @@ public final class EngineSchema {
 	 */
 	public static float migratedCycleAngle(float legacyCrankAngleDegrees) {
 		return FourStrokeCycle.normalizeCycle(FourStrokeCycle.normalizeRevolution(legacyCrankAngleDegrees));
+	}
+
+	/**
+	 * What each version-1 run state becomes.
+	 *
+	 * <pre>
+	 * stopped  -&gt; stopped
+	 * cranking -&gt; stopped     the attempt was transient and is gone
+	 * starting -&gt; stopped     the same
+	 * running  -&gt; coasting    it kept its momentum but it is not burning any more
+	 * coasting -&gt; coasting
+	 * </pre>
+	 *
+	 * <p><b>Why a running engine becomes a coasting one.</b> Version 2 requires a
+	 * Camshaft, and no version-1 world contains one, so a migrated engine cannot
+	 * legitimately be combusting: leaving it RUNNING would claim it is producing power
+	 * it has no valvetrain to produce, and RUNNING is the only phase that may generate.
+	 *
+	 * <p>COASTING is not a compromise here - it is the exactly correct word. It already
+	 * means an engine that has stopped burning but is still turning on stored momentum,
+	 * which is precisely what a migrated engine is. It keeps the flywheel's speed, so
+	 * nothing snaps to a halt; it generates nothing, so there is no ghost capacity; and
+	 * it reaches STOPPED by itself through the ordinary spin-down.
+	 */
+	public static EnginePhase migratedPhase(EnginePhase legacyPhase) {
+		return switch (legacyPhase) {
+			case RUNNING, COASTING -> EnginePhase.COASTING;
+			default -> EnginePhase.STOPPED;
+		};
 	}
 }

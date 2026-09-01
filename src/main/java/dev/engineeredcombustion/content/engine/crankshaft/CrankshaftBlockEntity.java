@@ -35,6 +35,7 @@ import dev.engineeredcombustion.content.engine.control.ControlMode;
 import dev.engineeredcombustion.content.engine.control.EngineControlState;
 import dev.engineeredcombustion.content.engine.cylinder.CylinderBlockEntity;
 import dev.engineeredcombustion.content.engine.flywheel.EngineFlywheelBlockEntity;
+import dev.engineeredcombustion.content.engine.fourstroke.EngineSchema;
 import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.foundation.EngineCasting;
@@ -165,6 +166,14 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 */
 	private static final Vec3 SPARK_PLUG_ELECTRODE = new Vec3(11.90D / 16.0D, 13.79D / 16.0D, 8.0D / 16.0D);
 
+	/**
+	 * The version-1 crank angle, in {@code [0, 360)}. <b>Read only.</b>
+	 *
+	 * <p>No longer written: since Milestone 15B the authoritative position is the
+	 * cycle index and cycle angle, and the physical crank angle is a fold of them.
+	 * Writing it as well would put one fact on disk twice, which is how the copies come
+	 * back disagreeing. The key survives so a version-1 world can still be migrated.
+	 */
 	private static final String KEY_CRANK_ANGLE = "CrankAngle";
 	private static final String KEY_PHASE = "Phase";
 	private static final String KEY_SIMULATED_RPM = "SimulatedRpm";
@@ -191,6 +200,22 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private static final String KEY_BEARING_WEAR = "BearingWear";
 	private static final String KEY_CAPACITY_FACTOR = "CapacityFactor";
 	private static final String KEY_ENGINE_BEARING_WEAR = "EngineBearingWear";
+
+	/**
+	 * The engine state schema this tag was written by.
+	 *
+	 * <p>Explicit rather than inferred from a missing key: "the cycle index is absent,
+	 * so this must be a 360-degree save" works exactly once, and by the migration after
+	 * this one it is ambiguous. An absent tag reads 0, which {@code EngineSchema} maps
+	 * to version 1 - the saves written before versioning existed.
+	 */
+	private static final String KEY_SCHEMA_VERSION = "EngineVersion";
+
+	private static final String KEY_CYCLE_INDEX = "CycleIndex";
+	private static final String KEY_CYCLE_ANGLE = "CycleAngle";
+	private static final String KEY_ARMED = "ArmedCylinders";
+	private static final String KEY_LAST_FIRED = "LastFiredCycle";
+	private static final String KEY_CAMSHAFT = "Camshaft";
 
 	private final EngineState engine = new EngineState();
 
@@ -251,6 +276,21 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 	/** Whether a Redstone Control Module is plugged into the engine's controls. */
 	private boolean controlModuleInstalled;
+
+	/**
+	 * Whether <i>this section</i> carries the engine's one Camshaft.
+	 *
+	 * <p>Local flag, engine-wide read - exactly the Redstone Control Module's model,
+	 * and for the same reason. "Does this engine have a Camshaft" resolves through the
+	 * controller; "should this block drop one" reads this field. An engine-wide answer
+	 * in the drop path would have every section of an inline-4 drop a Camshaft the
+	 * player only ever crafted one of.
+	 *
+	 * <p>Controller handover <b>moves</b> it rather than copying it - see
+	 * {@link #migrateControllerConfigurationTo} - so the count of installed flags plus
+	 * loose item stacks is invariant across every structural change there is.
+	 */
+	private boolean camshaftInstalled;
 
 	/**
 	 * Turns this engine's combustion events into sound, and measures how often they
@@ -663,7 +703,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 		EngineInputs inputs = new EngineInputs(tickComponents.isMechanicallyValid(), control.ignitionEnabled(),
 			tickComponents.cylinderCount(), sparkPlugMask, control.throttle(), readLoadFactor(), speedLimit(),
-			tickComponents.resolveWear());
+			tickComponents.resolveWear(), camshaftInstalled);
 		boolean generatedSpeedChanged = engine.tickSimulation(inputs, fuelSupply, oilSupply, random);
 
 		// Step 6 of the tick: the physics is done, so the work it represents can be
@@ -1091,9 +1131,12 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * <ul>
 	 * <li><b>the ignition switch position</b> - a switch the player turned off stays
 	 * off across a rebuild;</li>
-	 * <li><b>the Control Module</b>, as an ownership transfer rather than a copy: the
-	 * new controller has it and this one does not, so mining either section
-	 * afterwards drops exactly one module;</li>
+	 * <li><b>the Control Module and the Camshaft</b>, as ownership transfers rather
+	 * than copies: the new controller has them and this one does not, so mining either
+	 * section afterwards drops exactly one of each. Where <i>both</i> engines already
+	 * had one - two equipped engines pushed together - the duplicate is ejected as a
+	 * real item rather than stranded on a follower or destroyed. See
+	 * {@link #handOverOneOf};</li>
 	 * <li><b>the selected control mode</b>, through
 	 * {@code ScrollValueBehaviour#setValue} rather than by writing NBT behind the
 	 * behaviour's back - the behaviour holds the value, and a tag that disagreed
@@ -1123,23 +1166,62 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			return;
 
 		successor.manualIgnition = manualIgnition;
-		successor.controlModuleInstalled = controlModuleInstalled;
+		// Both engine-wide parts move by the same rule, through the same method, so
+		// there is one place a one-per-engine component can be got wrong rather than
+		// two that have to agree.
+		successor.controlModuleInstalled =
+			handOverOneOf(controlModuleInstalled, successor.controlModuleInstalled,
+				ECItems.REDSTONE_CONTROL_MODULE.get(), newControllerPos);
+		successor.camshaftInstalled = handOverOneOf(camshaftInstalled, successor.camshaftInstalled,
+			ECItems.CAMSHAFT.get(), newControllerPos);
 		// The behaviour owns this value, its persistence and its packet, so it is set
 		// through the behaviour. setValue also marks the successor changed and sends
 		// its data, which is what carries the new box to the client.
 		if (controlMode != null && successor.controlMode != null)
 			successor.controlMode.setValue(controlMode.getValue());
 
-		// One module, one owner. Clearing it here is what makes the transfer a move
-		// rather than a duplication, and it is what CrankshaftBlock#onRemove reads
-		// when it decides whether to drop the item.
+		// One of each, one owner. Clearing them here is what makes the transfers moves
+		// rather than duplications, and it is what CrankshaftBlock#onRemove reads when
+		// it decides whether to drop the items.
 		controlModuleInstalled = false;
+		camshaftInstalled = false;
 		// The follower has no controls left to be commanded through, and a stale
 		// number here would still be printed by the overlay.
 		redstoneSignal = 0;
 
 		successor.setChanged();
 		successor.sync();
+	}
+
+	/**
+	 * Hands one engine-wide component to the engine's new controller, conserving it.
+	 *
+	 * <p>Three cases, and the third is the one this method exists for:
+	 * <ul>
+	 * <li>only the old controller had one - it moves;</li>
+	 * <li>only the new one had one - it stays where it is;</li>
+	 * <li><b>both had one</b> - two equipped engines have just been pushed together.
+	 * The successor keeps its own and the loser is <i>ejected as a real item</i>, next
+	 * to the section it is leaving.</li>
+	 * </ul>
+	 *
+	 * <p>That third case used to strand the loser's flag on a follower, where it was
+	 * conserved but invisible: the player got the part back only if they happened to
+	 * mine that particular block. Conservative, and poor - so it now comes out where
+	 * the player can see it. The ledger is unchanged either way, which is the property
+	 * that matters: one flag becomes one item, never zero and never two.
+	 *
+	 * @return whether the successor should hold the component afterwards
+	 */
+	private boolean handOverOneOf(boolean mine, boolean successors, net.minecraft.world.item.Item item,
+		BlockPos successorPos) {
+		if (!mine)
+			return successors;
+		if (!successors)
+			return true;
+		if (level != null)
+			Block.popResource(level, successorPos, new ItemStack(item));
+		return true;
 	}
 
 	/**
@@ -1480,7 +1562,12 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			return;
 
 		String key;
-		if (!components.hasSparkPlug())
+		// The valvetrain comes first, and deliberately before the plugs: an engine with
+		// no Camshaft cannot draw a charge at all, so telling the player about a missing
+		// plug would send them to fix the second thing wrong with it.
+		if (!engineHasCamshaft())
+			key = "gui.start_no_camshaft";
+		else if (!components.hasSparkPlug())
 			key = "gui.start_no_spark_plug";
 		else if (!hasEveryPiston(components))
 			key = "gui.start_no_piston";
@@ -1551,6 +1638,63 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// Whatever redstone was doing stops mattering this instant, and the stored
 		// signal has to go with it or the overlay would keep printing it.
 		redstoneSignal = 0;
+		setChanged();
+		sync();
+		return true;
+	}
+
+	// --- camshaft ------------------------------------------------------------
+	//
+	// One Camshaft per engine, installed through any Crankshaft section, owned by the
+	// controller and moved on handover. Exactly the Redstone Control Module's model -
+	// see hasControlModule/installControlModule above - because it is exactly the same
+	// problem, and two engine-wide parts that behaved differently would be two chances
+	// to get item conservation wrong.
+
+	/** Whether <i>this section</i> carries the Camshaft. What the drop path reads. */
+	public boolean hasCamshaft() {
+		return camshaftInstalled;
+	}
+
+	/**
+	 * Whether the engine this section belongs to has a Camshaft, wherever it is
+	 * installed. What the simulation, the diagnostics and the renderers read.
+	 */
+	public boolean engineHasCamshaft() {
+		return getEngineController().camshaftInstalled;
+	}
+
+	/**
+	 * Fits the engine's Camshaft.
+	 *
+	 * @return false when the engine already has one
+	 */
+	public boolean installCamshaft() {
+		CrankshaftBlockEntity controller = getEngineController();
+		if (controller != this)
+			// One engine, one camshaft: it always goes into the section that runs the
+			// engine, wherever the player clicked.
+			return controller.installCamshaft();
+		if (camshaftInstalled)
+			return false;
+		camshaftInstalled = true;
+		setChanged();
+		sync();
+		return true;
+	}
+
+	/**
+	 * Takes the Camshaft back out.
+	 *
+	 * @return false when there was nothing to remove
+	 */
+	public boolean removeCamshaft() {
+		CrankshaftBlockEntity controller = getEngineController();
+		if (controller != this)
+			return controller.removeCamshaft();
+		if (!camshaftInstalled)
+			return false;
+		camshaftInstalled = false;
 		setChanged();
 		sync();
 		return true;
@@ -2354,14 +2498,35 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	@Override
 	protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
 		super.read(tag, registries, clientPacket);
-		// The crank angle is persisted deliberately: it is one float, and keeping it
-		// means a chunk reload does not visibly snap the piston to a new position.
-		engine.setCrankAngleDegrees(tag.getFloat(KEY_CRANK_ANGLE));
+		// WHICH SCHEMA WROTE THIS. Read first, because what every rotational key below
+		// means depends on the answer - see EngineSchema.
+		int schemaVersion = EngineSchema.versionOf(tag.getInt(KEY_SCHEMA_VERSION));
+		boolean legacySave = EngineSchema.needsMigration(schemaVersion);
+
+		if (legacySave) {
+			// A version-1 save holds one crank angle in [0, 360) and no cycle at all.
+			// One physical angle is two cycle positions on two different strokes, and
+			// nothing on disk distinguishes them - so this does not guess. It keeps the
+			// piston exactly where the player left it, on the compression/power half,
+			// and makes that choice safe by refusing to carry anything that could turn
+			// into free power: no arming latch, no firing key, no burning charge.
+			engine.setCrankAngleDegrees(tag.getFloat(KEY_CRANK_ANGLE));
+			engine.setArmedMask(0);
+			engine.setLastFiredCycles(new long[0]);
+		} else {
+			// The authoritative pair, restored together. Persisted deliberately: two
+			// floats and a long, and keeping them means a chunk reload does not snap the
+			// piston to a new position OR put the valvetrain a stroke out of phase.
+			engine.setCyclePosition(tag.getLong(KEY_CYCLE_INDEX), tag.getFloat(KEY_CYCLE_ANGLE));
+			engine.setArmedMask(tag.getInt(KEY_ARMED));
+			engine.setLastFiredCycles(tag.getLongArray(KEY_LAST_FIRED));
+		}
 		// A running engine should survive a chunk reload rather than silently dying,
 		// so the phase and the engine's own momentum are restored too. Structure
 		// validity and the effective ignition are re-derived from the world on the
 		// next server tick.
-		engine.setPhase(EnginePhase.byId(tag.getString(KEY_PHASE)));
+		engine.setPhase(legacySave ? EngineSchema.migratedPhase(EnginePhase.byId(tag.getString(KEY_PHASE)))
+			: EnginePhase.byId(tag.getString(KEY_PHASE)));
 		// THE authoritative rotational state, and the only one that is persisted:
 		// signed angular velocity. Everything else about how fast this engine is
 		// turning - what Create is told it generates, what the network is running at
@@ -2413,19 +2578,39 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			// bookkeeping: it is the condition an external source cannot fake, and
 			// dropping it used to make a saved running engine disown its own kinetic
 			// network for a tick before claiming it back.
-			int[] combustionAges = tag.getIntArray(KEY_COMBUSTION_AGE);
-			if (combustionAges.length > 0)
-				engine.setTicksSinceCombustion(combustionAges);
-			else
-				// A save from before this engine had cylinders to count separately.
-				engine.setTicksSinceCombustion(tag.getInt(KEY_COMBUSTION_AGE));
+			if (legacySave) {
+				// The ages are a reading of combustion measured against a firing interval
+				// that has just doubled, so every entry in them is now the wrong unit.
+				// Cleared rather than converted: rebuilding the mask from genuine
+				// four-stroke combustion costs a fraction of a second of HUD continuity,
+				// and cannot hand Create capacity for an engine that has not yet burned
+				// anything under the new rules - which it cannot have, since it has no
+				// Camshaft.
+				engine.setTicksSinceCombustion(-1);
+			} else {
+				int[] combustionAges = tag.getIntArray(KEY_COMBUSTION_AGE);
+				if (combustionAges.length > 0)
+					engine.setTicksSinceCombustion(combustionAges);
+				else
+					// A save from before this engine had cylinders to count separately.
+					engine.setTicksSinceCombustion(tag.getInt(KEY_COMBUSTION_AGE));
+			}
 			// The published speed is deliberately NOT restored - it is a cached
 			// derivative of the momentum above, so it is reconstructed from that
 			// momentum instead, and the first reconciled server tick then replaces
 			// even the reconstruction with a freshly derived value. What this refuses
 			// to do is let a number Create happened to be holding at save time outlive
 			// the physical state it was supposed to describe.
-			engine.restoreAfterLoad(tag.getBoolean(KEY_GENERATING));
+			// A migrated engine never comes back generating. It has no valvetrain, so it
+			// cannot legitimately be combusting, and claiming otherwise would publish
+			// Stress Capacity for power it has no way to produce. Its momentum is kept -
+			// EnginePhase.COASTING is precisely "stopped burning, still turning" - so
+			// nothing snaps to a halt and it reaches rest through the ordinary spin-down
+			// the player can watch.
+			engine.restoreAfterLoad(!legacySave && tag.getBoolean(KEY_GENERATING));
+			if (legacySave)
+				// Its progress counts firing events that no longer happen at that rate.
+				engine.setStartAttempt(0, 0);
 			needsPostLoadReconcile = true;
 			postLoadWaitTicks = 0;
 		}
@@ -2450,8 +2635,15 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		if (tag.contains(KEY_MANUAL_IGNITION))
 			manualIgnition = tag.getBoolean(KEY_MANUAL_IGNITION);
 		controlModuleInstalled = tag.getBoolean(KEY_CONTROL_MODULE);
+		// Absent from every version-1 world, and getBoolean answers false - which is
+		// the correct and deliberate answer: existing engines get NO free Camshaft.
+		// There is no legacy compatibility flag and no virtual valvetrain; the player
+		// crafts one and fits it, exactly as a new engine's owner does.
+		camshaftInstalled = tag.getBoolean(KEY_CAMSHAFT);
+		engine.setCamshaftInstalled(camshaftInstalled);
 		redstoneSignal = tag.getInt(KEY_REDSTONE_SIGNAL);
-		engine.setStartAttempt(tag.getInt(KEY_START_PROGRESS), tag.getInt(KEY_START_REQUIRED));
+		if (!legacySave)
+			engine.setStartAttempt(tag.getInt(KEY_START_PROGRESS), tag.getInt(KEY_START_REQUIRED));
 		engine.setFuelAvailable(tag.getBoolean(KEY_FUEL_AVAILABLE));
 		// There is no second, all-or-nothing spark plug flag to read back here any
 		// more. SparkPlugMask above is the whole answer, per cylinder, and reading a
@@ -2472,7 +2664,19 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	@Override
 	protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
 		super.write(tag, registries, clientPacket);
-		tag.putFloat(KEY_CRANK_ANGLE, engine.getCrankAngleDegrees());
+		// What schema this tag is in. Written on both paths, so a client packet is as
+		// self-describing as a save file and neither has to be inferred.
+		tag.putInt(KEY_SCHEMA_VERSION, EngineSchema.CURRENT_VERSION);
+		// THE AUTHORITATIVE POSITION: which cycle, and where in it. The physical crank
+		// angle is deliberately NOT saved beside them - it is a fold of the cycle angle,
+		// and a saved representation beside the thing it represents is how the two come
+		// back disagreeing.
+		tag.putLong(KEY_CYCLE_INDEX, engine.getCycleIndex());
+		tag.putFloat(KEY_CYCLE_ANGLE, engine.getCycleAngleDegrees());
+		// Which cylinders are holding a charge they have not burned. Persisted because
+		// it is physical state - a cylinder really has inhaled - and synchronised
+		// because the client needs it to know whether a bang is coming.
+		tag.putInt(KEY_ARMED, engine.getArmedMask());
 		tag.putString(KEY_PHASE, engine.getPhase()
 			.getId());
 		tag.putFloat(KEY_SIMULATED_RPM, engine.getSimulatedRpm());
@@ -2501,12 +2705,22 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 				.averageBearingWear());
 		} else {
 			tag.putIntArray(KEY_COMBUSTION_AGE, engine.copyOfTicksSinceCombustion());
+			// Which firing opportunity each cylinder last took. Disk only: it is what
+			// makes a duplicate combustion detectable, and a save taken between a
+			// cylinder's ignition and the end of its power stroke would otherwise come
+			// back able to light the very same opportunity a second time. The client
+			// never asks the question, so it is never sent one.
+			tag.putLongArray(KEY_LAST_FIRED, engine.copyOfLastFiredCycles());
 		}
 		tag.putBoolean(KEY_GENERATING, engine.isActivelyGenerating());
 		tag.putBoolean(KEY_IGNITION, engine.isIgnitionEnabled());
 		tag.putBoolean(KEY_STRUCTURE_VALID, engine.isStructureValid());
 		tag.putBoolean(KEY_MANUAL_IGNITION, manualIgnition);
 		tag.putBoolean(KEY_CONTROL_MODULE, controlModuleInstalled);
+		// THIS SECTION'S OWN flag, like the module's. Written to disk because it is the
+		// authoritative record of where a real item lives, and to the client because the
+		// valvetrain has to be drawn and a missing one has to be diagnosed.
+		tag.putBoolean(KEY_CAMSHAFT, camshaftInstalled);
 		tag.putInt(KEY_REDSTONE_SIGNAL, redstoneSignal);
 		tag.putInt(KEY_START_PROGRESS, engine.getStartProgress());
 		tag.putInt(KEY_START_REQUIRED, engine.getRequiredStartCycles());

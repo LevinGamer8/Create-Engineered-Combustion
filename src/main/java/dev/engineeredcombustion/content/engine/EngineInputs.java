@@ -38,9 +38,16 @@ package dev.engineeredcombustion.content.engine;
  *                           any other, because wear belongs to the Crankshaft
  *                           sections and Piston Assemblies rather than to the
  *                           simulation; never null, defaulting to a new engine
+ * @param camshaftInstalled  whether the engine has its one Camshaft fitted.
+ *                           Separate from {@code structureValid} for exactly the
+ *                           reason the Spark Plug mask is: an engine with no
+ *                           valvetrain is a complete, valid, turnable machine that
+ *                           happens to be missing a part, and calling it broken
+ *                           would tell the player the wrong thing. Without it no
+ *                           cylinder can draw a charge, so none can burn one
  */
 public record EngineInputs(boolean structureValid, boolean ignitionEnabled, int cylinderCount, int sparkPlugMask,
-	float throttle, float loadFactor, float speedLimitRpm, EngineWearInputs wear) {
+	float throttle, float loadFactor, float speedLimitRpm, EngineWearInputs wear, boolean camshaftInstalled) {
 
 	public EngineInputs {
 		cylinderCount = Math.min(Math.max(cylinderCount, 1), EngineTuning.MAX_CYLINDERS);
@@ -56,13 +63,28 @@ public record EngineInputs(boolean structureValid, boolean ignitionEnabled, int 
 	}
 
 	/**
-	 * A multi-cylinder engine whose parts are all new. Every call site that
-	 * predates wear, and every test that is not about it.
+	 * The same, for a caller that has a Camshaft fitted and nothing to say about
+	 * condition.
+	 */
+	public EngineInputs(boolean structureValid, boolean ignitionEnabled, int cylinderCount, int sparkPlugMask,
+		float throttle, float loadFactor, float speedLimitRpm, EngineWearInputs wear) {
+		this(structureValid, ignitionEnabled, cylinderCount, sparkPlugMask, throttle, loadFactor, speedLimitRpm,
+			wear, true);
+	}
+
+	/**
+	 * A multi-cylinder engine whose parts are all new. Every call site that predates
+	 * wear, and every test that is not about it.
+	 *
+	 * <p>The Camshaft defaults to <i>fitted</i>, which is the right default for a
+	 * convenience constructor: every one of these describes an engine the caller
+	 * intends to be able to run, and a test that is about a missing valvetrain says so
+	 * by naming it.
 	 */
 	public EngineInputs(boolean structureValid, boolean ignitionEnabled, int cylinderCount, int sparkPlugMask,
 		float throttle, float loadFactor, float speedLimitRpm) {
 		this(structureValid, ignitionEnabled, cylinderCount, sparkPlugMask, throttle, loadFactor, speedLimitRpm,
-			EngineWearInputs.PRISTINE);
+			EngineWearInputs.PRISTINE, true);
 	}
 
 	/**

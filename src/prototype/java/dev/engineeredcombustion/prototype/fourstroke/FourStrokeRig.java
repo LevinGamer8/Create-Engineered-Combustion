@@ -26,16 +26,23 @@ import dev.engineeredcombustion.content.engine.LubricationState;
 public final class FourStrokeRig {
 
 	/**
-	 * How much stronger one four-stroke combustion event must be to hold the same
-	 * mean output.
+	 * How much stronger one four-stroke combustion event must be, given whatever duty
+	 * production is currently solving its peak against, to hold the same mean output.
 	 *
-	 * <p>Not a tuning constant and not a fudge: {@code peakCombustionTorqueFor}
-	 * solves {@code peak * POWER_STROKE_DUTY * 0.5 = friction(target)}, and the duty
-	 * goes from {@code 180/360} to {@code 180/720}. Halving the duty doubles the
-	 * solution, exactly. This factor is that ratio, written once, so the tests can
-	 * demonstrate the identity rather than assume it.
+	 * <p>Not a tuning constant and not a fudge: {@code peakCombustionTorqueFor} solves
+	 * {@code peak * POWER_STROKE_DUTY * 0.5 = friction(target)}, so a peak solved
+	 * against production's duty and applied over the rig's own has to be corrected by
+	 * the ratio between them. Halving the duty doubles the solution, exactly.
+	 *
+	 * <p><b>Derived from production rather than written as 2.</b> It was 2 for as long
+	 * as production ran the 360-degree model, and it is 1 now that Milestone 15B has
+	 * shipped the four-stroke duty - and the whole point of computing it is that the
+	 * rig went on silently applying the old factor for one commit after production
+	 * stopped needing it, and settled every engine 11 % high. A ratio cannot go stale;
+	 * a literal did.
 	 */
-	public static final float FOUR_STROKE_TORQUE_SCALE = 2.0F;
+	public static final float FOUR_STROKE_TORQUE_SCALE =
+		EngineTuning.POWER_STROKE_DUTY / FourStrokeCycle.POWER_STROKE_DUTY;
 
 	private final FourStrokeEngine engine;
 	private final float targetRpm;

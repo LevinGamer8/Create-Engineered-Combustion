@@ -148,6 +148,9 @@ var simulationTestClasses = [
     // drives the classes the mod actually ships, so the two cannot diverge
     // silently.
     "ProductionFourStrokeTests",
+    // ... and the engine built out of them: schedules, balance, the Camshaft gate,
+    // the exploits, save/reload and external rotation, all on EngineState itself.
+    "ProductionEngineFourStrokeTests",
 ]
 
 var simulationTestTasks = simulationTestClasses.collect { className ->

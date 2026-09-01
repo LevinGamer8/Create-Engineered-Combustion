@@ -1,5 +1,11 @@
 package dev.engineeredcombustion.content.engine;
 
+import dev.engineeredcombustion.content.engine.fourstroke.CyclePosition;
+import dev.engineeredcombustion.content.engine.fourstroke.CylinderCycleState;
+import dev.engineeredcombustion.content.engine.fourstroke.FourStrokeCycle;
+import dev.engineeredcombustion.content.engine.fourstroke.FourStrokeFiringOrder;
+import dev.engineeredcombustion.content.engine.fourstroke.FourStrokePhase;
+
 /**
  * The authoritative mechanical state of a single engine.
  *
@@ -61,10 +67,22 @@ package dev.engineeredcombustion.content.engine;
  * its new equilibrium through the same inertia it always had - see
  * {@code integrate()} and {@link EngineTuning#peakCombustionTorqueFor(float)}.
  *
- * <h2>Crank angle</h2>
- * {@link #getCrankAngleDegrees()} stays in {@code [0, 360)} and is the single
- * source of truth for every mechanical animation and for combustion timing.
- * There is deliberately no separate animation timer anywhere in the codebase.
+ * <h2>Cycle position, and the two angles that come out of it</h2>
+ * The authoritative rotational position is one {@link CyclePosition}: a cycle
+ * index and an angle in {@code [0, 720)}. Everything else is read off it.
+ * <dl>
+ * <dt>{@link #getCrankAngleDegrees()}, {@code [0, 360)}</dt>
+ * <dd>Where the crank pin and therefore the piston <i>is</i>. What every renderer
+ * draws, and a plain {@code % 360} of the cycle angle. Unchanged by Milestone 15B -
+ * that is the whole reason the cycle convention was chosen the way it was.</dd>
+ * <dt>{@link #getCycleAngleDegrees()}, {@code [0, 720)}</dt>
+ * <dd>Where each cylinder is in its four-stroke cycle. What decides the stroke, the
+ * valves, the camshaft and combustion timing.</dd>
+ * </dl>
+ * The relation is one-way: a cycle angle always yields a physical angle, and a
+ * physical angle never yields a cycle angle, because two different strokes share it.
+ * Conflating the two is the bug this design exists to avoid, and it is why there is
+ * still deliberately no separate animation timer anywhere in the codebase.
  *
  * <h2>What survives a world save</h2>
  * The signed simulated RPM, the crank angle, the phase, how long ago a charge
@@ -77,7 +95,27 @@ package dev.engineeredcombustion.content.engine;
 public final class EngineState {
 
 	// --- rotation -----------------------------------------------------------
-	private float crankAngleDegrees;
+
+	/**
+	 * <b>The</b> authoritative rotational position: which four-stroke cycle, and
+	 * where in it.
+	 *
+	 * <p>One object for the whole engine. Every cylinder is a <i>view</i> of this
+	 * shifted by its own phase offset - see {@link #localCycleAngleDegrees} - which
+	 * is what makes four cylinders mechanically synchronised by construction rather
+	 * than by four counters happening to agree.
+	 *
+	 * <p>Not an ever-growing angle. The cycle index is an exact integer and the angle
+	 * is bounded, so the resolution of a tick's increment is fixed for ever rather
+	 * than decaying with uptime, and an event can be <i>named</i> - "cylinder 3, cycle
+	 * 1842" - which is what makes a duplicate combustion detectable rather than merely
+	 * improbable.
+	 */
+	private final CyclePosition position = new CyclePosition();
+
+	/** Scratch for one cylinder's shifted view. Reused so the per-tick loop allocates nothing. */
+	private final CyclePosition localPosition = new CyclePosition();
+
 	private float mechanicalRpm;
 	private float lastAngleDeltaDegrees;
 
@@ -149,6 +187,31 @@ public final class EngineState {
 	private int cylinderCount = 1;
 
 	/**
+	 * The crank and firing schedule this engine runs, derived from
+	 * {@link #cylinderCount} and cached beside it.
+	 *
+	 * <p>Held rather than looked up per cylinder per tick, and re-derived in exactly
+	 * one place - {@link #setCylinderCount} - so an engine can never be running one
+	 * layout's throws against another's ignition order.
+	 */
+	private FourStrokeFiringOrder configuration = FourStrokeFiringOrder.R1;
+
+	/**
+	 * Whether this engine has a Camshaft fitted.
+	 *
+	 * <p><b>An engine-wide input, and the whole valvetrain.</b> Without it the engine
+	 * is still perfectly valid mechanically - it turns, it can be hand cranked, its
+	 * pistons move and its compression still resists - but no cylinder can draw a
+	 * charge and none can burn one, because nothing is opening the valves. That is a
+	 * missing part, not a broken engine, and the difference is exactly what the
+	 * diagnostics have to be able to say.
+	 *
+	 * <p>Re-read from the world every tick like every other component, so fitting or
+	 * pulling one takes effect immediately rather than at some revalidation interval.
+	 */
+	private boolean camshaftInstalled;
+
+	/**
 	 * Bit {@code i} set when cylinder {@code i} has a Spark Plug in its head.
 	 *
 	 * <p>A bitmask rather than a boolean, because a plug is a <i>per-cylinder</i>
@@ -189,8 +252,39 @@ public final class EngineState {
 	// allocates when the engine's layout changes and an engine with fewer
 	// cylinders simply leaves the tail alone.
 
-	private final boolean[] firedThisRevolution = new boolean[EngineTuning.MAX_CYLINDERS];
+	/** Whether a paid-for charge is currently burning in each cylinder. */
+	private final boolean[] chargeBurning = new boolean[EngineTuning.MAX_CYLINDERS];
 	private final boolean[] powerStrokeActive = new boolean[EngineTuning.MAX_CYLINDERS];
+
+	/**
+	 * Whether cylinder {@code i} has inducted a charge and not yet burned it.
+	 *
+	 * <h2>The anti-oscillation mechanism, and it is physics rather than a guard</h2>
+	 * A cylinder cannot burn a charge it has not drawn in. The latch is set when the
+	 * cylinder forward-crosses the start of its intake stroke and cleared at
+	 * compression top dead centre whether or not it lights, so a misfire costs a whole
+	 * cycle - and rocking the crank back and forth across the ignition point cannot
+	 * produce a second bang, because re-arming needs 540 degrees of forward travel and
+	 * firing needs another 180.
+	 *
+	 * <p>Persisted and synchronised as one integer - see {@link #getArmedMask()} -
+	 * because "which cylinders are charged" is exactly the shape the save and the
+	 * diagnostics want. Kept as an array here because that is the shape the hot path
+	 * wants, and one derivation is cheaper than four bit twiddles a tick.
+	 */
+	private final boolean[] armed = new boolean[EngineTuning.MAX_CYLINDERS];
+
+	/**
+	 * The cycle index of the last firing opportunity each cylinder actually took, or
+	 * {@link CylinderCycleState#NO_EVENT}.
+	 *
+	 * <p><b>The event identity.</b> {@code (cylinder, cycleIndex)} names one firing
+	 * opportunity uniquely and for ever, and a cylinder may take each one once. The
+	 * arming latch above already closes the rocking exploit; this is the independent
+	 * check behind it, and it is the one that holds when a crank is reversed, saved
+	 * mid-stroke, or driven at a speed that steps over several cycles in a tick.
+	 */
+	private final long[] lastFiredCycle = newFiringKeys();
 
 	/**
 	 * The torque multiplier each cylinder's <i>currently burning</i> charge was
@@ -383,6 +477,22 @@ public final class EngineState {
 	private int requiredStartCycles;
 	private int ticksSinceStartActivity;
 
+	/**
+	 * Crank degrees travelled since this start attempt last had a charge catch.
+	 *
+	 * <p>The physical half of the abandon rule, and the half Milestone 15B adds.
+	 * {@link #ticksSinceStartActivity} answers "is anything happening at all" - it
+	 * only advances on ticks where no cylinder could have fired - so it expires an
+	 * engine that stopped, ran dry or lost its ignition, and never a slow one that is
+	 * still being cranked. This answers the other question: the crank is turning,
+	 * opportunities keep coming round, and none of them catches.
+	 *
+	 * <p>Measured in travel rather than in wall-clock ticks so a hand-cranked engine
+	 * and one spun by a fast Create network get the same number of chances, because
+	 * they get the same number of firing opportunities.
+	 */
+	private float degreesSinceStartActivity;
+
 	private EnginePhase phase = EnginePhase.STOPPED;
 	private int ticksSincePublish;
 
@@ -455,8 +565,11 @@ public final class EngineState {
 	public void advanceCrankAngle(float mechanicalRpm) {
 		this.mechanicalRpm = mechanicalRpm;
 		lastAngleDeltaDegrees = EngineTuning.degreesPerTick(mechanicalRpm);
-		if (lastAngleDeltaDegrees != 0.0F)
-			crankAngleDegrees = normalizeDegrees(crankAngleDegrees + lastAngleDeltaDegrees);
+		// Advanced even at zero, so the position's own record of the last step agrees
+		// with this tick rather than with whichever tick last moved. Every crossing
+		// query reads that record, so a stale one would let a stopped engine keep
+		// answering "yes, I just passed my ignition angle".
+		position.advance(lastAngleDeltaDegrees);
 	}
 
 	/**
@@ -474,7 +587,8 @@ public final class EngineState {
 	public void updateClientVisuals() {
 		boolean firing = phase.isFiring();
 		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
-			powerStrokeActive[cylinder] = firing && isWithinPowerStroke(localCrankAngleDegrees(cylinder));
+			powerStrokeActive[cylinder] =
+				firing && FourStrokeCycle.withinPowerStroke(localCycleAngleDegrees(cylinder));
 
 		for (int cylinder = 0; cylinder < combustionFlashTicks.length; cylinder++)
 			if (combustionFlashTicks[cylinder] > 0)
@@ -531,8 +645,11 @@ public final class EngineState {
 	public boolean tickSimulation(EngineInputs inputs, FuelSupply fuel, OilSupply oil, java.util.Random random) {
 		this.structureValid = inputs.structureValid();
 		this.ignitionEnabled = inputs.ignitionEnabled();
-		this.cylinderCount = inputs.cylinderCount();
+		setCylinderCount(inputs.cylinderCount());
 		this.sparkPlugMask = inputs.sparkPlugMask();
+		// The valvetrain, read from the world with everything else. A Camshaft pulled
+		// out of a running engine stops it drawing charges on this very tick.
+		this.camshaftInstalled = inputs.camshaftInstalled();
 		this.throttle = inputs.throttle();
 		this.loadFactor = inputs.loadFactor();
 		this.speedLimitRpm = inputs.speedLimitRpm();
@@ -574,12 +691,17 @@ public final class EngineState {
 		boolean anyChargeIgnitable = false;
 		boolean anyPowerStrokeActive = false;
 		boolean ignitedThisTick = false;
+		boolean armedMaskChanged = false;
 		float combustionTorque = 0.0F;
 
 		for (int cylinder = 0; cylinder < cylinderCount; cylinder++) {
-			float localAngle = localCrankAngleDegrees(cylinder);
+			// This cylinder's own view of the ONE engine position, shifted by its own
+			// cycle phase offset. Written into a reused scratch object, so a four
+			// cylinder engine allocates nothing per tick.
+			position.shiftedBy(configuration.cyclePhaseOffsetDegrees(cylinder), localPosition);
+			float localCycleAngle = localPosition.angle();
 
-			// THE TWO GATES, in the order the machine imposes them.
+			// THE GATES, in the order the machine imposes them.
 			//
 			// A spark needs an assembled engine, a live ignition and somewhere for
 			// the coil to discharge - a Spark Plug in THIS cylinder. Fuel has nothing
@@ -591,31 +713,60 @@ public final class EngineState {
 			// stays dark says it is ignition, and no plug at all says so on the
 			// overlay.
 			//
-			// Combustion needs a spark AND a charge to light. Nothing may reorder
-			// these two: fuel must never be what decides whether the plug sparks.
+			// A CHARGE needs a camshaft, because nothing else opens the intake valve.
+			// That gate is deliberately upstream of everything: an engine with no
+			// Camshaft never arms, so it never has anything to light, and no amount of
+			// spark or fuel can make it fire. It still turns, still compresses and
+			// still animates - it is an engine missing a part, not a broken one.
 			//
-			// THE NAME MATTERS. This is permission to light a NEW charge, and nothing
-			// else. It is deliberately never asked about a charge that is already
-			// burning: fuel decides whether the next bang can happen, never whether the
-			// one already in the cylinder is allowed to finish pushing.
+			// Combustion needs all three: a spark, a camshaft-drawn charge, and fuel
+			// to have paid for it. Nothing may reorder them - fuel must never be what
+			// decides whether the plug sparks.
+			//
+			// THE NAME MATTERS. canIgniteNewCharge is permission to light a NEW charge,
+			// and nothing else. It is deliberately never asked about a charge that is
+			// already burning: fuel decides whether the next bang can happen, never
+			// whether the one already in the cylinder is allowed to finish pushing.
 			boolean sparkPossible = structureValid && ignitionEnabled && hasSparkPlug(cylinder);
-			boolean canIgniteNewCharge = sparkPossible && fuelAvailable;
+			boolean canIgniteNewCharge = sparkPossible && camshaftInstalled && fuelAvailable;
 			anyChargeIgnitable |= canIgniteNewCharge;
 
 			if (ticksSinceCombustion[cylinder] >= 0 && ticksSinceCombustion[cylinder] < Integer.MAX_VALUE)
 				ticksSinceCombustion[cylinder]++;
 
-			if (crossedFiringAngle(localAngle)) {
-				if (sparkPossible && turningForwards)
-					sparkEventIds[cylinder]++;
+			// A cylinder with no valvetrain never inhales, so its latch must not merely
+			// go unused - it must not be set in the first place, or fitting a Camshaft
+			// to a spinning engine would hand it a free bang from a charge it never drew.
+			boolean armedBefore = armed[cylinder];
+			CylinderCycleState.Event event;
+			if (camshaftInstalled) {
+				event = CylinderCycleState.advance(localPosition, armed, lastFiredCycle, cylinder,
+					canIgniteNewCharge && turningForwards);
+			} else {
+				armed[cylinder] = false;
+				// A cylinder that reaches its firing point with nothing inducted has
+				// misfired, whatever the reason - and saying so here rather than
+				// silently is what lets the sound, the flash and the diagnostics treat
+				// a missing Camshaft like every other reason a charge did not light.
+				event = localPosition.crossedForward(EngineTuning.FIRING_ANGLE_DEGREES)
+					? CylinderCycleState.Event.MISFIRED
+					: CylinderCycleState.Event.NONE;
+			}
 
-				// Fuel is drawn per firing event, never per tick, and only if the
-				// whole charge is actually available - a partial draw must not
-				// produce power. Four cylinders therefore draw four charges per
-				// revolution, which is exactly why an inline-4 burns four times the
-				// gasoline of a single at the same speed.
-				if (canIgniteNewCharge && turningForwards && fuel.consume(EngineTuning.FUEL_PER_COMBUSTION_MB)) {
-					firedThisRevolution[cylinder] = true;
+			// The spark is a property of the coil and the crank, so it happens at the
+			// firing opportunity whether or not anything comes of it - including on an
+			// engine with no Camshaft, whose plug visibly sparks into a cylinder that
+			// never drew a charge. That is the diagnosis the player needs.
+			if (sparkPossible && turningForwards && localPosition.crossedForward(EngineTuning.FIRING_ANGLE_DEGREES))
+				sparkEventIds[cylinder]++;
+
+			if (event == CylinderCycleState.Event.IGNITED) {
+				// Fuel is drawn per firing event, never per tick, and only if the whole
+				// charge is actually available - a partial draw must not produce power.
+				// Two millibuckets now, for one event per 720 degrees rather than one per
+				// 360, so the gasoline a revolution costs has not moved.
+				if (fuel.consume(EngineTuning.FUEL_PER_COMBUSTION_MB)) {
+					chargeBurning[cylinder] = true;
 					// Bought and paid for at this tick's price. Nothing may revalue it
 					// afterwards - see powerStrokeStrength.
 					//
@@ -628,6 +779,7 @@ public final class EngineState {
 					ignitedThisTick = true;
 					ticksSinceCombustion[cylinder] = 0;
 					ticksSinceStartActivity = 0;
+					degreesSinceStartActivity = 0.0F;
 					// One increment, here, at the single point where a charge is paid
 					// for and burns in this cylinder. Everything downstream of it -
 					// the torque, the start cycle, the oil wear, and on the client the
@@ -642,21 +794,32 @@ public final class EngineState {
 						// oil sink.
 						drawOilForCombustion(oil);
 				} else {
-					// This cylinder's firing opportunity came round and produced nothing,
-					// so whatever it was burning is done with.
-					firedThisRevolution[cylinder] = false;
+					// The draw failed between the permission check and here - the tank
+					// went dry on this very tick. Give the opportunity back rather than
+					// leaving the cylinder holding a key it never spent, so it can light
+					// on its next cycle without waiting an extra one.
+					lastFiredCycle[cylinder] = CylinderCycleState.NO_EVENT;
+					chargeBurning[cylinder] = false;
 					powerStrokeStrength[cylinder] = 0.0F;
 				}
+			} else if (event == CylinderCycleState.Event.MISFIRED) {
+				// This cylinder's firing opportunity came round and produced nothing,
+				// so whatever it was burning is done with.
+				chargeBurning[cylinder] = false;
+				powerStrokeStrength[cylinder] = 0.0F;
 			}
 
 			// THE POWER STROKE OF A CHARGE THAT HAS ALREADY BEEN PAID FOR.
 			//
-			// Fuel is deliberately absent from this condition, and that absence is the
-			// whole of FIX 6. The charge is in the cylinder, the millibucket has been
-			// drawn and the crank is being pushed; an empty tank cannot reach back into
-			// the bore and put the fire out. Testing fuel here meant the last charge of
-			// a run truncated its stroke the moment the tank hit zero, so the engine
-			// lost the torque it had already bought.
+			// Fuel is deliberately absent from this condition. The charge is in the
+			// cylinder, the millibuckets have been drawn and the crank is being pushed;
+			// an empty tank cannot reach back into the bore and put the fire out.
+			// Testing fuel here meant the last charge of a run truncated its stroke the
+			// moment the tank hit zero, so the engine lost torque it had already bought.
+			//
+			// The Camshaft is absent from it for the same reason, and it is the same
+			// rule: pulling the valvetrain out stops the NEXT charge, not the one
+			// already burning above the piston.
 			//
 			// What DOES still end a stroke immediately, and must:
 			//   structureValid          - the engine was taken apart under it;
@@ -665,14 +828,21 @@ public final class EngineState {
 			//                             (Create reports speed 0 for both). Without it
 			//                             a stalled crank would stay latched and deliver
 			//                             free torque every tick for ever;
-			//   isWithinPowerStroke     - the crank has reached the end of the stroke.
-			powerStrokeActive[cylinder] = firedThisRevolution[cylinder] && structureValid
-				&& lastAngleDeltaDegrees > 0.0F && isWithinPowerStroke(localAngle);
+			//   withinPowerStroke       - the crank has reached the end of the stroke.
+			//                             Measured on the CYCLE angle, so the piston's
+			//                             second pass down the bore - the intake stroke,
+			//                             at the same physical angle - is not a second
+			//                             power stroke.
+			powerStrokeActive[cylinder] = chargeBurning[cylinder] && structureValid
+				&& lastAngleDeltaDegrees > 0.0F && FourStrokeCycle.withinPowerStroke(localCycleAngle);
 			if (powerStrokeActive[cylinder]) {
 				combustionTorque += EngineTuning.combustionTorqueAt(simulatedRpm, targetRpm, cylinderCount)
 					* powerStrokeStrength[cylinder];
 				anyPowerStrokeActive = true;
 			}
+
+			if (armedBefore != armed[cylinder])
+				armedMaskChanged = true;
 		}
 
 		powerStrokeInProgress = anyPowerStrokeActive;
@@ -761,14 +931,25 @@ public final class EngineState {
 		else if (ticksSinceStartActivity < Integer.MAX_VALUE)
 			ticksSinceStartActivity++;
 
-		if (startProgress > 0 && ticksSinceStartActivity > EngineTuning.START_ATTEMPT_TIMEOUT_TICKS)
+		// The physical half. Forward travel only, because winding an engine backwards
+		// is not an attempt to start it and must neither advance nor abandon one.
+		// Reset at the moment a charge catches, so what this measures is genuinely
+		// "how far has the crank gone since anything last fired".
+		if (lastAngleDeltaDegrees > 0.0F)
+			degreesSinceStartActivity += lastAngleDeltaDegrees;
+
+		if (startProgress <= 0)
+			return;
+		if (ticksSinceStartActivity > EngineTuning.START_ATTEMPT_TIMEOUT_TICKS
+			|| degreesSinceStartActivity > EngineTuning.START_ATTEMPT_TRAVEL_DEGREES)
 			resetStartAttempt();
 	}
 
 	private void resetStartAttempt() {
 		startProgress = 0;
 		requiredStartCycles = 0;
-		java.util.Arrays.fill(firedThisRevolution, false);
+		degreesSinceStartActivity = 0.0F;
+		java.util.Arrays.fill(chargeBurning, false);
 		java.util.Arrays.fill(powerStrokeActive, false);
 		// No charge is burning any more, so none of them is worth anything. Leaving a
 		// stale strength behind would let the next latched stroke start at the wrong
@@ -864,6 +1045,18 @@ public final class EngineState {
 	 * while coasting (a power stroke - RUNNING cannot be left while one is live), so
 	 * the client's spin-down traces the server's curve exactly.
 	 */
+	/**
+	 * The multiplier this engine's own drag is currently carrying: worn bearings times
+	 * poor lubrication.
+	 *
+	 * <p>Exactly the two factors {@link #integrate} multiplies its friction by, read
+	 * out in one place so that anything asking "how hard is this engine to turn" gets
+	 * the same answer the physics uses.
+	 */
+	private float dragScale() {
+		return wear.bearingFrictionMultiplier() * lubrication.frictionMultiplier();
+	}
+
 	private float coastDragTorque() {
 		if (!freeRotation || phase.isFiring() || powerStrokeInProgress)
 			return 0.0F;
@@ -888,7 +1081,7 @@ public final class EngineState {
 			case CRANKING -> {
 				// The first successful firing opens a start attempt; it does not start
 				// the engine. That now takes several cycles. This deliberately tests
-				// "ignited on this tick" rather than the latched firedThisRevolution,
+				// "ignited on this tick" rather than the latched chargeBurning,
 				// which would otherwise bounce the phase back and forth once an
 				// abandoned attempt drops us out of STARTING.
 				if (ignitedThisTick)
@@ -900,7 +1093,17 @@ public final class EngineState {
 					stop();
 			}
 			case STARTING -> {
-				if (requiredStartCycles > 0 && startProgress >= requiredStartCycles) {
+				// TWO conditions, and the second is what four-stroke adds. Enough charges
+				// have caught AND the flywheel can now carry the engine the three
+				// non-power strokes to its next one. Without the speed test a single
+				// declared itself RUNNING at hand-crank speed and then bled out and
+				// stopped, having told the player it had started. The bar is the gap
+				// THIS engine actually has - 720 degrees on a single, 180 on an inline-4
+				// - against the friction THIS engine is actually carrying, so a worn or
+				// dry engine has to be spun faster before it counts as running. See
+				// EngineTuning#carriesToNextCombustion.
+				if (requiredStartCycles > 0 && startProgress >= requiredStartCycles
+					&& EngineTuning.carriesToNextCombustion(simulatedRpm, cylinderCount, dragScale())) {
 					phase = EnginePhase.RUNNING;
 					resetStartAttempt();
 				} else if (hasComeToRest()) {
@@ -957,6 +1160,11 @@ public final class EngineState {
 		// count - and therefore its Stress Capacity - is zero from this instant.
 		java.util.Arrays.fill(ticksSinceCombustion, -1);
 		activeCylinderMask = 0;
+		// Every charge the engine was holding goes with it. A stopped engine that kept
+		// its arming latches would fire the instant it was nudged, on charges drawn
+		// before it came to rest - which is exactly the free combustion the latch
+		// exists to prevent.
+		java.util.Arrays.fill(armed, false);
 		// The capacity is deliberately NOT zeroed here. updatePublishedCapacity runs a
 		// few lines later in the same tick and will take it to zero itself, which keeps
 		// hasCapacityFactorChanged() an honest report of whether the figure moved -
@@ -976,7 +1184,7 @@ public final class EngineState {
 	 * </pre>
 	 *
 	 * <p>There is exactly one crank angle in this engine and it is
-	 * {@link #crankAngleDegrees}. A cylinder does not have an angle of its own that
+	 * {@link #position}. A cylinder does not have an angle of its own that
 	 * could drift from the others - it has an <b>offset</b>, fixed by where its
 	 * throw sits on the shaft, and every question about that cylinder (has it
 	 * crossed its firing angle, is it on its power stroke, where is its piston,
@@ -985,38 +1193,46 @@ public final class EngineState {
 	 * counters happening to agree.
 	 */
 	public float localCrankAngleDegrees(int cylinder) {
-		return normalizeDegrees(
-			crankAngleDegrees + EngineTuning.cylinderPhaseOffsetDegrees(cylinder, cylinderCount));
-	}
-
-	/** The same angle interpolated into the current frame, for renderers. */
-	public float getLocalRenderCrankAngleDegrees(int cylinder, float partialTicks) {
-		return normalizeDegrees(crankAngleDegrees + lastAngleDeltaDegrees * partialTicks
-			+ EngineTuning.cylinderPhaseOffsetDegrees(cylinder, cylinderCount));
+		return FourStrokeCycle.physicalAngle(localCycleAngleDegrees(cylinder));
 	}
 
 	/**
-	 * Detects that a cylinder passed its firing angle during the tick that just
-	 * happened, rather than testing the angle for equality - ticks routinely skip
-	 * right over any exact value. Because the test is a crossing it can fire at
-	 * most once per revolution per cylinder by construction.
+	 * The cycle angle <i>this cylinder</i> sees, in {@code [0, 720)}.
 	 *
-	 * <p>Only forward rotation counts.
+	 * <pre>
+	 * localCycleAngle = normalizeCycle(masterCycleAngle + cyclePhaseOffset(index))
+	 * </pre>
 	 *
-	 * @param localAngle this cylinder's angle <i>after</i> the tick's advance
+	 * <p>The answer to "which stroke is this cylinder on", and the input to every
+	 * question about its valves, its compression and its firing. Distinct from
+	 * {@link #localCrankAngleDegrees} in exactly the way that matters: two cylinders
+	 * of an inline-4 share a piston position and do not share a stroke.
 	 */
-	private boolean crossedFiringAngle(float localAngle) {
-		float delta = lastAngleDeltaDegrees;
-		if (delta <= 0.0F)
-			return false;
-		if (delta >= 360.0F)
-			return true;
-		float travelledPastFiringAngle = normalizeDegrees(localAngle - delta - EngineTuning.FIRING_ANGLE_DEGREES);
-		return travelledPastFiringAngle + delta >= 360.0F;
+	public float localCycleAngleDegrees(int cylinder) {
+		return FourStrokeCycle.normalizeCycle(
+			position.angle() + configuration.cyclePhaseOffsetDegrees(cylinder));
 	}
 
-	private boolean isWithinPowerStroke(float localAngle) {
-		return normalizeDegrees(localAngle - EngineTuning.FIRING_ANGLE_DEGREES) < EngineTuning.POWER_STROKE_DEGREES;
+	/** Which of the four strokes a cylinder is on right now. */
+	public FourStrokePhase getCylinderPhase(int cylinder) {
+		return FourStrokePhase.at(localCycleAngleDegrees(cylinder));
+	}
+
+	/** The same physical angle interpolated into the current frame, for renderers. */
+	public float getLocalRenderCrankAngleDegrees(int cylinder, float partialTicks) {
+		return FourStrokeCycle.physicalAngle(getLocalRenderCycleAngleDegrees(cylinder, partialTicks));
+	}
+
+	/**
+	 * The cycle angle a cylinder is at part way through the current frame.
+	 *
+	 * <p>What the valvetrain renders from. Interpolated exactly as the crank angle is,
+	 * off the same one position and the same one tick delta, so a valve can never be
+	 * drawn at a different instant from the piston beneath it.
+	 */
+	public float getLocalRenderCycleAngleDegrees(int cylinder, float partialTicks) {
+		return FourStrokeCycle.normalizeCycle(position.angle() + lastAngleDeltaDegrees * partialTicks
+			+ configuration.cyclePhaseOffsetDegrees(cylinder));
 	}
 
 	/**
@@ -1034,18 +1250,27 @@ public final class EngineState {
 	 * compress with; and a crank that has genuinely stopped must not be nudged off
 	 * its rest position by a spring with nothing left to push against.
 	 *
+	 * <p><b>Once per cycle, not once per revolution.</b> The piston reaches top dead
+	 * centre twice per 720 degrees, but only one of those is a compression: on the
+	 * other the exhaust valve is open and there is nothing to squeeze. So the waveform
+	 * is gated to the sealed strokes - see
+	 * {@code FourStrokeCycle#gasSpringShape} - which is precisely what makes motoring
+	 * a four-stroke feel different from motoring a two-stroke. It still integrates to
+	 * exactly zero over the cycle, so it remains a spring rather than a second
+	 * friction and moves no equilibrium speed.
+	 *
 	 * <p><b>Where multi-cylinder smoothness comes from.</b> Each term is the same
-	 * curve shifted by that cylinder's phase, so on an inline-1 the sum is one lump
-	 * per revolution and on an inline-4 it is four lumps 90 degrees apart that
-	 * very nearly cancel. Nothing anywhere says "four cylinders are smoother" - it
-	 * falls out of adding them up.
+	 * curve shifted by that cylinder's own <i>cycle</i> phase, so on an inline-1 the
+	 * sum is one lump per two revolutions and on an inline-4 it is four lumps 180
+	 * degrees apart that very nearly cancel. Nothing anywhere says "four cylinders
+	 * are smoother" - it falls out of adding them up.
 	 */
 	private float compressionTorqueSum() {
 		if (!structureValid || Math.abs(simulatedRpm) < EngineTuning.REST_RPM)
 			return 0.0F;
 		float total = 0.0F;
 		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
-			total += EngineTuning.compressionTorqueAt(localCrankAngleDegrees(cylinder));
+			total += EngineTuning.compressionTorqueAt(localCycleAngleDegrees(cylinder));
 		return total;
 	}
 
@@ -1117,11 +1342,17 @@ public final class EngineState {
 	 * {@link #activeCylinderMask} rather than repeating this sum, which is what
 	 * makes one answer impossible to disagree with another.
 	 *
+	 * <p><b>"Genuinely participating in combustion", never "currently on its power
+	 * stroke".</b> That distinction is the whole of what four-stroke changes here: a
+	 * healthy cylinder spends three quarters of its cycle not pushing, and an engine
+	 * whose capacity blinked out for those strokes would hand Create a Stress Capacity
+	 * that pulsed four times a second.
+	 *
 	 * <p>"Recently enough" is scaled by speed, because the firing interval is: see
-	 * {@link EngineTuning#generationCombustionAllowanceTicks}. Each cylinder fires
-	 * once per revolution, so the allowance is the same one a single-cylinder
-	 * engine used - and it is comfortably longer than the interval, so a healthy
-	 * cylinder's bit never blinks between its own firing opportunities.
+	 * {@link EngineTuning#generationCombustionAllowanceTicks}. Each cylinder fires once
+	 * per <i>cycle</i>, so the allowance is 2.5 cycles - comfortably longer than the
+	 * interval on every layout, so a healthy cylinder's bit never blinks between its
+	 * own opportunities however slowly the engine idles.
 	 */
 	private int deriveActiveCylinderMask() {
 		int allowance = EngineTuning.generationCombustionAllowanceTicks(simulatedRpm);
@@ -1398,14 +1629,80 @@ public final class EngineState {
 	// Accessors
 	// ------------------------------------------------------------------------
 
-	/** Always in {@code [0, 360)}. */
+	/**
+	 * Where the crank pin is, in {@code [0, 360)}. What the renderers draw.
+	 *
+	 * <p>Derived from {@link #position} rather than stored beside it. A piston at top
+	 * dead centre is at cycle angle 180 or 540 and this cannot tell those apart -
+	 * which is the entire reason the cycle angle exists, and the entire reason this is
+	 * a read rather than a field.
+	 */
 	public float getCrankAngleDegrees() {
-		return crankAngleDegrees;
+		return position.physicalAngle();
 	}
 
 	/** Crank angle interpolated into the current frame, for renderers. */
 	public float getRenderCrankAngleDegrees(float partialTicks) {
-		return normalizeDegrees(crankAngleDegrees + lastAngleDeltaDegrees * partialTicks);
+		return FourStrokeCycle.physicalAngle(getRenderCycleAngleDegrees(partialTicks));
+	}
+
+	/**
+	 * Where the engine is in its four-stroke cycle, in {@code [0, 720)}.
+	 *
+	 * <p>Cylinder 1's own angle, and the master every other cylinder is offset from.
+	 */
+	public float getCycleAngleDegrees() {
+		return position.angle();
+	}
+
+	/** The same, interpolated into the current frame. */
+	public float getRenderCycleAngleDegrees(float partialTicks) {
+		return FourStrokeCycle.normalizeCycle(position.angle() + lastAngleDeltaDegrees * partialTicks);
+	}
+
+	/** Which cycle this engine is in. Signed, and decremented by a backward wrap. */
+	public long getCycleIndex() {
+		return position.cycleIndex();
+	}
+
+	/** The engine's stroke, i.e. cylinder 1's. */
+	public FourStrokePhase getEnginePhaseOfCycle() {
+		return position.phase();
+	}
+
+	/** The camshaft's angle, in {@code [0, 360)}: half the cycle angle, always. */
+	public float getCamshaftAngleDegrees() {
+		return dev.engineeredcombustion.content.engine.fourstroke.CamshaftTiming.camAngle(position.angle());
+	}
+
+	/** The same, interpolated into the current frame. */
+	public float getRenderCamshaftAngleDegrees(float partialTicks) {
+		return dev.engineeredcombustion.content.engine.fourstroke.CamshaftTiming
+			.camAngle(getRenderCycleAngleDegrees(partialTicks));
+	}
+
+	/** Whether this engine has a Camshaft, and therefore a valvetrain at all. */
+	public boolean hasCamshaft() {
+		return camshaftInstalled;
+	}
+
+	/** The crank and firing schedule this engine is running. */
+	public FourStrokeFiringOrder getConfiguration() {
+		return configuration;
+	}
+
+	/** Whether cylinder {@code i} is holding an inducted charge it has not yet burned. */
+	public boolean isArmed(int cylinder) {
+		return cylinder >= 0 && cylinder < armed.length && armed[cylinder];
+	}
+
+	/** The arming latches as one integer, for persistence and synchronisation. */
+	public int getArmedMask() {
+		int mask = 0;
+		for (int cylinder = 0; cylinder < cylinderCount; cylinder++)
+			if (armed[cylinder])
+				mask |= 1 << cylinder;
+		return mask;
 	}
 
 	/** The speed the crank is really turning at this tick. Drives all animation. */
@@ -1672,15 +1969,72 @@ public final class EngineState {
 	}
 
 	public float getPistonPosition() {
-		return CrankMath.pistonPosition(crankAngleDegrees);
+		return CrankMath.pistonPosition(position.physicalAngle());
 	}
 
 	// ------------------------------------------------------------------------
 	// Persistence / synchronisation support
 	// ------------------------------------------------------------------------
 
+	/**
+	 * Places the engine at a physical crank angle, leaving it on the first half of the
+	 * cycle.
+	 *
+	 * <p><b>For legacy saves and for tests, not for ordinary restore.</b> A physical
+	 * angle does not determine a cycle position, so this is the migration rule of
+	 * {@code EngineSchema} in method form: keep the piston exactly where it was and
+	 * choose the compression/power half, which is the half whose mechanical meaning
+	 * matches what the old 360-degree engine was doing. Safety does not rest on that
+	 * choice - it rests on the arming latches being empty, which the caller must also
+	 * ensure.
+	 */
 	public void setCrankAngleDegrees(float crankAngleDegrees) {
-		this.crankAngleDegrees = normalizeDegrees(crankAngleDegrees);
+		position.set(0L, FourStrokeCycle.normalizeRevolution(crankAngleDegrees));
+	}
+
+	/** Restores the authoritative position outright. */
+	public void setCyclePosition(long cycleIndex, float cycleAngleDegrees) {
+		position.set(cycleIndex, cycleAngleDegrees);
+	}
+
+	/**
+	 * Adopts a cycle position sent by the server, and the arming state that goes with
+	 * it. <b>Client side.</b>
+	 *
+	 * <p>The client cannot derive which stroke a cylinder is on: the piston looks
+	 * identical half a cycle apart, so a client left to integrate from a physical
+	 * angle would sit exactly one stroke out of phase, with the valves of a
+	 * compressing cylinder wide open. This is the correction that cannot happen, and
+	 * it is deliberately a whole-position assignment rather than a nudge - a phase
+	 * error is never small.
+	 */
+	public void adoptCyclePhase(long cycleIndex, float cycleAngleDegrees, int armedMask) {
+		position.set(cycleIndex, cycleAngleDegrees);
+		setArmedMask(armedMask);
+	}
+
+	/** Restores the arming latches from their persisted or synchronised integer. */
+	public void setArmedMask(int armedMask) {
+		for (int cylinder = 0; cylinder < armed.length; cylinder++)
+			armed[cylinder] = cylinder < cylinderCount && (armedMask & (1 << cylinder)) != 0;
+	}
+
+	/** The per-cylinder last-taken firing opportunities, as a copy safe to hand to NBT. */
+	public long[] copyOfLastFiredCycles() {
+		return lastFiredCycle.clone();
+	}
+
+	/**
+	 * Restores which firing opportunity each cylinder last took.
+	 *
+	 * <p>Persisted because it is what makes a duplicate combustion detectable, and a
+	 * save taken between a cylinder's ignition and the end of its power stroke would
+	 * otherwise come back able to light the very same opportunity a second time.
+	 */
+	public void setLastFiredCycles(long[] cycles) {
+		for (int cylinder = 0; cylinder < lastFiredCycle.length; cylinder++)
+			lastFiredCycle[cylinder] =
+				cylinder < cycles.length ? cycles[cylinder] : CylinderCycleState.NO_EVENT;
 	}
 
 	public void setPhase(EnginePhase phase) {
@@ -1745,6 +2099,15 @@ public final class EngineState {
 	 */
 	public void restoreAfterLoad(boolean wasGenerating) {
 		activelyGenerating = wasGenerating;
+		// A charge that was mid-stroke when the world closed is not carried across. The
+		// arming latch and the firing key ARE persisted - they are what stop a reloaded
+		// engine re-taking an opportunity it already took - but the burning charge
+		// itself is transient, and reconstructing one would be inventing torque that
+		// nothing paid for. At most one impulse is lost, on a reload, once.
+		java.util.Arrays.fill(chargeBurning, false);
+		java.util.Arrays.fill(powerStrokeActive, false);
+		java.util.Arrays.fill(powerStrokeStrength, 0.0F);
+		powerStrokeInProgress = false;
 		// Rebuilt from the restored combustion ages, exactly as the running simulation
 		// would, so the first tick back already knows which cylinders were working -
 		// and a client joining a running engine is told at once rather than having to
@@ -1827,12 +2190,36 @@ public final class EngineState {
 	 * renderers ask for from being briefly wrong on a four-cylinder engine.
 	 */
 	public void setLayout(int cylinderCount, int sparkPlugMask) {
-		this.cylinderCount = Math.min(Math.max(cylinderCount, 1), EngineTuning.MAX_CYLINDERS);
+		setCylinderCount(cylinderCount);
 		this.sparkPlugMask = sparkPlugMask & ((1 << this.cylinderCount) - 1);
 		// An engine that just lost a section cannot still be firing on it. Trimming
 		// here means no reading taken between this and the next simulated tick can
 		// count a cylinder the engine no longer has.
 		this.activeCylinderMask &= (1 << this.cylinderCount) - 1;
+	}
+
+	/**
+	 * Adopts a cylinder count, and with it the crank and firing schedule that count
+	 * implies.
+	 *
+	 * <p><b>The one place a layout becomes a configuration.</b> Nothing else assigns
+	 * {@link #configuration}, so an engine can never be running one layout's throws
+	 * against another's ignition order - which on an inline-3 would silently play the
+	 * firing order backwards.
+	 *
+	 * <p>A section added or removed re-shapes the engine, and the cylinders it still
+	 * has now sit at different cycle phases. Their arming latches and firing keys
+	 * describe the old shape, so they are dropped: the alternative is a cylinder
+	 * holding a charge it drew on a stroke it is no longer on.
+	 */
+	private void setCylinderCount(int cylinderCount) {
+		int clamped = Math.min(Math.max(cylinderCount, 1), EngineTuning.MAX_CYLINDERS);
+		if (clamped == this.cylinderCount)
+			return;
+		this.cylinderCount = clamped;
+		this.configuration = FourStrokeFiringOrder.forCylinderCount(clamped);
+		java.util.Arrays.fill(armed, false);
+		java.util.Arrays.fill(lastFiredCycle, CylinderCycleState.NO_EVENT);
 	}
 
 	/** Copies as much of {@code from} as fits into {@code into}, leaving the rest. */
@@ -1844,6 +2231,12 @@ public final class EngineState {
 		int[] ages = new int[EngineTuning.MAX_CYLINDERS];
 		java.util.Arrays.fill(ages, -1);
 		return ages;
+	}
+
+	private static long[] newFiringKeys() {
+		long[] keys = new long[EngineTuning.MAX_CYLINDERS];
+		java.util.Arrays.fill(keys, CylinderCycleState.NO_EVENT);
+		return keys;
 	}
 
 	/**
@@ -1947,6 +2340,17 @@ public final class EngineState {
 
 	public void setIgnitionEnabled(boolean ignitionEnabled) {
 		this.ignitionEnabled = ignitionEnabled;
+	}
+
+	/**
+	 * Adopts whether the engine has a Camshaft.
+	 *
+	 * <p>On the server this is overwritten from the world on the next simulated tick;
+	 * it is set here so a client - which cannot resolve the assembly - can draw the
+	 * valvetrain and diagnose a missing one.
+	 */
+	public void setCamshaftInstalled(boolean camshaftInstalled) {
+		this.camshaftInstalled = camshaftInstalled;
 	}
 
 	// There is deliberately no setSparkPlugInstalled(boolean). It existed for a tag

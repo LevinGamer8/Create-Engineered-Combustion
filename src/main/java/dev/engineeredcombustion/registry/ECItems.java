@@ -84,6 +84,37 @@ public class ECItems {
 	public static final DeferredHolder<Item, Item> SPARK_PLUG =
 		ITEMS.register("spark_plug", () -> new Item(new Item.Properties().stacksTo(16)));
 
+	/**
+	 * The valvetrain, fitted <i>into</i> a placed Crankshaft, one per engine.
+	 *
+	 * <h2>One part, not eight</h2>
+	 * A real four-stroke engine's valve gear is a camshaft, a timing drive, two valves
+	 * per cylinder, a pushrod and a rocker arm for each of them, and their springs.
+	 * Making the player install all of that would cost an inline-4 sixteen
+	 * interactions to build a part of the engine nobody has an interesting choice
+	 * about - so this is the whole of it, and the rest are integrated: the timing
+	 * gears are inside this item, and the pushrods, rockers and valves come with the
+	 * Cylinder they belong to.
+	 *
+	 * <p>The cost is therefore <b>one extra mandatory interaction per engine</b>,
+	 * whether that engine is a single or an inline-4. That is the frozen assembly
+	 * budget, and it is what "semi-modular" means here.
+	 *
+	 * <h2>What an engine without one does</h2>
+	 * Everything except run. It is mechanically valid, it turns, it can be hand
+	 * cranked or driven by another Create source, its pistons move and its compression
+	 * still resists - but nothing opens the intake valve, so no cylinder ever draws a
+	 * charge and none can burn one. No combustion, no generation, no fuel drawn, no
+	 * sound. The goggles say <i>Camshaft missing</i> specifically, because a machine
+	 * with a part missing is not a broken machine and must not be described as one.
+	 *
+	 * <p>Engine-wide rather than per-cylinder, like the Redstone Control Module and
+	 * unlike the Spark Plug: there is one camshaft in an inline engine and it drives
+	 * every cylinder off it.
+	 */
+	public static final DeferredHolder<Item, Item> CAMSHAFT =
+		ITEMS.register("camshaft", () -> new Item(new Item.Properties().stacksTo(16)));
+
 	// --- petroleum chain ----------------------------------------------------
 
 	public static final DeferredHolder<Item, BlockItem> OIL_SHALE =

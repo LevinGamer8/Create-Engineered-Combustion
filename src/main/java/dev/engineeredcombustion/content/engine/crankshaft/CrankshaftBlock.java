@@ -3,10 +3,14 @@ package dev.engineeredcombustion.content.engine.crankshaft;
 import com.simibubi.create.content.kinetics.base.HorizontalAxisKineticBlock;
 import com.simibubi.create.foundation.block.IBE;
 
+import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.foundation.EngineCasting;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECDataComponents;
 import dev.engineeredcombustion.registry.ECItems;
+import org.jetbrains.annotations.Nullable;
+
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Direction.Axis;
@@ -76,9 +80,11 @@ import net.minecraft.world.phys.BlockHitResult;
  * engine needs to be started and stopped:
  * <ul>
  * <li>right-click empty-handed - work the switch;</li>
+ * <li>right-click holding a Camshaft - fit the engine's valvetrain, which every
+ * engine needs exactly one of before it can run;</li>
  * <li>right-click holding a Redstone Control Module - plug it in, which is the
  * <i>only</i> way this engine ever comes to care about redstone;</li>
- * <li>sneak + right-click empty-handed - take that module back out;</li>
+ * <li>sneak + right-click empty-handed - take an installed part back out;</li>
  * <li>right-click and hold with a Wrench on the module's value box - Create's
  * own value UI, for choosing what redstone is allowed to drive.</li>
  * </ul>
@@ -245,24 +251,61 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock
 	}
 
 	/**
-	 * Fits a Redstone Control Module.
+	 * Fits one of the engine's two engine-wide parts: the Camshaft, or the Redstone
+	 * Control Module.
 	 *
-	 * <p>An item installed into a placed block, exactly like the Piston Assembly
-	 * and the Air Filter: it is a part you plug into an engine's controls, not a
-	 * machine standing beside it, and the engine is already five blocks tall.
+	 * <p>Items installed into a placed block, exactly like the Piston Assembly and the
+	 * Air Filter: they are parts you plug into an engine, not machines standing beside
+	 * it, and the engine is already five blocks tall.
+	 *
+	 * <p>Either may be fitted through <b>any</b> section of the engine - the flag lands
+	 * on the controller regardless of which crankcase was clicked - because a player
+	 * building an inline-4 should not have to work out which end runs it. The
+	 * <i>engine's</i> answer is checked rather than this section's, so a second
+	 * Camshaft cannot be fitted to the far end of an engine that already has one.
 	 */
 	@Override
 	protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
 		Player player, InteractionHand hand, BlockHitResult hitResult) {
-		if (!stack.is(ECItems.REDSTONE_CONTROL_MODULE.get()))
-			return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
 		if (!(level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft))
 			return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
-		if (crankshaft.hasControlModule())
+
+		if (stack.is(ECItems.CAMSHAFT.get()))
+			return fit(crankshaft.engineHasCamshaft(), "gui.camshaft_already_installed",
+				crankshaft::installCamshaft, state, level, pos, player, stack);
+		if (stack.is(ECItems.REDSTONE_CONTROL_MODULE.get()))
+			return fit(crankshaft.engineHasControlModule(), null, crankshaft::installControlModule, state,
+				level, pos, player, stack);
+		return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+	}
+
+	/**
+	 * Installs one engine-wide part, on the server, and charges the player for it.
+	 *
+	 * <p>Shared by both so the two cannot drift apart in the details that matter - the
+	 * creative exemption, the sound, and <b>passing rather than claiming</b> the click
+	 * when the engine already has one. Passing is what lets a player holding a spare
+	 * still place a block against a finished engine.
+	 *
+	 * @param already whether the ENGINE already has one. Never this section's own flag:
+	 *                a follower answering for itself would let a second part be fitted
+	 *                to the far end of an engine that is already equipped
+	 * @param busyKey translation key for the status message, or null to say nothing.
+	 *                The Camshaft says so because it is mandatory, and a player who
+	 *                cannot see where theirs went needs telling
+	 */
+	private static ItemInteractionResult fit(boolean already, @Nullable String busyKey, Runnable install,
+		BlockState state, Level level, BlockPos pos, Player player, ItemStack stack) {
+		if (already) {
+			if (!level.isClientSide && busyKey != null)
+				ECLang.translate(busyKey)
+					.style(ChatFormatting.YELLOW)
+					.sendStatus(player);
 			return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+		}
 
 		if (!level.isClientSide) {
-			crankshaft.installControlModule();
+			install.run();
 			if (!player.isCreative())
 				stack.shrink(1);
 			level.playSound(null, pos, state.getSoundType()
@@ -272,14 +315,15 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock
 	}
 
 	/**
-	 * The engine's two bare-handed interactions.
+	 * The engine's bare-handed interactions.
 	 *
 	 * <ul>
 	 * <li>right-click - works the ignition switch. This is the normal way to start
 	 * and stop the engine, and it needs no redstone whatsoever.</li>
-	 * <li>sneak + right-click - takes an installed Redstone Control Module back out
-	 * and hands it over, the same gesture that recovers a Piston Assembly or an Air
-	 * Filter.</li>
+	 * <li>sneak + right-click - takes an installed engine-wide part back out and hands
+	 * it over, the same gesture that recovers a Piston Assembly or an Air Filter. The
+	 * Camshaft comes first when both are fitted, because it is the one a player
+	 * services; the Redstone Control Module is optional and rarely removed.</li>
 	 * </ul>
 	 *
 	 * <p>Both require an empty hand, and that is load-bearing rather than
@@ -302,32 +346,76 @@ public class CrankshaftBlock extends HorizontalAxisKineticBlock
 			.isEmpty())
 			return InteractionResult.PASS;
 
-		if (player.isShiftKeyDown()) {
-			if (!crankshaft.hasControlModule())
-				return InteractionResult.PASS;
-			if (!level.isClientSide && crankshaft.removeControlModule()) {
-				ItemStack recovered = new ItemStack(ECItems.REDSTONE_CONTROL_MODULE.get());
-				if (!player.getInventory()
-					.add(recovered))
-					popResource(level, pos, recovered);
-				level.playSound(null, pos, state.getSoundType()
-					.getBreakSound(), SoundSource.BLOCKS, 0.8F, 0.9F);
-			}
-			return InteractionResult.sidedSuccess(level.isClientSide);
-		}
+		if (player.isShiftKeyDown())
+			return service(crankshaft, state, level, pos, player);
 
 		if (!level.isClientSide)
 			crankshaft.toggleIgnitionFor(player);
 		return InteractionResult.sidedSuccess(level.isClientSide);
 	}
 
+	/**
+	 * Takes one engine-wide part back out of a stopped engine.
+	 *
+	 * <p>Pulling the Camshaft out of a turning engine is not a thing anyone does, and
+	 * the gate is on <i>rotation</i> rather than on the engine phase - so it covers an
+	 * engine being motored by a neighbour and one coasting down after the fuel ran out,
+	 * neither of which is "running" and both of which have a valvetrain moving. The
+	 * Redstone Control Module is deliberately not covered: it is a control box bolted
+	 * to the outside, and unplugging one from a running engine is an ordinary way to
+	 * hand the controls back to the switch.
+	 */
+	private static InteractionResult service(CrankshaftBlockEntity crankshaft, BlockState state, Level level,
+		BlockPos pos, Player player) {
+		if (crankshaft.hasCamshaft()) {
+			if (!crankshaft.getEngineState()
+				.isAtRest()) {
+				if (!level.isClientSide)
+					ECLang.translate("gui.stop_engine_before_servicing")
+						.style(ChatFormatting.RED)
+						.sendStatus(player);
+				// Claimed rather than passed, so the click does not fall through to
+				// placing a block against the engine the player was trying to service.
+				return InteractionResult.sidedSuccess(level.isClientSide);
+			}
+			if (!level.isClientSide && crankshaft.removeCamshaft())
+				recover(level, pos, state, player, new ItemStack(ECItems.CAMSHAFT.get()));
+			return InteractionResult.sidedSuccess(level.isClientSide);
+		}
+
+		if (!crankshaft.hasControlModule())
+			return InteractionResult.PASS;
+		if (!level.isClientSide && crankshaft.removeControlModule())
+			recover(level, pos, state, player, new ItemStack(ECItems.REDSTONE_CONTROL_MODULE.get()));
+		return InteractionResult.sidedSuccess(level.isClientSide);
+	}
+
+	/** Hands a removed part back, dropping it only when the inventory is full. */
+	private static void recover(Level level, BlockPos pos, BlockState state, Player player, ItemStack recovered) {
+		if (!player.getInventory()
+			.add(recovered))
+			popResource(level, pos, recovered);
+		level.playSound(null, pos, state.getSoundType()
+			.getBreakSound(), SoundSource.BLOCKS, 0.8F, 0.9F);
+	}
+
 	@Override
 	public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
 		if (!state.is(newState.getBlock()) && level.getBlockEntity(pos) instanceof CrankshaftBlockEntity crankshaft) {
-			// An installed module is a real item the player paid for; it must not
-			// evaporate because the block it was plugged into was mined.
+			// THE ONE CANONICAL DROP PATH for this block's engine-wide parts. A pickaxe,
+			// a creative click, a Create Wrench, an explosion and a piston are five ways
+			// to reach onRemove, not five behaviours - so the item is emitted here, once,
+			// at the moment the block ceases to exist, and no interaction anywhere drops
+			// one itself. That is what keeps "install one, get exactly one back" true
+			// whichever way the block came apart.
+			//
+			// Both read THIS SECTION'S OWN flag, never the engine-wide answer. An
+			// engine-wide answer here would have every section of an inline-4 drop a
+			// part the player only ever crafted one of.
 			if (crankshaft.hasControlModule())
 				popResource(level, pos, new ItemStack(ECItems.REDSTONE_CONTROL_MODULE.get()));
+			if (crankshaft.hasCamshaft())
+				popResource(level, pos, new ItemStack(ECItems.CAMSHAFT.get()));
 			// Clear the engine and stop the flywheel *before* the block entity goes
 			// away, otherwise the flywheel would keep asking a crankshaft that no
 			// longer exists until Create's periodic kinetic validation notices.

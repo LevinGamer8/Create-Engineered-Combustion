@@ -28,6 +28,10 @@ public class ECCreativeTabs {
 				output.accept(ECItems.CYLINDER.get());
 				output.accept(ECItems.PISTON_ASSEMBLY.get());
 				output.accept(ECItems.SPARK_PLUG.get());
+				// Beside the parts it drives rather than beside the Crankshaft it bolts
+				// to: the player meets the Camshaft as the thing that makes the cylinders
+				// breathe, which is the order the Ponder teaches it in.
+				output.accept(ECItems.CAMSHAFT.get());
 				output.accept(ECItems.FLYWHEEL.get());
 				output.accept(ECItems.CARBURETOR.get());
 				output.accept(ECItems.AIR_FILTER.get());

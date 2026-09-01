@@ -1,5 +1,8 @@
 package dev.engineeredcombustion.content.engine;
 
+import dev.engineeredcombustion.content.engine.fourstroke.FourStrokeCycle;
+import dev.engineeredcombustion.content.engine.fourstroke.FourStrokeFiringOrder;
+
 /**
  * Every tunable number of the engine simulation, in one place.
  *
@@ -45,30 +48,45 @@ public final class EngineTuning {
 	public static final int MAX_CYLINDERS = 4;
 
 	/**
-	 * Crank phase of a cylinder, in degrees, for the simplified one-power-event-per
-	 * -revolution engine this mod currently simulates.
+	 * Where cylinder {@code index}'s crank throw sits, in degrees, relative to
+	 * cylinder 1's.
+	 *
+	 * <p><b>Piston geometry only.</b> Since Milestone 15B this is emphatically not
+	 * also the firing schedule: on a four-stroke the two are different questions,
+	 * and cylinders 1 and 4 of an inline-4 are the proof - they sit on the same
+	 * throw and their pistons move together, yet they fire a full revolution apart.
+	 * The schedule lives in {@link FourStrokeFiringOrder#ignitionOffsetDegrees}, and
+	 * this is that schedule folded into one revolution.
 	 *
 	 * <pre>
-	 * phaseOffset(i) = i * 360 / cylinderCount
+	 * R1   0
+	 * R2   0, 180        opposed, the frozen uneven twin
+	 * R3   0, 120, 240   unchanged from the old engine
+	 * R4   0, 180, 180, 0  flat-plane; 1+4 together, 2+3 together and opposite
 	 * </pre>
 	 *
-	 * so an inline-1 fires at 0, an inline-2 at 0 and 180, an inline-3 at 0, 120
-	 * and 240, and an inline-4 at 0, 90, 180 and 270 - evenly spaced round one
-	 * revolution.
-	 *
-	 * <p>These are <b>prototype two-stroke-like</b> crank phases. A real four-stroke
-	 * engine spreads its firing over 720 degrees and needs an explicit crank
-	 * configuration and a firing order, neither of which exists yet; when they do,
-	 * this is the function they replace.
-	 *
-	 * <p>The same value drives the simulation and the renderers, which is what makes
-	 * the crank throw a player can see through the crankcase window the throw the
-	 * combustion actually happened on.
+	 * <p>Derived rather than tabulated, so a piston position computed from a
+	 * physical angle and one computed by folding a cycle angle are the same number
+	 * by construction. The same value drives the simulation and the renderers,
+	 * which is what makes the crank throw a player can see through the crankcase
+	 * window the throw the combustion actually happened on.
 	 */
 	public static float cylinderPhaseOffsetDegrees(int index, int cylinderCount) {
-		if (cylinderCount <= 1)
-			return 0.0F;
-		return 360.0F * index / cylinderCount;
+		return FourStrokeFiringOrder.forCylinderCount(cylinderCount)
+			.geometricOffsetDegrees(index);
+	}
+
+	/**
+	 * Where cylinder {@code index} sits in the engine's 720-degree cycle, relative
+	 * to cylinder 1.
+	 *
+	 * <p>The offset <i>added</i> to the engine's master cycle angle, and therefore
+	 * the negation of the ignition offset - a cylinder that fires later in the cycle
+	 * is one whose own angle is behind the master's.
+	 */
+	public static float cylinderCyclePhaseOffsetDegrees(int index, int cylinderCount) {
+		return FourStrokeFiringOrder.forCylinderCount(cylinderCount)
+			.cyclePhaseOffsetDegrees(index);
 	}
 
 	// --- speeds, in RPM -----------------------------------------------------
@@ -229,20 +247,45 @@ public final class EngineTuning {
 	// --- combustion ---------------------------------------------------------
 
 	/**
-	 * Crank angle of the single power event per revolution.
+	 * Cycle angle of the single power event per <b>cycle</b>: compression top dead
+	 * centre.
 	 *
-	 * <p>{@link CrankMath#pistonPosition} gives 0 (bottom dead centre) at 0
-	 * degrees and 1 (top dead centre) at 180, so firing at 180 means combustion
-	 * starts with the piston at the top and pushes it back down over the
-	 * following 180 degrees - the expansion stroke of a two-stroke engine.
+	 * <p>{@link CrankMath#pistonPosition} gives 0 (bottom dead centre) at 0 degrees
+	 * and 1 (top dead centre) at 180, so firing at 180 means combustion starts with
+	 * the piston at the top and pushes it back down over the following 180 degrees.
+	 *
+	 * <p><b>The number did not change in Milestone 15B - the modulus did.</b> A
+	 * cylinder reaches this <i>cycle</i> angle once per 720 degrees, where it reaches
+	 * the same <i>physical</i> angle once per 360. That is the whole of what makes
+	 * this a four-stroke, and it is why this constant is now an alias of
+	 * {@link FourStrokeCycle#IGNITION_ANGLE_DEGREES} rather than a second copy of it.
 	 */
-	public static final float FIRING_ANGLE_DEGREES = 180.0F;
+	public static final float FIRING_ANGLE_DEGREES = FourStrokeCycle.IGNITION_ANGLE_DEGREES;
 
 	/** How far past the firing angle combustion keeps pushing (TDC -> BDC). */
-	public static final float POWER_STROKE_DEGREES = 180.0F;
+	public static final float POWER_STROKE_DEGREES = FourStrokeCycle.POWER_STROKE_DEGREES;
 
-	/** Fraction of each revolution during which combustion torque is applied. */
-	public static final float POWER_STROKE_DUTY = POWER_STROKE_DEGREES / 360.0F;
+	/**
+	 * Fraction of the <b>cycle</b> during which one cylinder's combustion pushes.
+	 *
+	 * <pre>
+	 * 180 / 720 = 0.25
+	 * </pre>
+	 *
+	 * <p>It was {@code 180 / 360 = 0.5} before Milestone 15B, and <b>this halving is
+	 * the entire average-power problem of the four-stroke conversion, and also its
+	 * entire solution.</b> {@link #peakCombustionTorqueFor(float)} solves
+	 * {@code peak * DUTY * 0.5 = friction(target)} for the peak, so substituting this
+	 * duty doubles the peak by arithmetic and the engine settles at exactly the speed
+	 * it settled at before. Nothing below is retuned by hand.
+	 *
+	 * <p>The fuel side moves with it in the same commit and for the same reason: one
+	 * combustion per 720 degrees at {@link #FUEL_PER_COMBUSTION_MB} of 2 costs the
+	 * same gasoline per revolution as one per 360 at 1 did. Changing either of these
+	 * without the other is what would produce a half-power or a double-thirst engine,
+	 * so they are deliberately not separable.
+	 */
+	public static final float POWER_STROKE_DUTY = FourStrokeCycle.POWER_STROKE_DUTY;
 
 	/**
 	 * How long the visible flash inside the combustion chamber lasts.
@@ -449,14 +492,25 @@ public final class EngineTuning {
 	 * and burns proportionally more:
 	 *
 	 * <pre>
-	 *  64 RPM (idle)          1.07 firings/s   1000 mB lasts ~15.6 min
-	 * 192 RPM (full throttle) 3.20 firings/s   1000 mB lasts ~5.2 min
+	 *  64 RPM (idle)          0.53 firings/s   1000 mB lasts ~15.6 min
+	 * 192 RPM (full throttle) 1.60 firings/s   1000 mB lasts ~5.2 min
 	 * </pre>
 	 *
-	 * <p>Pre-start firing attempts are charged the same amount - a real engine
-	 * burns fuel while you crank it too.
+	 * <p><b>Two millibuckets since Milestone 15B, and the run times above are
+	 * unchanged.</b> A four-stroke cylinder fires once per 720 degrees rather than
+	 * once per 360, so it takes half as many charges to cover the same distance and
+	 * each of them has to be worth twice as much. The product - gasoline per
+	 * revolution - is identical, which is the point: the conversion changes the
+	 * engine's rhythm, not the player's fuel budget.
+	 *
+	 * <p>This moves in lockstep with {@link #POWER_STROKE_DUTY}. Changing one without
+	 * the other gives either a half-power engine or one that drinks twice as fast, so
+	 * they were changed in the same commit and must stay that way.
+	 *
+	 * <p>Pre-start firing attempts are charged the same amount - a real engine burns
+	 * fuel while you crank it too.
 	 */
-	public static final int FUEL_PER_COMBUSTION_MB = 1;
+	public static final int FUEL_PER_COMBUSTION_MB = 2;
 
 	/** Carburetor tank size, in millibuckets. */
 	public static final int CARBURETOR_CAPACITY_MB = 1000;
@@ -487,12 +541,19 @@ public final class EngineTuning {
 	/**
 	 * Running combustion events per millibucket of oil drawn.
 	 *
-	 * <p>A gameplay abstraction, not a model of real oil consumption. At idle this
-	 * is roughly one millibucket a minute, so a full sump is observable within a
-	 * minute of running and lasts long enough that refilling is not a chore.
-	 * Starting attempts are excluded: only an engine actually running counts.
+	 * <p>A gameplay abstraction, not a model of real oil consumption. At idle this is
+	 * roughly one millibucket a minute, so a full sump is observable within a minute
+	 * of running and lasts long enough that refilling is not a chore. Starting
+	 * attempts are excluded: only an engine actually running counts.
+	 *
+	 * <p><b>Halved in Milestone 15B, so that nothing about oil use changed.</b> The
+	 * count is in combustion events and a four-stroke produces half as many of them
+	 * per revolution, so 64 would have doubled how long a sump lasts. 32 events per
+	 * millibucket at the new rate is the same millibucket per revolution the player
+	 * has always had - the same units correction the cylinder wear figure takes, for
+	 * the same reason.
 	 */
-	public static final int COMBUSTION_EVENTS_PER_OIL_MB = 64;
+	public static final int COMBUSTION_EVENTS_PER_OIL_MB = 32;
 
 	/** Oil drawn each time that count is reached. */
 	public static final int OIL_PER_CONSUMPTION_MB = 1;
@@ -570,34 +631,143 @@ public final class EngineTuning {
 	public static final float START_KICK_TORQUE_FACTOR = 0.35F;
 
 	/**
+	 * Whether the Flywheel can carry this engine, at this speed and in this
+	 * condition, from one combustion event to the next.
+	 *
+	 * <h2>What it is for</h2>
+	 * An engine has not caught until its flywheel can carry it between bangs, and
+	 * Milestone 15B moved that goalpost: a cylinder now fires once per 720 degrees, so
+	 * a <b>single</b> coasts three strokes on stored momentum where it used to coast
+	 * one. A single that caught at hand-crank speed under the old model climbed away;
+	 * under this one it bled out and stopped a few seconds later, having announced
+	 * itself RUNNING first. That is the Flywheel failing to carry it, and this is the
+	 * question that catches it.
+	 *
+	 * <p>So {@code STARTING -> RUNNING} asks this as well as counting firings - which
+	 * is exactly what Milestone 15B asks starting to be driven by: angular progress,
+	 * firing opportunities, successful combustion <i>and RPM</i>. In play the engine
+	 * fires audibly while the crank is still held, revs up under its own kicks, and
+	 * takes over; what it can no longer do is claim to be running at a speed it cannot
+	 * sustain.
+	 *
+	 * <h2>Asked of the engine that is actually there</h2>
+	 * Three inputs, and every one of them is a way the answer legitimately differs:
+	 * <ul>
+	 * <li><b>the gap</b> is {@code 720 / cylinderCount} degrees - the engine's own mean
+	 * firing interval - so a single has to reach about 40 RPM and an inline-4, which
+	 * never coasts more than 180 degrees, is over the bar at any speed a hand crank
+	 * produces. That is not a per-layout smoothness knob: it is one question asked of
+	 * the gap each engine actually has, and it is why multi-cylinder engines have
+	 * always started more easily;</li>
+	 * <li><b>bearing wear</b> multiplies the friction the coast fights. Without it a
+	 * critically worn single passed a bar computed for a pristine one, caught at 40
+	 * RPM, and then stalled before its next bang - a worn engine that could no longer
+	 * run at all, which is precisely the mathematical bug the four-stroke event
+	 * frequency exposes in Milestone 13.1's calibration;</li>
+	 * <li><b>lubrication</b>, for the same reason and through the same multiplier.</li>
+	 * </ul>
+	 *
+	 * <h2>Closed form, not a simulation</h2>
+	 * Friction here is affine in speed, so the coast has an exact solution and there is
+	 * no loop to run per tick:
+	 *
+	 * <pre>
+	 * dv/dt = -(A + B v)          A = m*a/I,  B = m*b/I
+	 * v(t)  = (v0 + A/B) e^-Bt - A/B
+	 * theta = k * [ (v0 + A/B)(1 - e^-Bt*)/B - (A/B) t* ]
+	 * </pre>
+	 *
+	 * with {@code t*} the time to fall to {@link #STALL_RPM}. Compression is
+	 * deliberately absent: it returns over a cycle exactly what it takes, so it changes
+	 * the shape of the coast and not its endpoint.
+	 *
+	 * @param rpm           the engine's current speed
+	 * @param cylinderCount how many cylinders share the cycle, and so how far apart the
+	 *                      engine's combustion events are
+	 * @param frictionScale the multiplier the engine's own drag is currently carrying:
+	 *                      bearing wear times lubrication. 1 on a new, oiled engine
+	 */
+	public static boolean carriesToNextCombustion(float rpm, int cylinderCount, float frictionScale) {
+		if (rpm <= STALL_RPM)
+			return false;
+		float gap = FourStrokeCycle.CYCLE_DEGREES / Math.max(1, cylinderCount);
+		float scale = Math.max(1.0F, frictionScale);
+		double a = FRICTION_BASE_TORQUE * scale / FLYWHEEL_INERTIA;
+		double b = FRICTION_TORQUE_PER_RPM * scale / FLYWHEEL_INERTIA;
+		double offset = a / b;
+		// Ticks until friction alone brings it down to the stall speed.
+		double ticksToStall = Math.log((rpm + offset) / (STALL_RPM + offset)) / b;
+		// Degrees turned in that time. degreesPerTick is linear in speed, so the
+		// integral of the speed carries straight through it.
+		double revolutionsFactor = degreesPerTick(1.0F);
+		double travelled = revolutionsFactor
+			* ((rpm + offset) * (1.0D - Math.exp(-b * ticksToStall)) / b - offset * ticksToStall);
+		return travelled >= gap;
+	}
+
+	/**
 	 * A start attempt is abandoned after this many ticks without a usable firing
 	 * opportunity - the engine stopped turning, ran dry, or ignition went away.
 	 * Stops a half-finished start from being remembered indefinitely.
 	 */
 	public static final int START_ATTEMPT_TIMEOUT_TICKS = 30;
 
+	/**
+	 * How far the crank may travel without a charge catching before the start
+	 * attempt is abandoned, in degrees.
+	 *
+	 * <p>The physically meaningful half of the rule, and the one Milestone 15B adds.
+	 * {@link #START_ATTEMPT_TIMEOUT_TICKS} answers "is anything happening at all" -
+	 * it only counts ticks on which no cylinder <i>could</i> have fired, so it
+	 * expires an engine that stopped turning, ran dry or lost its ignition, and
+	 * never a slow one that is still being cranked. This answers the other question:
+	 * the engine is turning, opportunities keep coming round, and none of them
+	 * catches.
+	 *
+	 * <p>Two whole cycles. Every layout offers each cylinder one opportunity per
+	 * cycle, so this tolerates exactly one complete missed cycle on any engine from
+	 * the single to the inline-4, and abandons the attempt on the second - which is
+	 * the same "one hiccup, never two" tolerance the generation allowance uses.
+	 *
+	 * <p>Measured in crank travel rather than in wall-clock ticks on purpose: a
+	 * hand-cranked engine and one spun by a fast Create network get the same number
+	 * of chances, because they get the same number of firing opportunities.
+	 */
+	public static final float START_ATTEMPT_TRAVEL_DEGREES = 2.0F * FourStrokeCycle.CYCLE_DEGREES;
+
 	// --- active generation --------------------------------------------------
 
 	/**
-	 * How many revolutions the engine may go without a combustion event before it
-	 * stops counting as actively generating.
+	 * How many <b>four-stroke cycles</b> a cylinder may go without burning a charge
+	 * before it stops counting towards this engine's output.
 	 *
-	 * <p>Measured in revolutions rather than ticks because the firing interval is
-	 * a property of speed: one revolution is 18.75 ticks at idle and 6.25 at full
-	 * throttle, so a fixed tick budget would be far too tight at the bottom of the
-	 * range and far too slack at the top.
+	 * <p>One cycle is one cylinder's own firing interval, on every layout: an
+	 * inline-4 fires four times per 720 degrees, but each of its cylinders fires
+	 * once. So this is measured against the cycle rather than against the engine's
+	 * event rate, and it needs no cylinder-count term.
 	 *
-	 * <p>2.5 tolerates a single missed firing - a momentary fuel hiccup, or a
-	 * revolution that crossed the firing angle on a tick boundary - without ever
-	 * tolerating an engine that has genuinely stopped burning.
+	 * <p>2.5 tolerates a single missed firing - a momentary fuel hiccup, or a cycle
+	 * that crossed the ignition angle on a tick boundary - without ever tolerating a
+	 * cylinder that has genuinely stopped burning. It is the frozen figure: a healthy
+	 * cylinder's bit must never blink between its own opportunities.
+	 *
+	 * <p><b>The old hard 60-tick ceiling is gone</b>, and had to be: a four-stroke
+	 * cylinder at idle fires every 37.5 ticks, so 2.5 intervals is 94 ticks and the
+	 * ceiling would have expired every healthy cylinder in the mod. What replaces it
+	 * is {@link #generationCombustionAllowanceTicks}, which clamps the <i>speed</i>
+	 * at {@link #STALL_RPM} rather than the allowance at a constant - so the budget
+	 * is always exactly what a genuinely running engine at its slowest could need,
+	 * and a crawling engine cannot claim to be generating for minutes on one old
+	 * firing.
 	 */
-	public static final float GENERATION_COMBUSTION_REVOLUTIONS = 2.5F;
+	public static final float GENERATION_COMBUSTION_CYCLES = 2.5F;
 
 	/**
-	 * Hard ceiling on that allowance, in ticks. A crawling engine must not be able
-	 * to claim it is generating for minutes on the strength of one old firing.
+	 * The allowance above evaluated at the slowest speed an engine can still be
+	 * running at. Nothing may exceed it, because nothing slower is running.
 	 */
-	public static final int GENERATION_COMBUSTION_LIMIT_TICKS = 60;
+	public static final int GENERATION_COMBUSTION_LIMIT_TICKS =
+		Math.round(GENERATION_COMBUSTION_CYCLES * 2.0F * 1200.0F / STALL_RPM) + 2;
 
 	// --- stress -------------------------------------------------------------
 
@@ -970,13 +1140,25 @@ public final class EngineTuning {
 	 * the same rule the Stress Capacity follows, for the same reason: being turned
 	 * is not running.
 	 *
-	 * <p>Twice the motion figure, so about two thirds of a running cylinder's wear
-	 * comes from combustion and a third from motion. A firing cylinder therefore
-	 * wears at 1.35e-8 per revolution against the bearings' 1.75e-8 - slightly
-	 * slower, which leaves the bearings as the pacing item on a well-kept engine
-	 * and the cylinders as the pacing item on an unfiltered one.
+	 * <p><b>Doubled in Milestone 15B, so that nothing about wear changed.</b> A
+	 * four-stroke cylinder fires once per two revolutions where the old engine's
+	 * fired once per one, so charging the old 9.0e-9 per event would quietly have cut
+	 * cylinder wear by a third and pushed every calibrated service life out with it.
+	 * The figure that is calibrated is the <i>per-revolution</i> one, and this is what
+	 * keeps it where Milestone 13.1 measured it:
+	 *
+	 * <pre>
+	 * before 15B   4.5e-9 motion + 9.0e-9  per rev  = 1.35e-8 / revolution
+	 * after  15B   4.5e-9 motion + 1.8e-8 / 2       = 1.35e-8 / revolution
+	 * </pre>
+	 *
+	 * <p>So about two thirds of a running cylinder's wear still comes from combustion
+	 * and a third from motion, and a firing cylinder still wears at 1.35e-8 per
+	 * revolution against the bearings' 1.75e-8 - slightly slower, which leaves the
+	 * bearings as the pacing item on a well-kept engine and the cylinders as the
+	 * pacing item on an unfiltered one. This is a units correction, not a rebalance.
 	 */
-	public static final float CYLINDER_WEAR_PER_COMBUSTION = 9.0E-9F;
+	public static final float CYLINDER_WEAR_PER_COMBUSTION = 1.8E-8F;
 
 	/**
 	 * Wear multipliers per lubrication state, applied to <b>both</b> bearing and
@@ -1393,9 +1575,8 @@ public final class EngineTuning {
 	 * without moving the speed the engine settles at, so every equilibrium the
 	 * throttle promises still holds.
 	 */
-	public static float compressionTorqueAt(float localCrankAngleDegrees) {
-		double theta = Math.toRadians(localCrankAngleDegrees);
-		return (float) (-COMPRESSION_PEAK_TORQUE * Math.sin(theta) * (1.0D - Math.cos(theta)) / 2.0D);
+	public static float compressionTorqueAt(float localCycleAngleDegrees) {
+		return COMPRESSION_PEAK_TORQUE * FourStrokeCycle.gasSpringShape(localCycleAngleDegrees);
 	}
 
 	public static float clamp01(float value) {
@@ -1474,17 +1655,20 @@ public final class EngineTuning {
 	 * How long the engine may go without a combustion event, at a given speed, and
 	 * still count as actively generating.
 	 *
-	 * <p>Scaled by the firing interval - see
-	 * {@link #GENERATION_COMBUSTION_REVOLUTIONS} - and hard-capped, so it is
-	 * neither too tight at idle nor open-ended on a crawling engine.
+	 * <p>Scaled by one cylinder's own firing interval - see
+	 * {@link #GENERATION_COMBUSTION_CYCLES} - so it is neither too tight at idle nor
+	 * open-ended on a crawling engine.
 	 */
 	public static int generationCombustionAllowanceTicks(float rpm) {
-		float speed = Math.abs(rpm);
-		if (speed < REST_RPM)
-			return GENERATION_COMBUSTION_LIMIT_TICKS;
-		// 1200 = 60 s/min * 20 ticks/s, so this is ticks per revolution.
-		float ticksPerRevolution = 1200.0F / speed;
-		int allowance = Math.round(GENERATION_COMBUSTION_REVOLUTIONS * ticksPerRevolution) + 2;
+		// Clamped at the stall speed rather than ceilinged at a constant: below it the
+		// engine is not running, so no budget larger than the one it would have AT it
+		// can describe a healthy cylinder. That single clamp is what lets the allowance
+		// follow a four-stroke's genuinely long idle interval without ever letting a
+		// crawling engine hold its capacity open.
+		float speed = Math.max(Math.abs(rpm), STALL_RPM);
+		// 1200 = 60 s/min * 20 ticks/s, so this is ticks per revolution; a cycle is two.
+		float ticksPerCycle = 2.0F * 1200.0F / speed;
+		int allowance = Math.round(GENERATION_COMBUSTION_CYCLES * ticksPerCycle) + 2;
 		return Math.min(allowance, GENERATION_COMBUSTION_LIMIT_TICKS);
 	}
 

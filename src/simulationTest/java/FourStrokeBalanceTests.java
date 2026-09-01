@@ -70,8 +70,12 @@ public class FourStrokeBalanceTests {
 		check("mB per minute is identical for every layout and speed", allEqual, "12 combinations");
 		check("the event rate really did halve",
 			Math.abs((192.0 / 2.0 * 4) - (192.0 * 4) / 2.0) < 1.0E-6D, "R4 at 192 RPM");
-		check("FUEL_PER_COMBUSTION_MB is still 1 in production - unchanged by 15A.1",
-			EngineTuning.FUEL_PER_COMBUSTION_MB == 1, EngineTuning.FUEL_PER_COMBUSTION_MB + " mB");
+		// Production shipped the change in 15B. This is where the arithmetic above and
+		// the constant the engine actually draws with are held together: one combustion
+		// per 720 degrees at 2 mB is the same gasoline per revolution as one per 360 at
+		// 1 mB, and either number moving alone is what would break it.
+		check("production draws 2 mB per combustion, as the halved event rate requires",
+			EngineTuning.FUEL_PER_COMBUSTION_MB == 2, EngineTuning.FUEL_PER_COMBUSTION_MB + " mB");
 	}
 
 	// ---------------------------------------------------------------- output
@@ -84,9 +88,22 @@ public class FourStrokeBalanceTests {
 	static void meanOutputIsPreserved() {
 		section("MEAN OUTPUT IS PRESERVED ACROSS THE CHANGE");
 
-		check("the duty correction is exactly a doubling",
-			Math.abs(FourStrokeRig.FOUR_STROKE_TORQUE_SCALE - (180.0F / 360.0F) / (180.0F / 720.0F)) < 1.0E-6F,
-			FourStrokeRig.FOUR_STROKE_TORQUE_SCALE + "x");
+		// Production carries the four-stroke duty itself since Milestone 15B, so the rig
+		// needs no correction at all - and THAT is the identity now worth pinning. It
+		// was 2 for as long as production solved its peak against a 360-degree duty;
+		// the rig derives it rather than naming it, so the day production changed, the
+		// rig followed instead of quietly settling every engine 11 % high.
+		check("production's own duty is the four-stroke one, so the rig needs no correction",
+			Math.abs(FourStrokeRig.FOUR_STROKE_TORQUE_SCALE - 1.0F) < 1.0E-6F
+				&& Math.abs(EngineTuning.POWER_STROKE_DUTY - 180.0F / 720.0F) < 1.0E-6F,
+			String.format("%.1fx at a duty of %.3f", FourStrokeRig.FOUR_STROKE_TORQUE_SCALE,
+				EngineTuning.POWER_STROKE_DUTY));
+		// And the doubling itself, stated where it actually lives: the peak the engine
+		// solves for is exactly twice what the 360-degree duty would have given.
+		check("and the peak that duty solves for is exactly twice the 360-degree one",
+			Math.abs(EngineTuning.peakCombustionTorqueFor(EngineTuning.IDLE_RPM)
+				- 2.0F * EngineTuning.frictionTorqueAt(EngineTuning.IDLE_RPM) / (0.5F * 0.5F)) < 1.0E-3F,
+			String.format("%.2f", EngineTuning.peakCombustionTorqueFor(EngineTuning.IDLE_RPM)));
 
 		System.out.printf("     %-4s %6s %6s | %11s %11s %8s%n",
 			"cyl", "rpm", "load", "production", "four-stroke", "error");
@@ -106,7 +123,12 @@ public class FourStrokeBalanceTests {
 					if (error > 0.03F)
 						allClose = false;
 				}
-		check("every layout settles within 3 % of the speed it settles on today", allClose,
+		// Since 15B this compares the prototype against a PRODUCTION engine that is
+		// itself four-stroke, so it has become an agreement check rather than a
+		// before-and-after: the reference model and the shipped engine must settle at
+		// the same speed, at every layout, speed and load. That is the stronger of the
+		// two questions and the one worth keeping.
+		check("the prototype and production settle within 3 % of each other", allClose,
 			"24 operating points");
 	}
 
@@ -118,22 +140,34 @@ public class FourStrokeBalanceTests {
 	 * ripple.
 	 */
 	static void fourStrokeTwinMatchesTodaysSingle() {
-		section("A FOUR-STROKE TWIN IS TODAY'S SINGLE, EXACTLY");
+		section("THE EVEN TWIN REPRODUCES THE 15A MEASUREMENTS EXACTLY");
 
-		for (float rpm : SPEEDS) {
-			float legacySingle = legacyRipple(1, rpm, 0.0F);
-			float fourStrokeTwin = new FourStrokeRig(FourStrokeFiringOrder.R2_EVEN, rpm, rpm, 0.0F)
+		// THE RECORDED FIGURES, from docs/milestone-15-four-stroke-design.md - the
+		// table headed "360 even / 180 uneven", measured on the real flywheel and the
+		// real friction. They are written down here rather than re-derived from a
+		// legacy engine because there is no longer a legacy engine to derive them from:
+		// production is four-stroke now. Pinning the numbers is what keeps the frozen
+		// decision auditable - a change that moves them is a change to the design, and
+		// this is where it gets noticed.
+		float[] recordedEvenTwinRipple = { 6.00F, 5.06F, 4.92F };
+		float[] recordedUnevenTwinRipple = { 9.97F, 8.45F, 7.68F };
+
+		for (int i = 0; i < SPEEDS.length; i++) {
+			float rpm = SPEEDS[i];
+			float even = new FourStrokeRig(FourStrokeFiringOrder.R2_EVEN, rpm, rpm, 0.0F)
 				.run(2000, 2400).rpmRipple();
-			check("at " + (int) rpm + " RPM: 4-stroke R2 ripple == today's R1 ripple",
-				Math.abs(legacySingle - fourStrokeTwin) < 0.05F,
-				String.format("%.3f vs %.3f", legacySingle, fourStrokeTwin));
+			check("at " + (int) rpm + " RPM the even twin still measures its recorded ripple",
+				Math.abs(even - recordedEvenTwinRipple[i]) < 0.35F,
+				String.format("%.2f against a recorded %.2f", even, recordedEvenTwinRipple[i]));
+
+			float uneven = new FourStrokeRig(FourStrokeFiringOrder.R2_UNEVEN, rpm, rpm, 0.0F)
+				.run(2000, 2400).rpmRipple();
+			check("... and the frozen uneven twin measures its recorded ripple",
+				Math.abs(uneven - recordedUnevenTwinRipple[i]) < 0.35F,
+				String.format("%.2f against a recorded %.2f", uneven, recordedUnevenTwinRipple[i]));
+			check("... and the uneven twin is the rougher of the two, as the decision says",
+				uneven > even, String.format("%.2f > %.2f", uneven, even));
 		}
-		float legacyTwin = legacyRipple(2, 128.0F, 0.0F);
-		float fourStrokeFour = new FourStrokeRig(FourStrokeFiringOrder.R4, 128.0F, 128.0F, 0.0F)
-			.run(2000, 2400).rpmRipple();
-		check("and 4-stroke R4 ripple == today's R2 ripple",
-			Math.abs(legacyTwin - fourStrokeFour) < 0.05F,
-			String.format("%.3f vs %.3f", legacyTwin, fourStrokeFour));
 	}
 
 	// -------------------------------------------------------------- character
@@ -269,8 +303,12 @@ public class FourStrokeBalanceTests {
 				}
 			}
 		check("every cylinder stays in the mask, every speed, 1200 ticks", allSurvive, "12 runs");
-		check("today's revolution-based rule WOULD flicker under four-stroke", todayWouldFlicker,
-			"below about 48 RPM");
+		// The rule production shipped is the frozen one, so it no longer flickers - and
+		// that is the point of the column beside it. What is checked is that production
+		// now agrees with the reference model at every speed, which is what replaced
+		// "today's rule would flicker" once today's rule was fixed.
+		check("production's allowance never flickers under four-stroke", !todayWouldFlicker,
+			"12 speeds, 1 and 4 cylinders");
 	}
 
 	/**
@@ -493,7 +531,7 @@ public class FourStrokeBalanceTests {
 				travelToFirstBang, (int) (travelToFirstBang / 0.05F)));
 	}
 
-	// -------------------------------------------------------- legacy baseline
+	// ---------------------------------------------------- the production engine
 
 	/** Mean settled speed of the REAL production engine, hand-cranked to life. */
 	static float legacyMeanRpm(int cylinders, float targetRpm, float load) {
@@ -511,15 +549,32 @@ public class FourStrokeBalanceTests {
 		java.util.Random random = new java.util.Random(7L);
 		float throttle = (targetRpm - EngineTuning.IDLE_RPM)
 			/ (EngineTuning.FULL_THROTTLE_RPM - EngineTuning.IDLE_RPM);
+		throttle = Math.max(0.0F, Math.min(1.0F, throttle));
+		// STARTED UNLOADED, then loaded - which is what a player does, and what the
+		// engine's own start logic assumes. Cranking against a load the engine is not
+		// yet turning fast enough to carry was measuring a machine nobody builds: a
+		// single at half load never reached the speed that carries it 720 degrees, so
+		// it never caught, and the comparison read a stalled engine as an equilibrium.
+		EngineInputs unloaded = new EngineInputs(true, true, cylinders, (1 << cylinders) - 1,
+			throttle, 0.0F, EngineTuning.MAX_RPM);
 		EngineInputs inputs = new EngineInputs(true, true, cylinders, (1 << cylinders) - 1,
-			Math.max(0.0F, Math.min(1.0F, throttle)), load, EngineTuning.MAX_RPM);
+			throttle, load, EngineTuning.MAX_RPM);
 
 		// An engine cannot self-start from a free spin - it decelerates past its stall
 		// speed long before it reaches a firing angle - so this hand-cranks it, which
 		// is what a player does.
 		for (int i = 0; i < 2000 && state.getPhase() != EnginePhase.RUNNING; i++) {
 			state.tickRotation(32.0F, true, true);
-			state.tickSimulation(inputs, tank, sump, random);
+			state.tickSimulation(unloaded, tank, sump, random);
+		}
+		// Up to its own idle before anything is hung on it. An engine catches barely
+		// above the speed that will carry it between bangs, and handing it half a
+		// network's load at that instant is not a measurement of its equilibrium - it
+		// is a measurement of a machine being stalled by a load applied before it had
+		// spun up, which is not how one gets built.
+		for (int i = 0; i < 2000; i++) {
+			state.tickRotation(0.0F, false, false);
+			state.tickSimulation(unloaded, tank, sump, random);
 		}
 		for (int i = 0; i < 4000; i++) {
 			state.tickRotation(0.0F, false, false);
