@@ -170,42 +170,80 @@ def me(path):
     return f"{NS}:{path}"
 
 
-def place_engine(structure, origin, sections, axis="x", flywheel_at="end",
-                 carburetor=True, oil_sump=True, cylinders=True,
-                 accessories_on="first"):
+# ===========================================================================
+# Where each scene's engine stands
+# ===========================================================================
+# Declared in one table rather than inside the scene builders, because the Java
+# has to agree with it: every highlight in every scene comes from a PonderEngine
+# built from these same three numbers, and `tools/validate_ux.py` compares the
+# two tables and then checks that each block a scene names really is where it
+# says. An engine that moves in this table therefore moves in the scenes, or the
+# build fails.
+#
+#   origin       the first (negative-end) crankshaft section
+#   sections     how many, i.e. which inline layout
+#   accessories  which section carries the single Carburetor and Oil Sump
+ENGINES = {
+    "assembling_an_engine": ((3, 2, 2), 1, "first"),
+    "fuel_and_lubrication": ((3, 2, 2), 1, "first"),
+    "starting_an_engine": ((3, 2, 2), 1, "first"),
+    "inline_engines": ((2, 2, 2), 4, "last"),
+    "engine_controls": ((3, 2, 2), 1, "first"),
+    "engine_maintenance": ((2, 2, 2), 4, "first"),
+    "diagnosing_an_engine": ((3, 2, 2), 2, "first"),
+}
+
+
+def place_engine(structure, scene, axis="x", flywheel_at="end"):
     """Stamps a whole inline engine into a structure, in the game's own layout.
 
-    `origin` is the first crankshaft section. Sections run along `axis`, and the
-    Flywheel goes beyond whichever end `flywheel_at` names - both ends are valid
-    in the real game, and the assembly scene shows that.
+    Sections run along `axis` from the origin in ENGINES, and the Flywheel goes
+    beyond whichever end `flywheel_at` names - both ends are valid in the real
+    game, and the assembly scene shows that.
 
-    `accessories_on` picks which section carries the single Carburetor and Oil
+    `accessories` picks which section carries the single Carburetor and Oil
     Sump. It exists for the inline scene, which grows an engine one section at a
     time and therefore has to START from a section that is already a complete,
     runnable engine - which means the Carburetor, the Oil Sump and the Flywheel
     all have to be on the same end.
+
+    THE COSMETIC STATES ARE SET HERE TOO, and that is the point of this pass. An
+    engine's shared castings - the crankcase seams, the intake manifold running
+    the length of the engine, the way the Carburetor and Oil Sump are turned -
+    all live in block state properties that the game computes from the
+    neighbours. A Ponder structure is loaded as-is and never sees a neighbour
+    update, so a scene showing an inline-4 with those properties unset would show
+    a machine the player will never build. They are written out here instead,
+    from the same run this function is already stamping.
     """
+    origin, sections, accessories = ENGINES[scene]
     step = (1, 0, 0) if axis == "x" else (0, 0, 1)
     positions = [tuple(origin[i] + step[i] * n for i in range(3)) for n in range(sections)]
 
-    accessory_index = sections - 1 if accessories_on == "last" else 0
+    accessory_index = sections - 1 if accessories == "last" else 0
 
     for index, crank in enumerate(positions):
+        behind = index > 0
+        ahead = index < sections - 1
         # JOINED says a section has a neighbour further along the run, which is
         # what makes an inline engine render as one crankcase rather than as a
-        # row of separate ones.
+        # row of separate ones - and what leaves the ignition switch off every
+        # section but the controller.
         structure.set(crank, block(me("crankshaft"), axis=axis,
-                                   joined="true" if index < sections - 1 else "false",
+                                   joined="true" if behind else "false",
                                    lit="false"))
-        # The Cylinder, Carburetor and Oil Sump have NO block state properties -
-        # their blockstate files have a single empty variant - so giving them an
-        # axis here would produce a state the game cannot load.
-        if cylinders:
-            structure.set(offset(crank, OFFSETS["cylinder"]), block(me("cylinder")))
-        if carburetor and index == accessory_index:
-            structure.set(offset(crank, OFFSETS["carburetor"]), block(me("carburetor")))
-        if oil_sump and index == accessory_index:
-            structure.set(offset(crank, OFFSETS["oil_sump"]), block(me("oil_sump")))
+        # The Cylinder carries its share of the shared intake manifold: which way
+        # the row of bores continues decides whether its length of rail runs
+        # through to the block boundary or is capped inside it.
+        structure.set(offset(crank, OFFSETS["cylinder"]),
+                      block(me("cylinder"), axis=axis,
+                            manifold_negative=lower(behind),
+                            manifold_positive=lower(ahead)))
+        if index == accessory_index:
+            structure.set(offset(crank, OFFSETS["carburetor"]),
+                          block(me("carburetor"), axis=axis))
+            structure.set(offset(crank, OFFSETS["oil_sump"]),
+                          block(me("oil_sump"), axis=axis))
 
     if flywheel_at is not None:
         end = positions[-1] if flywheel_at == "end" else positions[0]
@@ -213,6 +251,10 @@ def place_engine(structure, origin, sections, axis="x", flywheel_at="end",
         flywheel = tuple(end[i] + step[i] * direction for i in range(3))
         structure.set(flywheel, block(me("flywheel"), axis=axis))
     return positions
+
+
+def lower(flag):
+    return "true" if flag else "false"
 
 
 def offset(pos, delta):
@@ -238,7 +280,7 @@ def assembling_an_engine():
     base_plate(s, size)
     # The sump hangs BELOW the crankshaft, so the crank sits at y=2 to leave it
     # somewhere to go that is not inside the base plate.
-    place_engine(s, (3, 2, 2), sections=1, axis="x", flywheel_at="end")
+    place_engine(s, "assembling_an_engine")
     # The other end is equally valid, and the scene shows that before showing
     # that BOTH at once is not an engine.
     s.set((2, 2, 2), block(me("flywheel"), axis="x"))
@@ -250,7 +292,7 @@ def fuel_and_lubrication():
     size = (7, 6, 5)
     s = Structure(size)
     base_plate(s, size)
-    place_engine(s, (3, 2, 2), sections=1, axis="x", flywheel_at="end")
+    place_engine(s, "fuel_and_lubrication")
     return s
 
 
@@ -259,7 +301,7 @@ def starting_an_engine():
     size = (7, 6, 5)
     s = Structure(size)
     base_plate(s, size)
-    place_engine(s, (3, 2, 2), sections=1, axis="x", flywheel_at="end")
+    place_engine(s, "starting_an_engine")
     # Create's own Hand Crank, which is how an engine is really turned over.
     s.set((2, 2, 2), block("create:hand_crank", facing="west"))
     return s
@@ -276,8 +318,7 @@ def inline_engines():
     size = (9, 6, 5)
     s = Structure(size)
     base_plate(s, size)
-    place_engine(s, (2, 2, 2), sections=4, axis="x", flywheel_at="end",
-                 accessories_on="last")
+    place_engine(s, "inline_engines")
     # The fifth. Placed in the file so the storyboard can show it appearing and
     # being rejected; it is never part of a valid engine.
     s.set((1, 2, 2), block(me("crankshaft"), axis="x", joined="false", lit="false"))
@@ -289,7 +330,7 @@ def engine_controls():
     size = (7, 6, 5)
     s = Structure(size)
     base_plate(s, size)
-    place_engine(s, (3, 2, 2), sections=1, axis="x", flywheel_at="end")
+    place_engine(s, "engine_controls")
     s.set((5, 1, 2), block("minecraft:redstone_wire", east="none", north="none",
                            power=0, south="none", west="none"))
     s.set((6, 1, 2), block("minecraft:lever", face="floor", facing="north", powered="false"))
@@ -301,7 +342,7 @@ def engine_maintenance():
     size = (9, 6, 5)
     s = Structure(size)
     base_plate(s, size)
-    place_engine(s, (2, 2, 2), sections=4, axis="x", flywheel_at="end")
+    place_engine(s, "engine_maintenance")
     return s
 
 
@@ -310,7 +351,7 @@ def diagnosing_an_engine():
     size = (7, 6, 5)
     s = Structure(size)
     base_plate(s, size)
-    place_engine(s, (3, 2, 2), sections=2, axis="x", flywheel_at="end")
+    place_engine(s, "diagnosing_an_engine")
     return s
 
 

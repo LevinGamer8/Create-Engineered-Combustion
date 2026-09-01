@@ -1,14 +1,14 @@
 package dev.engineeredcombustion.ponder;
 
+import static dev.engineeredcombustion.ponder.PonderEngine.centre;
+
 import dev.engineeredcombustion.registry.ECItems;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
 import net.createmod.ponder.api.scene.SceneBuilder;
 import net.createmod.ponder.api.scene.SceneBuildingUtil;
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.phys.Vec3;
 
 /**
  * How an engine is built, fuelled and lubricated.
@@ -18,21 +18,26 @@ import net.minecraft.world.phys.Vec3;
  * assembled correctly, and a tutorial that teaches a layout the game refuses is
  * worse than no tutorial.
  *
- * <p>Positions here are structure coordinates and match
- * {@code tools/generate_ponder_structures.py}, which stamps out the schematics
- * these scenes are staged on. The engine sits with its crankshaft at y = 2 so
- * that the Oil Sump - which hangs <i>below</i> the crankcase - has somewhere to
- * go that is not inside the base plate.
+ * <p>Nothing here writes a coordinate. Every position comes from
+ * {@link PonderEngine}, which derives them from the layout {@code EngineComponents}
+ * enforces and which {@code tools/validate_ux.py} checks against the schematic
+ * these scenes are staged on. The engine sits with its crankshaft at y = 2 so that
+ * the Oil Sump - which hangs <i>below</i> the crankcase - has somewhere to go that
+ * is not inside the base plate.
+ *
+ * <h2>Every step outlines what its sentence is about</h2>
+ * A line about the Air Filter outlines the Carburetor the filter clamps to and
+ * points at the filter itself; a line about the Flywheel outlines the Flywheel.
+ * Where a step is genuinely about a <i>relationship</i> - a filter protecting the
+ * cylinders, two Flywheels being one too many - it outlines each part separately
+ * rather than drawing one box around everything in between, which is what a
+ * {@code fromTo} selection would do and which is how "this is the Air Filter"
+ * came to be drawn around most of an engine.
  */
 public class EngineAssemblyScenes {
 
-	/** Where the inline-1 in the small scenes lives. */
-	private static final BlockPos CRANK = new BlockPos(3, 2, 2);
-	private static final BlockPos CYLINDER = new BlockPos(3, 3, 2);
-	private static final BlockPos CARBURETOR = new BlockPos(3, 4, 2);
-	private static final BlockPos SUMP = new BlockPos(3, 1, 2);
-	private static final BlockPos FLYWHEEL = new BlockPos(4, 2, 2);
-	private static final BlockPos SECOND_FLYWHEEL = new BlockPos(2, 2, 2);
+	/** The inline-1 both scenes are staged on. */
+	private static final PonderEngine ENGINE = PonderEngine.of(3, 2, 2, 1);
 
 	/**
 	 * B3. Building a Basic Engine - a real inline-1, one component at a time.
@@ -59,159 +64,213 @@ public class EngineAssemblyScenes {
 		// STEP 1 - the crankshaft.
 		scene.world()
 			.showSection(util.select()
-				.position(CRANK), Direction.UP);
+				.position(ENGINE.crankshaft(0)), Direction.UP);
 		scene.idle(15);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "crankshaft", util.select()
+				.position(ENGINE.crankshaft(0)), 70);
 		scene.overlay()
 			.showText(70)
 			.text("The Crankshaft forms the mechanical base of the engine.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(CRANK));
+			.pointAt(centre(ENGINE.crankshaft(0)));
 		scene.idle(80);
 
 		// STEP 2 - the cylinder, in its one valid position.
 		scene.overlay()
-			.showOutline(PonderPalette.GREEN, CYLINDER, util.select()
-				.position(CYLINDER), 40);
+			.showOutline(PonderPalette.GREEN, "cylinder_seat", util.select()
+				.position(ENGINE.cylinder(0)), 40);
 		scene.idle(20);
 		scene.world()
 			.showSection(util.select()
-				.position(CYLINDER), Direction.DOWN);
+				.position(ENGINE.cylinder(0)), Direction.DOWN);
 		scene.idle(15);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "cylinder", util.select()
+				.position(ENGINE.cylinder(0)), 70);
 		scene.overlay()
 			.showText(70)
 			.text("Each Crankshaft section supports one Cylinder, directly above it.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(CYLINDER));
+			.pointAt(centre(ENGINE.cylinder(0)));
 		scene.idle(80);
 
 		// STEP 3 - the Piston Assembly, which is an ITEM installed INTO the block.
+		// Pointed at the bore rather than at the middle of the block: the piston
+		// goes down the barrel, and that is the part of the casting to look at.
 		scene.overlay()
-			.showControls(centre(CYLINDER), Pointing.RIGHT, 40)
+			.showControls(ENGINE.bore(0), Pointing.RIGHT, 40)
 			.withItem(new ItemStack(ECItems.PISTON_ASSEMBLY.get()))
 			.rightClick();
 		scene.idle(20);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "bore", util.select()
+				.position(ENGINE.cylinder(0)), 80);
 		scene.overlay()
 			.showText(80)
 			.text("Piston Assemblies are installed inside Cylinders, not placed as blocks.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(CYLINDER));
+			.pointAt(ENGINE.bore(0));
 		scene.idle(90);
 
-		// STEP 4 - the Spark Plug. Per cylinder, always.
+		// STEP 4 - the Spark Plug. Per cylinder, always, and screwed into the head
+		// rather than into the block in general - so the hand, the text and the
+		// outline all address the top of the barrel.
 		scene.overlay()
-			.showControls(centre(CYLINDER)
-				.add(0.0D, 0.4D, 0.0D), Pointing.LEFT, 40)
+			.showControls(ENGINE.sparkPlug(0), Pointing.LEFT, 40)
 			.withItem(new ItemStack(ECItems.SPARK_PLUG.get()))
 			.rightClick();
 		scene.idle(20);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "plug_seat", util.select()
+				.position(ENGINE.cylinder(0)), 80);
 		scene.overlay()
 			.showText(80)
 			.text("Each Cylinder needs its own Spark Plug to ignite fuel.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(CYLINDER));
+			.pointAt(ENGINE.sparkPlug(0));
 		scene.idle(90);
 
 		// STEP 5 - the Carburetor.
 		scene.world()
 			.showSection(util.select()
-				.position(CARBURETOR), Direction.DOWN);
+				.position(ENGINE.carburetor()), Direction.DOWN);
 		scene.idle(15);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "carburetor", util.select()
+				.position(ENGINE.carburetor()), 80);
 		scene.overlay()
 			.showText(80)
 			.text("The Carburetor holds Gasoline and controls the throttle.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(CARBURETOR));
+			.pointAt(centre(ENGINE.carburetor()));
 		scene.idle(90);
 
 		// STEP 6 - the Oil Sump, underneath, as a real one is.
 		scene.world()
 			.showSection(util.select()
-				.position(SUMP), Direction.UP);
+				.position(ENGINE.oilSump()), Direction.UP);
 		scene.idle(15);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "sump", util.select()
+				.position(ENGINE.oilSump()), 70);
 		scene.overlay()
 			.showText(70)
 			.text("The Oil Sump hangs under the crankcase and supplies lubrication.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(SUMP));
+			.pointAt(centre(ENGINE.oilSump()));
 		scene.idle(80);
 
 		// STEP 7 - ONE Flywheel, at one axial end.
 		scene.world()
 			.showSection(util.select()
-				.position(FLYWHEEL), Direction.WEST);
+				.position(ENGINE.flywheel()), Direction.WEST);
 		scene.idle(15);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "flywheel", util.select()
+				.position(ENGINE.flywheel()), 80);
 		scene.overlay()
 			.showText(80)
 			.text("The Flywheel transfers engine power into a Create kinetic network.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(FLYWHEEL));
+			.pointAt(centre(ENGINE.flywheel()));
 		scene.idle(90);
 
 		// Either end is valid - shown by moving it, not merely asserted.
 		scene.world()
 			.hideSection(util.select()
-				.position(FLYWHEEL), Direction.EAST);
+				.position(ENGINE.flywheel()), Direction.EAST);
 		scene.idle(10);
 		scene.world()
 			.showSection(util.select()
-				.position(SECOND_FLYWHEEL), Direction.EAST);
+				.position(ENGINE.farFlywheel()), Direction.EAST);
 		scene.idle(15);
+		scene.overlay()
+			.showOutline(PonderPalette.GREEN, "far_flywheel", util.select()
+				.position(ENGINE.farFlywheel()), 70);
 		scene.overlay()
 			.showText(70)
 			.text("Either end of the crankshaft will do.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(SECOND_FLYWHEEL));
+			.pointAt(centre(ENGINE.farFlywheel()));
 		scene.idle(80);
 
 		// But BOTH is not an engine. Marked invalid, and left invalid.
+		//
+		// TWO outlines, one per Flywheel, rather than one selection spanning both:
+		// a fromTo would draw a single box from one Flywheel to the other, which
+		// puts the crankshaft between them inside the red - and the crankshaft is
+		// not what is wrong here.
 		scene.world()
 			.showSection(util.select()
-				.position(FLYWHEEL), Direction.WEST);
+				.position(ENGINE.flywheel()), Direction.WEST);
 		scene.idle(10);
 		scene.overlay()
-			.showOutline(PonderPalette.RED, "two_flywheels", util.select()
-				.fromTo(SECOND_FLYWHEEL, FLYWHEEL), 80);
+			.showOutline(PonderPalette.RED, "flywheel_end", util.select()
+				.position(ENGINE.flywheel()), 80);
+		scene.overlay()
+			.showOutline(PonderPalette.RED, "flywheel_far_end", util.select()
+				.position(ENGINE.farFlywheel()), 80);
 		scene.overlay()
 			.showText(80)
 			.colored(PonderPalette.RED)
 			.text("One engine uses one Flywheel. Two is not a valid engine.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(FLYWHEEL));
+			.pointAt(centre(ENGINE.flywheel()));
 		scene.idle(90);
 		scene.world()
 			.hideSection(util.select()
-				.position(SECOND_FLYWHEEL), Direction.WEST);
+				.position(ENGINE.farFlywheel()), Direction.WEST);
 		scene.idle(15);
 
 		// STEP 8 - the Air Filter, and the fact that it is OPTIONAL.
+		//
+		// The filter clamps onto the Carburetor's air horn, so the hand offers it
+		// there, the text points there, and the outline is of the Carburetor - the
+		// one block involved. This step is the reason this pass exists: it used to
+		// point at the middle of the Carburetor with no outline of its own, while
+		// the red two-Flywheel box from the step above was still the last thing the
+		// reader had been shown a box around.
 		scene.overlay()
-			.showControls(centre(CARBURETOR), Pointing.RIGHT, 40)
+			.showControls(ENGINE.airFilter(), Pointing.RIGHT, 40)
 			.withItem(new ItemStack(ECItems.AIR_FILTER.get()))
 			.rightClick();
 		scene.idle(20);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "air_filter", util.select()
+				.position(ENGINE.carburetor()), 90);
 		scene.overlay()
 			.showText(90)
 			.text("An Air Filter is optional. It protects the cylinders from long-term wear.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(CARBURETOR));
+			.pointAt(ENGINE.airFilter());
 		scene.idle(100);
 
+		// The one step that is genuinely about the whole machine, so the one step
+		// whose outline covers it: sump, crankcase, barrel, carburetor and
+		// Flywheel, which is exactly what "mechanically complete" means.
+		scene.overlay()
+			.showOutline(PonderPalette.GREEN, "complete", util.select()
+				.fromTo(ENGINE.oilSump(), ENGINE.carburetor()), 80);
+		scene.overlay()
+			.showOutline(PonderPalette.GREEN, "complete_drive", util.select()
+				.position(ENGINE.flywheel()), 80);
 		scene.overlay()
 			.showText(80)
 			.text("This engine is mechanically complete.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(CRANK));
+			.pointAt(centre(ENGINE.crankshaft(0)));
 		scene.idle(90);
 		scene.markAsFinished();
 	}
@@ -231,86 +290,117 @@ public class EngineAssemblyScenes {
 		scene.idle(20);
 
 		// Gasoline into the Carburetor. A bucket, because that is the first way a
-		// player will ever do it.
+		// player will ever do it, offered at the float bowl - the part of the
+		// Carburetor the fuel ends up standing in, and the part a player can watch
+		// it standing in.
 		scene.overlay()
-			.showControls(centre(CARBURETOR), Pointing.RIGHT, 40)
+			.showControls(ENGINE.floatBowl(), Pointing.RIGHT, 40)
 			.withItem(new ItemStack(ECItems.GASOLINE_BUCKET.get()))
 			.rightClick();
 		scene.idle(20);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "carburetor", util.select()
+				.position(ENGINE.carburetor()), 80);
 		scene.overlay()
 			.showText(80)
 			.text("Gasoline goes into the Carburetor, and is consumed during combustion.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(CARBURETOR));
+			.pointAt(ENGINE.floatBowl());
 		scene.idle(90);
 
 		// Engine Oil into the Sump.
 		scene.overlay()
-			.showControls(centre(SUMP), Pointing.RIGHT, 40)
+			.showControls(centre(ENGINE.oilSump()), Pointing.RIGHT, 40)
 			.withItem(new ItemStack(ECItems.ENGINE_OIL_BUCKET.get()))
 			.rightClick();
 		scene.idle(20);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "sump", util.select()
+				.position(ENGINE.oilSump()), 80);
 		scene.overlay()
 			.showText(80)
 			.text("Engine Oil goes into the Oil Sump, and protects the moving parts.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(SUMP));
+			.pointAt(ENGINE.dipstick());
 		scene.idle(90);
 
 		// Both tanks are ordinary fluid handlers, so Create's pipes fill them.
+		// "Both" is two components, so it is two outlines.
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "carburetor_tank", util.select()
+				.position(ENGINE.carburetor()), 80);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "sump_tank", util.select()
+				.position(ENGINE.oilSump()), 80);
 		scene.overlay()
 			.showText(80)
 			.text("Both accept fluids from Create's pipes and tanks as well as from buckets.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(CARBURETOR));
+			.pointAt(centre(ENGINE.carburetor()));
 		scene.idle(90);
 
 		// THE LUBRICATION MESSAGE. Worded so that a future oil-condition system
 		// does not make it a lie.
+		scene.overlay()
+			.showOutline(PonderPalette.GREEN, "lubricated", util.select()
+				.position(ENGINE.oilSump()), 90);
 		scene.overlay()
 			.showText(90)
 			.colored(PonderPalette.GREEN)
 			.text("Proper lubrication keeps major component wear very low.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(SUMP));
+			.pointAt(ENGINE.dipstick());
 		scene.idle(100);
 
+		scene.overlay()
+			.showOutline(PonderPalette.MEDIUM, "low_oil", util.select()
+				.position(ENGINE.oilSump()), 80);
 		scene.overlay()
 			.showText(80)
 			.colored(PonderPalette.MEDIUM)
 			.text("Low oil increases friction and wear.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(SUMP));
+			.pointAt(ENGINE.dipstick());
 		scene.idle(90);
 
+		// What running dry damages is the bearings and the bores, so those are what
+		// is marked - not the pan, which is merely where the oil was not.
+		scene.overlay()
+			.showOutline(PonderPalette.RED, "dry_bearings", util.select()
+				.position(ENGINE.crankshaft(0)), 80);
+		scene.overlay()
+			.showOutline(PonderPalette.RED, "dry_bore", util.select()
+				.position(ENGINE.cylinder(0)), 80);
 		scene.overlay()
 			.showText(80)
 			.colored(PonderPalette.RED)
 			.text("Running dry can seriously damage an engine.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(SUMP));
+			.pointAt(centre(ENGINE.crankshaft(0)));
 		scene.idle(90);
 
 		// The Air Filter, again as optional, because this is the other scene a
-		// player might reach first.
+		// player might reach first. A relationship, deliberately shown as one: the
+		// filter goes on the Carburetor, and what it protects is the bore.
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "filter_mount", util.select()
+				.position(ENGINE.carburetor()), 90);
+		scene.overlay()
+			.showOutline(PonderPalette.MEDIUM, "filter_protects", util.select()
+				.position(ENGINE.cylinder(0)), 90);
 		scene.overlay()
 			.showText(90)
 			.text("The engine runs without an Air Filter, but long-term cylinder wear increases.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(centre(CARBURETOR));
+			.pointAt(ENGINE.airFilter());
 		scene.idle(100);
 		scene.markAsFinished();
-	}
-
-	/** The middle of a block, as a scene-space vector. */
-	static Vec3 centre(BlockPos pos) {
-		return new Vec3(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D);
 	}
 }

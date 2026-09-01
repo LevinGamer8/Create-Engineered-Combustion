@@ -420,6 +420,204 @@ def check_structure_geometry():
 
 
 # ---------------------------------------------------------------------------
+# Ponder highlight targets
+# ---------------------------------------------------------------------------
+# Added after the first in-game test of the scenes, which found the one class of
+# mistake nothing here could see: a scene that points at the wrong thing.
+#
+# The line about the Air Filter drew a box around most of an engine. The line
+# about two Flywheels drew one box spanning both of them AND the crankshaft
+# between them. Both compiled, both had correct English in both languages, both
+# had a structure that loaded - and both taught the reader something false,
+# because a Ponder scene teaches by pointing.
+#
+# The fix in the Java was to stop writing coordinates by hand: every position now
+# comes from a PonderEngine built from the same three numbers this generator uses
+# to stamp the schematic. This is the other half - the part a compiler cannot do.
+# It resolves every position a scene names and checks that the block really is
+# there, in that scene's own structure file.
+
+# Which block each accessor of PonderEngine claims is at the position it returns.
+# The Vec3 accessors are here too: a point on a part is a claim about the block
+# that holds the part, and pointing at where an Air Filter would be if there were
+# a Carburetor is exactly the failure this exists to catch.
+TARGET_BLOCKS = {
+    "crankshaft": "crankshaft",
+    "lastCrankshaft": "crankshaft",
+    "ignition": "crankshaft",
+    "cylinder": "cylinder",
+    "lastCylinder": "cylinder",
+    "bore": "cylinder",
+    "sparkPlug": "cylinder",
+    "carburetor": "carburetor",
+    "airFilter": "carburetor",
+    "throttle": "carburetor",
+    "floatBowl": "carburetor",
+    "oilSump": "oil_sump",
+    "dipstick": "oil_sump",
+    "flywheel": "flywheel",
+    "farFlywheel": "flywheel",
+}
+
+# Accessors that name a POSITION rather than a block: where a Carburetor or an
+# Oil Sump would go on a given section, which on every section but one is empty
+# air. The inline scene uses them to reveal a whole section's column at a time.
+TARGET_SEATS = {"carburetorSeat", "oilSumpSeat"}
+
+# Which accessors take a section index, and therefore have to be checked against
+# every section when the argument is not a constant this can read - a loop
+# variable, say. Checking all of them is the right answer for a loop anyway.
+INDEXED_TARGETS = {"crankshaft", "cylinder", "bore", "sparkPlug",
+                   "carburetorSeat", "oilSumpSeat"}
+
+
+def generator_offsets():
+    """The OFFSETS table out of tools/generate_ponder_structures.py."""
+    source = (ROOT / "tools/generate_ponder_structures.py").read_text(encoding="utf-8")
+    table = source.split("OFFSETS = {")[1].split("}")[0]
+    return {name: (int(x), int(y), int(z)) for name, x, y, z in
+            re.findall(r'"(\w+)": \((-?\d+), (-?\d+), (-?\d+)\)', table)}
+
+
+def generator_engines():
+    """The ENGINES table out of tools/generate_ponder_structures.py."""
+    source = (ROOT / "tools/generate_ponder_structures.py").read_text(encoding="utf-8")
+    table = source.split("ENGINES = {")[1].split("\n}")[0]
+    engines = {}
+    for scene, x, y, z, sections, accessories in re.findall(
+            r'"(\w+)":\s*\(\((-?\d+),\s*(-?\d+),\s*(-?\d+)\),\s*(\d+),\s*"(\w+)"\)', table):
+        engines[scene] = ((int(x), int(y), int(z)), int(sections), accessories)
+    return engines
+
+
+def scene_engines():
+    """Every PonderEngine a scene uses, by scene id, out of the Java."""
+    declaration = re.compile(
+        r"PonderEngine (\w+) = PonderEngine\.(of|endLoaded)"
+        r"\((-?\d+), (-?\d+), (-?\d+), (\d+)\)")
+    constant = re.compile(r"static final int (\w+) = (\d+);")
+    scenes = {}
+    for path in sorted(PONDER_SRC.glob("*.java")):
+        source = path.read_text(encoding="utf-8")
+        engines = {name: ((int(x), int(y), int(z)), int(sections),
+                          "first" if kind == "of" else "last")
+                   for name, kind, x, y, z, sections in declaration.findall(source)}
+        integers = {name: int(value) for name, value in constant.findall(source)}
+        starts = [(m.start(), m.group(1))
+                  for m in re.finditer(r'scene\.title\("([^"]+)",\s*"[^"]+"\)', source)]
+        for index, (start, scene_id) in enumerate(starts):
+            end = starts[index + 1][0] if index + 1 < len(starts) else len(source)
+            scenes[scene_id] = (path.name, engines, integers, source[start:end])
+    return scenes
+
+
+def check_ponder_targets():
+    """Every block a scene names has to be in that scene's structure."""
+    started = len(problems)
+    declared = generator_engines()
+    scenes = scene_engines()
+    call = re.compile(r"\b([A-Z][A-Z_]*)\.(\w+)\(([^()]*)\)")
+    checked = 0
+
+    for scene_id, (filename, engines, integers, body) in sorted(scenes.items()):
+        blocks = {}
+        try:
+            structure = read_structure(PONDER_NBT / f"{scene_id}.nbt")
+        except Exception as error:  # noqa: BLE001 - any failure here is the finding
+            problem(f"{scene_id}: cannot read its structure ({error})")
+            continue
+        palette = structure.get("palette", [])
+        for entry in structure.get("blocks", []):
+            name = palette[entry["state"]].get("Name", "")
+            blocks[tuple(entry["pos"])] = name.split(":", 1)[-1]
+        size = structure.get("size", [0, 0, 0])
+
+        used = sorted({name for name, _, _ in call.findall(body) if name in engines})
+        for name in used:
+            if engines[name] != declared.get(scene_id):
+                problem(f"{scene_id} ({filename}): {name} is "
+                        f"{engines[name]}, but the structure generator stands this "
+                        f"scene's engine at {declared.get(scene_id)}")
+
+        origin, sections, accessories = declared.get(scene_id, ((0, 0, 0), 0, "first"))
+        accessory = sections - 1 if accessories == "last" else 0
+
+        for name, accessor, arguments in call.findall(body):
+            if name not in engines or accessor not in TARGET_BLOCKS.keys() | TARGET_SEATS:
+                continue
+            arguments = arguments.strip()
+            if accessor in INDEXED_TARGETS:
+                if re.fullmatch(r"\d+", arguments):
+                    indices = [int(arguments)]
+                elif arguments in integers:
+                    indices = [integers[arguments]]
+                else:
+                    # A loop variable or an expression. Every section has to hold
+                    # up, which is what a loop over the sections means anyway.
+                    indices = list(range(sections))
+            else:
+                indices = [accessory]
+
+            for index in indices:
+                if not 0 <= index < sections:
+                    problem(f"{scene_id} ({filename}): {name}.{accessor}({index}) is outside "
+                            f"an engine with {sections} section(s)")
+                    continue
+                position = target_position(origin, accessor, index, sections)
+                if any(not 0 <= position[axis] < size[axis] for axis in range(3)):
+                    problem(f"{scene_id} ({filename}): {name}.{accessor}({index}) is at "
+                            f"{position}, outside the {size} structure")
+                    continue
+                checked += 1
+                if accessor in TARGET_SEATS:
+                    continue
+                found = blocks.get(position)
+                wanted = TARGET_BLOCKS[accessor]
+                if found != wanted:
+                    problem(f"{scene_id} ({filename}): {name}.{accessor}"
+                            f"({index if accessor in INDEXED_TARGETS else ''}) points at "
+                            f"{position}, where the structure has "
+                            f"{found or 'nothing'} rather than a {wanted}")
+
+    ok(f"{len(scenes)} ponder scenes: {checked} highlight target(s), each on the block "
+       f"its scene names", started)
+
+
+def target_position(origin, accessor, index, sections):
+    """Where one PonderEngine accessor lands, in structure coordinates.
+
+    The same arithmetic the Java does, from the same OFFSETS table
+    check_structure_geometry has already compared against EngineComponents - so
+    this is not a third opinion about where a Carburetor goes.
+    """
+    offsets = generator_offsets()
+
+    if accessor in ("flywheel",):
+        return (origin[0] + sections, origin[1], origin[2])
+    if accessor == "farFlywheel":
+        return (origin[0] - 1, origin[1], origin[2])
+    if accessor == "ignition":
+        return origin
+    if accessor == "lastCrankshaft":
+        index = sections - 1
+    if accessor == "lastCylinder":
+        index = sections - 1
+    section = (origin[0] + index, origin[1], origin[2])
+    part = {"crankshaft": None, "lastCrankshaft": None,
+            "cylinder": "cylinder", "lastCylinder": "cylinder",
+            "bore": "cylinder", "sparkPlug": "cylinder",
+            "carburetor": "carburetor", "airFilter": "carburetor",
+            "throttle": "carburetor", "floatBowl": "carburetor",
+            "carburetorSeat": "carburetor",
+            "oilSump": "oil_sump", "dipstick": "oil_sump",
+            "oilSumpSeat": "oil_sump"}[accessor]
+    if part is None:
+        return section
+    delta = offsets[part]
+    return (section[0] + delta[0], section[1] + delta[1], section[2] + delta[2])
+
+
+# ---------------------------------------------------------------------------
 # Ponder section lifecycle
 # ---------------------------------------------------------------------------
 # Added after a real 1.21.1 client crash that every other check here missed:
@@ -595,6 +793,7 @@ def main():
     check_ponder(lang)
     check_structures()
     check_structure_geometry()
+    check_ponder_targets()
     check_ponder_section_lifecycle()
     check_tooltips(lang)
 
