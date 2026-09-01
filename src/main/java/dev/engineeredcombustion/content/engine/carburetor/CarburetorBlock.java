@@ -222,8 +222,8 @@ public class CarburetorBlock extends Block implements IBE<CarburetorBlockEntity>
 	 * because a wrench that dropped a part itself would hand the player two.
 	 */
 	@Override
-	public ItemInteractionResult onWrenched(BlockState state, UseOnContext context) {
-		return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+	public InteractionResult onWrenched(BlockState state, UseOnContext context) {
+		return InteractionResult.PASS;
 	}
 
 }

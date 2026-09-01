@@ -219,6 +219,11 @@
   "engineered_combustion.gui.start_no_spark_plug": "Einem oder mehreren Zylindern fehlt die Zündkerze.",
   "engineered_combustion.gui.start_no_piston": "Einem oder mehreren Zylindern fehlt die Kolbeneinheit.",
   "engineered_combustion.gui.start_needs_cranking": "Kurble den Motor an, um ihn zu starten.",
+  "engineered_combustion.tooltip.camshaft.1": "Wird in eine Kurbelwelle eingebaut. Eine pro Motor.",
+  "engineered_combustion.tooltip.camshaft.2": "Öffnet die Ventile, damit die Zylinder atmen können.",
+  "engineered_combustion.tooltip.camshaft.3": "Ohne sie dreht sich der Motor, zündet aber nie.",
+  "engineered_combustion.gui.camshaft_already_installed": "Dieser Motor hat bereits eine Nockenwelle.",
+  "engineered_combustion.gui.start_no_camshaft": "Diesem Motor fehlt die Nockenwelle.",
   "engineered_combustion.ponder.tag.engines": "Engineered Combustion",
   "engineered_combustion.ponder.tag.engines.description": "Reihenmotoren, die Benzin verbrennen, um ein Create-Netzwerk anzutreiben. Aus Einzelteilen gebaut, betankt, geschmiert, von Hand angekurbelt und gewartet.",
   "engineered_combustion.ponder.assembling_an_engine.header": "Einen einfachen Motor bauen",
@@ -300,10 +305,5 @@
   "engineered_combustion.ponder.starting_an_engine.text_6": "Scrolle am Vergaser, um das Gas von 0 % bis 100 % einzustellen.",
   "engineered_combustion.ponder.starting_an_engine.text_7": "Mehr Gas erhöht das verfügbare Drehmoment und die geregelte Betriebsdrehzahl.",
   "engineered_combustion.ponder.starting_an_engine.text_8": "Die Zündung beendet die Verbrennung.",
-  "engineered_combustion.ponder.starting_an_engine.text_9": "Der Motor dreht im Auslauf weiter, erzeugt aber keine Leistung mehr.",
-  "engineered_combustion.tooltip.camshaft.1": "Wird in eine Kurbelwelle eingebaut. Eine pro Motor.",
-  "engineered_combustion.tooltip.camshaft.2": "Öffnet die Ventile, damit die Zylinder atmen können.",
-  "engineered_combustion.tooltip.camshaft.3": "Ohne sie dreht sich der Motor, zündet aber nie.",
-  "engineered_combustion.gui.camshaft_already_installed": "Dieser Motor hat bereits eine Nockenwelle.",
-  "engineered_combustion.gui.start_no_camshaft": "Diesem Motor fehlt die Nockenwelle."
+  "engineered_combustion.ponder.starting_an_engine.text_9": "Der Motor dreht im Auslauf weiter, erzeugt aber keine Leistung mehr."
 }

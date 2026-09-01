@@ -219,6 +219,11 @@
   "engineered_combustion.gui.start_no_spark_plug": "One or more cylinders have no Spark Plug.",
   "engineered_combustion.gui.start_no_piston": "One or more cylinders have no Piston Assembly.",
   "engineered_combustion.gui.start_needs_cranking": "Crank the engine to start it.",
+  "engineered_combustion.tooltip.camshaft.1": "Install into a Crankshaft. One per engine.",
+  "engineered_combustion.tooltip.camshaft.2": "Opens the valves, so the cylinders can breathe.",
+  "engineered_combustion.tooltip.camshaft.3": "Without one an engine turns, but never fires.",
+  "engineered_combustion.gui.camshaft_already_installed": "This engine already has a Camshaft.",
+  "engineered_combustion.gui.start_no_camshaft": "This engine has no Camshaft.",
   "engineered_combustion.ponder.tag.engines": "Engineered Combustion",
   "engineered_combustion.ponder.tag.engines.description": "Inline combustion engines that burn Gasoline to drive a Create network. Built from parts, fuelled, lubricated, cranked by hand, and maintained.",
   "engineered_combustion.ponder.assembling_an_engine.header": "Building a Basic Engine",
@@ -300,10 +305,5 @@
   "engineered_combustion.ponder.starting_an_engine.text_6": "Scroll on the Carburetor to set the throttle, from 0% to 100%.",
   "engineered_combustion.ponder.starting_an_engine.text_7": "More throttle increases available torque and the governed operating speed.",
   "engineered_combustion.ponder.starting_an_engine.text_8": "Ignition stops combustion.",
-  "engineered_combustion.ponder.starting_an_engine.text_9": "The engine keeps turning while it coasts, but is no longer producing power.",
-  "engineered_combustion.tooltip.camshaft.1": "Install into a Crankshaft. One per engine.",
-  "engineered_combustion.tooltip.camshaft.2": "Opens the valves, so the cylinders can breathe.",
-  "engineered_combustion.tooltip.camshaft.3": "Without one an engine turns, but never fires.",
-  "engineered_combustion.gui.camshaft_already_installed": "This engine already has a Camshaft.",
-  "engineered_combustion.gui.start_no_camshaft": "This engine has no Camshaft."
+  "engineered_combustion.ponder.starting_an_engine.text_9": "The engine keeps turning while it coasts, but is no longer producing power."
 }

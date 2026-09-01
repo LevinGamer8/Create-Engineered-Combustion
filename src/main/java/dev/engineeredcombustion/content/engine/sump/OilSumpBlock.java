@@ -12,6 +12,7 @@ import dev.engineeredcombustion.foundation.EngineCasting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -173,8 +174,8 @@ public class OilSumpBlock extends Block implements EntityBlock, EngineCasting, I
 	 * because a wrench that dropped a part itself would hand the player two.
 	 */
 	@Override
-	public ItemInteractionResult onWrenched(BlockState state, UseOnContext context) {
-		return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+	public InteractionResult onWrenched(BlockState state, UseOnContext context) {
+		return InteractionResult.PASS;
 	}
 
 }
