@@ -58,6 +58,34 @@ public class ECPartialModels {
 	public static final PartialModel CRANK_ASSEMBLY_Z = block("crank_assembly_z");
 
 	/**
+	 * The camshaft, turning at half crank speed in its cradle on the intake flank.
+	 *
+	 * <p>Authored about the <b>block centre</b> rather than about its real axis, and
+	 * translated onto that axis by the renderer. Create's {@code rotateCentered}
+	 * pivots about the block's own centre and nothing else, so a part that turns
+	 * somewhere else is moved into place after it has been turned - which also keeps
+	 * the offset in exactly one place instead of baked into the geometry.
+	 */
+	public static final PartialModel CAMSHAFT_RUNNING_X = block("camshaft_running_x");
+	public static final PartialModel CAMSHAFT_RUNNING_Z = block("camshaft_running_z");
+
+	/**
+	 * The three moving parts of one cylinder's valve gear: the pushrod the lobe
+	 * lifts, the rocker it swings, and the valve that rocker presses off its seat.
+	 *
+	 * <p>Each is authored about the block centre in X, so one model serves both of a
+	 * cylinder's valves and the renderer places each at its own bore position. The
+	 * pushrod and the valve only ever translate; the rocker turns, so its pivot is on
+	 * the block centre for the same reason the camshaft's axis is.
+	 */
+	public static final PartialModel PUSHROD_X = block("pushrod_x");
+	public static final PartialModel PUSHROD_Z = block("pushrod_z");
+	public static final PartialModel ROCKER_X = block("rocker_x");
+	public static final PartialModel ROCKER_Z = block("rocker_z");
+	public static final PartialModel VALVE_X = block("valve_x");
+	public static final PartialModel VALVE_Z = block("valve_z");
+
+	/**
 	 * The spinning flywheel: rim, spokes, hub <i>and</i> the shaft through the
 	 * block. The shaft turns with everything else rather than being left in the
 	 * baked model, so no part of the output side is visibly stationary.

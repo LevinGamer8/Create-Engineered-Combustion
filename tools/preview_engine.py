@@ -16,6 +16,12 @@ import zlib
 ASSETS = str(pathlib.Path(__file__).resolve().parents[1]
               / "src/main/resources/assets/engineered_combustion")
 CRANK_AXIS_Y, CRANK_R, ROD_L = 8.0, 3.0, 14.5
+# Must match the same names in tools/generate_engine_models.py and, for the
+# swing, CamshaftTiming.ROCKER_MAX_SWING_DEGREES in the Java.
+CAM_CY, CAM_CZ = 4.5, -0.9
+VALVE_X = (5.0, 11.0)
+ROCKER_PIVOT_Y, ROCKER_PIVOT_Z = 19.9, 0.2
+ROCKER_SWING = 10.0
 
 
 # --------------------------------------------------------------------------- png
@@ -195,11 +201,48 @@ def rod_swing(theta_deg):
     return math.asin(CRANK_R * math.sin(math.radians(theta_deg)) / ROD_L)
 
 
-# The phase each cylinder of an inline-N runs at, so a preview of a four
-# cylinder engine shows four pistons at four different heights the way the real
-# one does. Must match EngineTuning.cylinderPhaseOffsetDegrees.
+# WHERE EACH CYLINDER'S THROW SITS, in degrees, and it is no longer an even
+# division. Since Milestone 15B the engine is a four-stroke, so crank geometry
+# and firing order are different questions: an inline-4's throws are 0/180/180/0
+# - the flat-plane crank, cylinders 1 and 4 moving together against 2 and 3 -
+# and it fires 1-3-4-2. Must match EngineTuning.cylinderPhaseOffsetDegrees.
+THROWS = {1: (0.0,), 2: (0.0, 180.0), 3: (0.0, 120.0, 240.0),
+          4: (0.0, 180.0, 180.0, 0.0)}
+
+# ... and where each sits in the 720-degree CYCLE, which is what the valve gear
+# follows. The negation of the ignition offset, exactly as
+# FourStrokeFiringOrder.cyclePhaseOffsetDegrees computes it.
+CYCLE_OFFSETS = {1: (0.0,), 2: (0.0, 540.0), 3: (0.0, 480.0, 240.0),
+                 4: (0.0, 180.0, 540.0, 360.0)}
+
+
 def phase_offset(index, count):
-    return 360.0 / count * index
+    return THROWS[count][index]
+
+
+def cycle_offset(index, count):
+    return CYCLE_OFFSETS[count][index]
+
+
+# --------------------------------------------------------------------- valves
+# The same arithmetic ValveTiming and CamshaftTiming run in the Java, so what is
+# rendered here is what the game draws rather than an impression of it.
+VALVE_LIFT = 1.1
+INTAKE_OPEN, EXHAUST_OPEN = 540.0, 360.0
+STROKE = 180.0
+
+
+def lift_curve(progress):
+    if progress <= 0.0 or progress >= 1.0:
+        return 0.0
+    return (1.0 - math.cos(2.0 * math.pi * progress)) / 2.0
+
+
+def valve_lift(cycle_angle, open_angle):
+    since = (cycle_angle - open_angle) % 720.0
+    if since >= STROKE:
+        return 0.0
+    return lift_curve(since / STROKE)
 
 
 def section(theta, index, count, carburetor, sump, spark_plug=True):
@@ -217,6 +260,19 @@ def section(theta, index, count, carburetor, sump, spark_plug=True):
                   mk_xform((x, 0, 0)))
     q += quads_of("block/crank_assembly_x.json",
                   mk_xform((x, 0, 0), pivot=(8, 8, 8), angle=math.radians(angle), axis="x"))
+    # THE VALVE GEAR. The camshaft turns at half crank speed about its own
+    # centreline; each pushrod rides its lobe; each rocker swings by the lift its
+    # pushrod gave it; each valve is pushed down by the same amount. Every one of
+    # them is a function of the ONE cycle angle, which is why they cannot drift
+    # from the piston below them.
+    cycle = (theta + cycle_offset(index, count)) % 720.0
+    # Translate onto the real axis, THEN turn about the block centre - which is
+    # exactly the pair CrankshaftRenderer applies, in the same order, because
+    # Create's rotateCentered can only pivot about the block's own centre.
+    q += quads_of("block/camshaft_running_x.json",
+                  mk_xform((x, CAM_CY - 8.0, CAM_CZ - 8.0), pivot=(8, 8, 8),
+                           angle=math.radians(cycle / 2.0), axis="x"))
+    lifts = (valve_lift(cycle, INTAKE_OPEN), valve_lift(cycle, EXHAUST_OPEN))
     cylinder = "block/cylinder.json"
     if back and ahead:
         cylinder = "block/cylinder_manifold_both.json"
@@ -232,6 +288,15 @@ def section(theta, index, count, carburetor, sump, spark_plug=True):
     q += quads_of("block/connecting_rod_x.json",
                   mk_xform((x, 16 + wl - 8.0, 0), pivot=(8, 8, 8),
                            angle=rod_swing(angle), axis="x"))
+    for valve_x, lift in zip(VALVE_X, lifts):
+        offset = valve_x - 8.0
+        q += quads_of("block/pushrod_x.json",
+                      mk_xform((x + offset, 16 + lift * VALVE_LIFT, 0)))
+        q += quads_of("block/rocker_x.json",
+                      mk_xform((x + offset, 16 + ROCKER_PIVOT_Y - 8.0, ROCKER_PIVOT_Z - 8.0),
+                               pivot=(8, 8, 8),
+                               angle=math.radians(-lift * ROCKER_SWING), axis="x"))
+        q += quads_of("block/valve_x.json", mk_xform((x + offset, 16 - lift * VALVE_LIFT, 0)))
     if carburetor:
         q += quads_of("block/carburetor.json", mk_xform((x, 32, 0)))
     if sump:
@@ -267,10 +332,18 @@ if __name__ == "__main__":
     # straight down the intake side for how long an inline-4 looks.
     for sections in (1, 2, 3, 4):
         span = sections * 16
-        # Both from the intake side (-Z), which is the side the Carburetor, the
-        # air cleaner and the shared manifold are all on.
-        for name, yaw, pitch in (("3q", math.radians(142), math.radians(20)),
-                                 ("intake", math.radians(180), math.radians(6))):
+        # From the INTAKE side (-Z), which is the side the Carburetor, the air
+        # cleaner, the shared manifold and - since Milestone 15B - the whole
+        # valve gear are on. The three-quarter view is where the cam, the
+        # pushrods and the rocker shaft all read at once, which is the thing
+        # worth checking; the head-on one is how long an inline-4 looks.
+        #
+        # The exhaust view is here too, and it is not decoration: that flank is
+        # deliberately kept clear for a future exhaust manifold, and a picture of
+        # it is how anyone notices the day something starts creeping onto it.
+        for name, yaw, pitch in (("3q", math.radians(38), math.radians(20)),
+                                 ("intake", math.radians(2), math.radians(6)),
+                                 ("exhaust", math.radians(182), math.radians(6))):
             # One scale for every layout, so the four pictures can be put side
             # by side and compared: an inline-4 has to look four times as long
             # as an inline-1, not four times as small.
@@ -280,6 +353,6 @@ if __name__ == "__main__":
             print("rendered", f"r{sections}_{name}")
     # And the inline-1 through a revolution, which is the animation check.
     for theta in (0, 90, 180, 270):
-        render(assemble(theta, 1), 340, 420, math.radians(142), math.radians(20),
-               (12, 22, 8), 11.0, os.path.join(out, f"r1_3q_{theta:03d}.png"))
+        render(assemble(theta, 1), 340, 420, math.radians(38), math.radians(20),
+               (10, 22, 6), 11.0, os.path.join(out, f"r1_3q_{theta:03d}.png"))
         print("rendered", f"r1_3q_{theta:03d}")

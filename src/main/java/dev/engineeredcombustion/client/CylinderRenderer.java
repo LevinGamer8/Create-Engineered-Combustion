@@ -93,7 +93,65 @@ public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity
 			.light(light)
 			.renderInto(ms, vertices);
 
+		renderValvetrain(be, state, axis, partialTicks, light, ms, vertices);
 		renderCombustionFlash(be, state, partialTicks, ms, buffer);
+	}
+
+	/**
+	 * This cylinder's two pushrods, rockers and valves, at the lift its own place in
+	 * the cycle gives them.
+	 *
+	 * <p><b>Drawn only when the engine has a Camshaft</b>, because without one there
+	 * is nothing to work them - and that absence is the diagnostic: bare tunnels and
+	 * a bare rocker shaft over a turning engine is exactly what an engine that will
+	 * never fire looks like.
+	 *
+	 * <p>Every position here is a function of the one cycle angle, through the same
+	 * {@code ValveTiming} and {@code CamshaftTiming} the simulation uses. So there is
+	 * no animation state, nothing to drift, and a valve is never open on a stroke the
+	 * server thinks is a compression.
+	 *
+	 * <p>The pushrod and the valve move in opposite directions on purpose: the rocker
+	 * is a lever, so a rod pushed <i>up</i> presses its valve <i>down</i>. Watching
+	 * that happen is the whole reason the pushrod design was chosen over an overhead
+	 * camshaft.
+	 */
+	private static void renderValvetrain(CylinderBlockEntity be, BlockState state, Axis axis, float partialTicks,
+		int light, PoseStack ms, VertexConsumer vertices) {
+		if (!be.hasCamshaft())
+			return;
+
+		float cycleAngle = be.getCycleAngleForRender(partialTicks);
+		boolean alongX = axis == Axis.X;
+		PartialModel pushrod = alongX ? ECPartialModels.PUSHROD_X : ECPartialModels.PUSHROD_Z;
+		PartialModel rocker = alongX ? ECPartialModels.ROCKER_X : ECPartialModels.ROCKER_Z;
+		PartialModel valve = alongX ? ECPartialModels.VALVE_X : ECPartialModels.VALVE_Z;
+		Direction rotationAxis = Direction.get(AxisDirection.POSITIVE, axis);
+
+		for (int index = 0; index < EngineValvetrain.VALVE_X.length; index++) {
+			float lift = EngineValvetrain.liftOf(index, cycleAngle);
+			float alongRun = EngineValvetrain.valveOffset(index);
+
+			CachedBuffers.partial(pushrod, state)
+				.translate(alongX ? alongRun : 0.0F, lift, alongX ? 0.0F : alongRun)
+				.light(light)
+				.renderInto(ms, vertices);
+
+			// Translate onto the rocker shaft, then swing about the block centre -
+			// the same order the camshaft uses, and for the same reason.
+			float offsetZ = EngineValvetrain.rockerOffsetZ();
+			CachedBuffers.partial(rocker, state)
+				.translate(alongX ? alongRun : offsetZ, EngineValvetrain.rockerOffsetY(),
+					alongX ? offsetZ : alongRun)
+				.rotateCentered(-EngineValvetrain.rockerSwing(index, cycleAngle), rotationAxis)
+				.light(light)
+				.renderInto(ms, vertices);
+
+			CachedBuffers.partial(valve, state)
+				.translate(alongX ? alongRun : 0.0F, -lift, alongX ? 0.0F : alongRun)
+				.light(light)
+				.renderInto(ms, vertices);
+		}
 	}
 
 	/**

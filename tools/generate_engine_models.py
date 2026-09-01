@@ -54,6 +54,64 @@ BORE_MIN, BORE_MAX = 3.4, 12.6
 WRIST_AUTHOR_Y = 8.0  # piston/rod are authored with the wrist pin here
 
 
+# ---------------------------------------------------------------------------
+# THE VALVETRAIN, and the horizontal line it draws down the engine
+# ---------------------------------------------------------------------------
+# Milestone 15B's four-stroke needs a camshaft, pushrods, rockers and valves,
+# and the multi-cylinder visual problem needs something that runs the LENGTH of
+# the engine. Those are the same thing, so they are solved as one.
+#
+# Everything lives outboard of the intake flank, at negative Z, in three stacked
+# bands that each run unbroken from one end of the engine to the other:
+#
+#     y  4.4 ..  8.4   camshaft, in its cradle, on the crankcase
+#     y  8.4 .. 17.6   pushrods, rising past the barrel
+#     y 19.2 .. 20.6   rocker shaft and rockers, over the head
+#
+# Three continuous horizontal lines against four repeated cylinder modules is
+# what makes an inline-4 read as one machine. It is also, exactly, what an
+# exposed overhead-valve engine looks like - so nothing here is decoration
+# bolted on to solve a composition problem; it is the mechanism the simulation
+# already runs, drawn where it actually is.
+#
+# THE +Z FLANK IS DELIBERATELY LEFT EMPTY. The head's exhaust boss is there and
+# an exhaust manifold belongs there later, so the valvetrain takes the intake
+# side and the intake manifold rail moves up to sit above the rockers.
+# HOW FAR IT MAY STAND PROUD. The engine's own rule is that geometry leaves its
+# block vertically and not sideways, because a part reaching sideways lands in
+# whatever the player built next to it and hangs in the air - which is how the
+# spark plug once came to look like it was floating. The valve gear is the one
+# deliberate exception, and it is bounded rather than waved through: nothing here
+# reaches more than VALVETRAIN_REACH out, and only on the intake flank.
+#
+# It earns the exception by being the opposite of a floating part. It is one
+# assembly running the entire length of the engine, carried by a cradle on the
+# crankcase, guided on every cylinder and hung off one shaft over every head -
+# so it reads as the gear on the side of a machine rather than as a fragment
+# beside it. tools/check_models.py enforces the bound.
+VALVETRAIN_REACH = 2.0
+
+# CAM_CY/CAM_CZ, VALVE_X, ROCKER_PIVOT_* and VALVE_LIFT are duplicated in
+# src/main/java/dev/engineeredcombustion/client/EngineValvetrain.java, which is
+# where the renderers read them, and in tools/preview_engine.py, which is where
+# they get looked at. Three files, one mechanism: the day any two disagree, a
+# pushrod stops touching its lobe and nobody can say which is wrong. Change them
+# together or not at all.
+CAM_CZ = -0.9           # camshaft centreline, just proud of the crankcase's flank
+CAM_CY = 4.5            # low in the crankshaft block, under the cutaway window so
+                        # it never hides the crank a player is meant to watch
+CAM_R = 0.95            # journal radius
+CAM_LOBE_R = 1.7        # lobe tip radius. The difference is the lift.
+PUSHROD_CZ = -0.9       # pushrods run straight up from the cam, clear of the fins
+PUSHROD_R = 0.45
+VALVE_CZ = 5.6          # valve stems, over the bore and clear of the manifold runner
+VALVE_X = (5.0, 11.0)   # intake and exhaust, side by side across the bore
+ROCKER_PIVOT_Y = 19.9   # cylinder-local, above the head and below the manifold rail
+ROCKER_PIVOT_Z = 0.2    # inboard of the pushrods, so the short arm reaches out to them
+VALVE_LIFT = 1.1        # how far a valve travels off its seat, in model units
+HEAD_TOP = 17.8         # where the head casting stops, and the valves emerge
+
+
 def r2(v):
     v = round(v + 0.0, 3)
     return int(v) if float(v).is_integer() else v
@@ -485,8 +543,32 @@ def crankcase_elements(ignition_on=False, joined=False):
     # IS fitted this is entirely inside that block's top flange and draws
     # nothing, so it costs the common case nothing and needs no block state to
     # know whether a sump is there.
-    e.append(el((back, -1.0, 1.3), (15.5, 0.0, 14.7), "cast"))
-    e.append(el((back, -1.7, 2.6), (15.5, -1.0, 13.4), "cast"))
+    # THE SHARED LOWER CRANKCASE, and the answer to "the sump looks like a tiny
+    # tank hanging under cylinder 1".
+    #
+    # It is a real tray now rather than a lip: nearly three units deep, ribbed
+    # and bolted like the pan it is, and running unbroken across every seam. So
+    # the underside of an inline-4 is ONE oil pan four bays long, and the Oil
+    # Sump block is the deep service bowl bolted into one bay of it - which is
+    # exactly what a single shared sump is, and what the gallery along both
+    # flanks has always claimed.
+    #
+    # Every part of it stays inside z 1.0 .. 15.0 and above y -2.8, which is the
+    # box the Oil Sump's own top flange occupies. So where a sump IS fitted this
+    # is swallowed whole and draws nothing - no block state, no z-fighting, and
+    # no second pan.
+    e.append(el((back, -1.0, 1.05), (15.5, 0.0, 14.95), "cast"))
+    e.append(el((back, -2.0, 1.4), (15.5, -1.0, 14.6), "cast"))
+    e.append(el((back, -2.75, 2.3), (15.5, -2.0, 13.7), "cast"))
+    # Ribs down the tray, the same language the Oil Sump's own flanks use, so
+    # the shallow part and the deep part read as one pressing.
+    for x0, x1 in ((2.4, 3.6), (7.4, 8.6), (12.4, 13.6)):
+        e.append(el((x0, -2.6, 1.02), (x1, -0.2, 1.5), "cast"))
+        e.append(el((x0, -2.6, 14.5), (x1, -0.2, 14.98), "cast"))
+    # And the bolt line along its flange, which is what says "removable pan".
+    for x0 in (1.2, 5.2, 9.2, 13.2):
+        e.append(el((x0, -0.65, 1.0), (x0 + 1.1, -0.05, 1.35), "steel"))
+        e.append(el((x0, -0.65, 14.65), (x0 + 1.1, -0.05, 15.0), "steel"))
     # --- side walls, cut away so the crank is visible ---------------------
     for z0, z1 in ((0.5, 2.5), (13.5, 15.5)):
         e.append(el((1.0, 2.0, z0), (15.0, 5.0, z1), "case"))      # lower rail
@@ -542,6 +624,11 @@ def crankcase_elements(ignition_on=False, joined=False):
     if not joined:
         for near in (True, False):
             e += ignition_switch_elements(ignition_on, near)
+    # --- the camshaft's housing, along the intake flank. See
+    # camshaft_cradle_elements: this is the lowest of the three horizontal lines
+    # the valvetrain draws down the engine, and the one that makes the crankcase
+    # of an inline-4 read as one casting with one cam in it.
+    e += camshaft_cradle_elements(joined)
     # --- head studs standing proud of the deck, so the joint the Cylinder
     # lands on plainly bolts down rather than just meeting.
     for x0, x1 in ((2.2, 3.8), (12.2, 13.8)):
@@ -702,7 +789,7 @@ def piston_elements():
 # a texture reference that nothing uses is a texture that quietly rots.
 CYL_TEX = {"particle": "cylinder", "barrel": "cylinder", "fin": "cylinder_fin",
            "head": "cylinder_head", "deck": "crankcase_deck",
-           "steel": "journal", "case": "crankshaft"}
+           "steel": "journal", "case": "crankshaft", "cast": "cast_iron"}
 
 # The manifold's own additions, kept off the plain Cylinder rather than folded
 # into CYL_TEX: an inline-1 has no brass on it, and a texture reference nothing
@@ -826,7 +913,12 @@ def spark_plug_elements():
 #
 # An inline-1 gets NONE of this: with nothing to share, its Carburetor sits
 # straight down on its head exactly as it always has.
-RAIL_Y0, RAIL_Y1 = 17.55, 19.45
+# RAISED IN 15B, to make room for the rocker gear underneath it. The valvetrain
+# now owns the band from the head's top face up to about 20.6, and the manifold
+# sits above it - which is where a plenum on an overhead-valve engine goes, and
+# which puts the two systems in the order a player reads them: valves on the
+# head, air above.
+RAIL_Y0, RAIL_Y1 = 20.9, 22.8
 RAIL_Z0, RAIL_Z1 = 0.55, 3.95
 # Where the rail stops when the run does. Far enough inside the block to leave
 # room for the end cap, and to read as a manifold that ends rather than as one
@@ -840,26 +932,136 @@ def manifold_elements(link_back, link_ahead):
     x1 = 16.0 if link_ahead else RAIL_END_AHEAD
     e = [
         el((x0, RAIL_Y0, RAIL_Z0), (x1, RAIL_Y1, RAIL_Z1), "deck"),   # the rail
-        # The runner: down out of the rail and onto the head's intake flange,
-        # which reaches up to 17.75 and is therefore already inside it.
-        el((4.4, 17.1, 0.75), (11.6, RAIL_Y0 + 0.15, 3.75), "head"),
-        # The joint face over this bore, so every cylinder visibly has its own
-        # runner bolted to the shared rail rather than the rail merely passing by.
-        el((4.4, 17.75, 0.15), (11.6, 19.25, 0.6), "deck"),
+        # The runner: down out of the rail, past the rocker gear on the outboard
+        # side of it, and onto the head's intake flange, which reaches up to
+        # 17.75 and is therefore already inside it. It is the one part of this
+        # that is per-cylinder, and it is what makes a shared rail visibly feed
+        # THIS bore rather than merely pass over it.
+        el((6.4, 17.4, 1.2), (9.6, RAIL_Y0 + 0.15, 3.8), "head"),
+        # The joint face where the runner meets the head, so a player can see the
+        # bolted flange rather than a pipe growing out of the casting. It sits
+        # BETWEEN the two rockers, which is where a runner enters a crossflow
+        # head - and which is what keeps the rocker arms' sweep clear of it.
+        el((6.1, 17.6, 1.0), (9.9, 19.0, 4.0), "deck"),
     ]
-    for x in (5.2, 10.0):
-        e.append(el((x, 18.1, 0.05), (x + 0.8, 18.9, 0.35), "brass"))
+    for x in (6.4, 8.8):
+        e.append(el((x, 17.85, 0.8), (x + 0.8, 18.65, 1.1), "brass"))
     # Half a collar at each seam, and a cap wherever the run ends.
     if link_back:
-        e.append(el((0.0, 17.35, 0.35), (1.5, 19.65, 4.15), "head"))
+        e.append(el((0.0, RAIL_Y0 - 0.2, RAIL_Z0 - 0.2), (1.5, RAIL_Y1 + 0.2, RAIL_Z1 + 0.2), "head"))
     else:
-        e.append(el((RAIL_END_BACK - 0.45, 17.45, 0.45),
-                    (RAIL_END_BACK + 0.15, 19.55, 4.05), "head"))
+        e.append(el((RAIL_END_BACK - 0.45, RAIL_Y0 - 0.1, RAIL_Z0 - 0.1),
+                    (RAIL_END_BACK + 0.15, RAIL_Y1 + 0.1, RAIL_Z1 + 0.1), "head"))
     if link_ahead:
-        e.append(el((14.5, 17.35, 0.35), (16.0, 19.65, 4.15), "head"))
+        e.append(el((14.5, RAIL_Y0 - 0.2, RAIL_Z0 - 0.2), (16.0, RAIL_Y1 + 0.2, RAIL_Z1 + 0.2), "head"))
     else:
-        e.append(el((RAIL_END_AHEAD - 0.15, 17.45, 0.45),
-                    (RAIL_END_AHEAD + 0.45, 19.55, 4.05), "head"))
+        e.append(el((RAIL_END_AHEAD - 0.15, RAIL_Y0 - 0.1, RAIL_Z0 - 0.1),
+                    (RAIL_END_AHEAD + 0.45, RAIL_Y1 + 0.1, RAIL_Z1 + 0.1), "head"))
+    return e
+
+
+# ---------------------------------------------------------------------------
+# The valvetrain's static half
+# ---------------------------------------------------------------------------
+# What does not move: the cam's cradle on the crankcase, the pushrod guides up
+# the barrel, and the rocker shaft over the head. All three run the whole length
+# of the engine, all three cross every seam, and none of them is per-cylinder.
+#
+# They are baked into the block models rather than drawn by a renderer for
+# exactly that reason: a static part of the engine belongs in the chunk mesh,
+# and a part that has to meet its neighbour across a block boundary has to be
+# built from the same link_back / link_ahead flags the fins and the manifold
+# already use.
+def camshaft_cradle_elements(joined):
+    """The cam's housing, on the crankcase's intake flank.
+
+    Open along its outer face on purpose: this is an exposed engine and the
+    lobes turning are the single most legible thing about a four-stroke. What is
+    drawn is the cradle under the shaft, the cap over it, and a bearing web at
+    each end - which at a seam meet as one bearing, exactly as the main bearing
+    caps below them do.
+    """
+    back = -0.5 if joined else 0.5
+    z0, z1 = -VALVETRAIN_REACH + 0.1, CAM_CZ + 1.4
+    e = [
+        el((back, CAM_CY - 2.0, z0), (15.5, CAM_CY - 1.1, z1), "cast"),   # cradle
+        el((back, CAM_CY + 1.1, z0), (15.5, CAM_CY + 2.0, z1), "cast"),   # cap
+        # The back wall, closing the housing against the crankcase so the cam is
+        # seen against cast iron rather than against a hole into the block.
+        el((back, CAM_CY - 2.0, z1 - 0.4), (15.5, CAM_CY + 2.0, z1), "case"),
+    ]
+    # Bearing webs. One at each end of every section, so a seam gets two halves
+    # that read as one wide bearing and the end of the engine gets a finished cap.
+    for x0, x1 in ((0.0, 1.4), (14.6, 16.0)):
+        e.append(el((x0, CAM_CY - 2.5, z0 - 0.05), (x1, CAM_CY + 2.5, z1 + 0.05), "case"))
+        e.append(el((x0 + 0.35, CAM_CY + 1.3, z0 - 0.02), (x1 - 0.35, CAM_CY + 2.1, z0 + 0.35), "brass"))
+    return e
+
+
+def pushrod_guide_elements(link_back, link_ahead):
+    """Guides and a valve-gear gallery up the cylinder's intake flank.
+
+    The gallery is the continuous part - a shallow cast channel running the whole
+    length at barrel height - and the two guides standing in it are this
+    cylinder's. Together they turn the stretch of flank between the cam and the
+    head from bare fin ends into the side of a valve gear.
+    """
+    lo = 0.0 if link_back else 0.4
+    hi = 16.0 if link_ahead else 15.6
+    z0, z1 = -VALVETRAIN_REACH + 0.4, 0.55
+    e = [
+        # The gallery: a shallow cast channel at the foot of the flank and a rail
+        # at the top of it, both running the whole block. Between them the two
+        # tunnels this cylinder's rods run in.
+        el((lo, 0.0, z0), (hi, 1.3, z1), "cast"),
+        el((lo, 12.1, z0), (hi, 13.5, z1), "cast"),
+    ]
+    for x in VALVE_X:
+        # A tunnel rather than a slab: two ribs with the rod running between them,
+        # open along the front. A solid tower would hide the one part of the valve
+        # gear whose movement is worth watching, and the fins either side of it
+        # would lose their run.
+        for side in (-1.0, 1.0):
+            e.append(el((x + side * 1.05 - 0.45, 1.3, z0 + 0.2),
+                        (x + side * 1.05 + 0.45, 12.1, z1), "cast"))
+        e.append(el((x - 1.05, 1.3, z1 - 0.45), (x + 1.05, 12.1, z1), "case"))
+        # Cast collars where the tunnel passes a fin, so the two meet as one
+        # casting instead of the tunnel merely crossing in front.
+        for y in (3.4, 9.2):
+            e.append(el((x - 1.75, y, z0 + 0.05), (x + 1.75, y + 1.1, z1), "cast"))
+    return e
+
+
+def rocker_shaft_elements(link_back, link_ahead):
+    """The rocker shaft over the head, and the pedestals carrying it.
+
+    THE TOP LINE OF THE ENGINE. It is one shaft on a real overhead-valve engine
+    however many cylinders there are, and drawing it that way is what stops an
+    inline-4's top end reading as four separate caps: above four repeated heads
+    there is one unbroken shaft with eight rockers hung off it.
+    """
+    lo = 0.0 if link_back else 0.9
+    hi = 16.0 if link_ahead else 15.1
+    e = [
+        # The shaft itself, round-ish, running the whole block.
+        el((lo, ROCKER_PIVOT_Y - 0.55, ROCKER_PIVOT_Z - 0.75),
+           (hi, ROCKER_PIVOT_Y + 0.55, ROCKER_PIVOT_Z + 0.75), "steel"),
+        el((lo, ROCKER_PIVOT_Y - 0.75, ROCKER_PIVOT_Z - 0.55),
+           (hi, ROCKER_PIVOT_Y + 0.75, ROCKER_PIVOT_Z + 0.55), "steel"),
+    ]
+    # A pedestal at each end of the section, bolted down onto the head. At a seam
+    # two of them meet as one wide stand, which is where a real shaft is carried.
+    for x0, x1 in ((0.4, 2.2), (13.8, 15.6)):
+        e.append(el((x0, 17.2, ROCKER_PIVOT_Z - 1.1),
+                    (x1, ROCKER_PIVOT_Y + 0.4, ROCKER_PIVOT_Z + 1.1), "head"))
+        e.append(el((x0 - 0.3, 17.0, ROCKER_PIVOT_Z - 1.5),
+                    (x1 + 0.3, 18.2, ROCKER_PIVOT_Z + 1.5), "deck"))
+    # Valve guides standing out of the head, so the stems emerge from something.
+    for x in VALVE_X:
+        e.append(el((x - 1.15, 17.0, VALVE_CZ - 1.15),
+                    (x + 1.15, HEAD_TOP + 1.3, VALVE_CZ + 1.15), "head"))
+        e.append(el((x - 0.85, HEAD_TOP + 1.3, VALVE_CZ - 0.85),
+                    (x + 0.85, HEAD_TOP + 2.1, VALVE_CZ + 0.85), "steel"))
     return e
 
 
@@ -935,6 +1137,11 @@ def cylinder_elements(link_back=False, link_ahead=False):
     # and is there whether or not anything is screwed into it.
     if link_back or link_ahead:
         e += manifold_elements(link_back, link_ahead)
+    # The valve gear's static half, on every cylinder whether or not it has
+    # neighbours - unlike the manifold, a single needs its own pushrods and its
+    # own rocker shaft, and the linking only decides how far they reach.
+    e += pushrod_guide_elements(link_back, link_ahead)
+    e += rocker_shaft_elements(link_back, link_ahead)
     return e
 
 
@@ -1093,6 +1300,100 @@ def air_filter_elements():
     return e
 
 
+# ---------------------------------------------------------------------------
+# The valvetrain's moving half
+# ---------------------------------------------------------------------------
+# What a block entity renderer draws, because it moves: the camshaft turning at
+# half crank speed, the pushrods rising and falling with the lobes, the rockers
+# swinging on their shaft, and the valves being pushed off their seats.
+#
+# All four are pure functions of the engine's one authoritative cycle position -
+# see CamshaftTiming and ValveTiming in the Java - so none of them has an
+# animation timer and none of them can drift from the piston below it.
+def camshaft_running_elements():
+    """The shaft and its lobes, authored ON THE BLOCK CENTRE so it can be turned.
+
+    Everything that rotates in this mod is drawn with Create's
+    {@code rotateCentered}, which pivots about the block's own centre and nothing
+    else. So a part whose real axis is somewhere else is authored about the centre
+    and TRANSLATED into place afterwards - translate first, then rotate, which
+    turns it on its own axis and then puts it where it belongs. That is why the
+    numbers here are 8 and not CAM_CY: the renderer supplies the offset, and the
+    previewer applies the identical pair.
+    """
+    e = [el((0.0, 8.0 - CAM_R, 8.0 - CAM_R), (16.0, 8.0 + CAM_R, 8.0 + CAM_R), "steel")]
+    for x in VALVE_X:
+        # A lobe is a round base circle with a nose on it. The base circle is the
+        # journal widened - the follower rides it and nothing happens - and the
+        # nose is what a player watches come round and push.
+        e.append(el((x - 1.05, 6.75, 6.75), (x + 1.05, 9.25, 9.25), "web"))
+        e.append(el((x - 1.05, 8.6, 7.2), (x + 1.05, 8.0 + CAM_LOBE_R, 8.8), "web"))
+        e.append(el((x - 1.05, 8.0 + CAM_LOBE_R - 0.35, 7.45),
+                    (x + 1.05, 8.0 + CAM_LOBE_R + 0.2, 8.55), "web"))
+    return e
+
+
+def pushrod_running_elements():
+    """One pushrod, authored at zero lift. The renderer translates it in Y.
+
+    It reaches from the cam's follower, one block down, to the rocker's outer
+    end - so it is drawn by the CYLINDER, which knows the cycle angle, and
+    simply extends past the bottom of its own block. Block entity renderers are
+    not clipped to their block, which is the same licence the connecting rod
+    already takes.
+    """
+    # Cylinder-local: the cam sits at crankshaft-local CAM_CY, one block below.
+    foot = CAM_CY - 16.0 + CAM_LOBE_R
+    return [
+        # The follower riding the lobe.
+        el((-0.95, foot - 0.5, PUSHROD_CZ - 0.95), (0.95, foot + 0.9, PUSHROD_CZ + 0.95), "steel"),
+        # The rod itself, up to just under the rocker's outer end.
+        el((-PUSHROD_R, foot + 0.9, PUSHROD_CZ - PUSHROD_R),
+           (PUSHROD_R, ROCKER_PIVOT_Y - 1.1, PUSHROD_CZ + PUSHROD_R), "steel"),
+        # Its cup, where the rocker presses on it.
+        el((-0.75, ROCKER_PIVOT_Y - 1.45, PUSHROD_CZ - 0.75),
+           (0.75, ROCKER_PIVOT_Y - 0.85, PUSHROD_CZ + 0.75), "brass"),
+    ]
+
+
+def rocker_running_elements():
+    """One rocker arm, authored about the BLOCK CENTRE so it can be turned.
+
+    Two arms of one piece: the short outer one the pushrod lifts, and the long
+    inner one that reaches over the head to press the valve down. Its pivot is
+    put on the block centre for the same reason the camshaft's axis is - see
+    camshaft_running_elements - and the renderer translates it onto the real
+    shaft afterwards.
+    """
+    # z of the valve and of the pushrod, measured from the pivot and re-centred.
+    valve_z = 8.0 + (VALVE_CZ - ROCKER_PIVOT_Z)
+    rod_z = 8.0 + (PUSHROD_CZ - ROCKER_PIVOT_Z)
+    return [
+        el((-1.15, 6.85, 6.85), (1.15, 9.15, 9.15), "steel"),          # boss on the shaft
+        el((-0.75, 7.45, 8.9), (0.75, 8.55, valve_z + 0.4), "steel"),  # arm to the valve
+        el((-0.9, 7.1, valve_z - 0.7), (0.9, 8.5, valve_z + 0.7), "brass"),  # its tip
+        el((-0.7, 7.5, rod_z - 0.4), (0.7, 8.5, 7.1), "steel"),        # the short end
+        el((-0.85, 7.05, rod_z - 0.85), (0.85, 7.65, rod_z + 0.85), "brass"),
+    ]
+
+
+def valve_running_elements():
+    """One valve, authored seated. The renderer translates it DOWN to open it.
+
+    Stem, spring and retainer above the head; the head of the valve itself is
+    inside the casting and never seen, which is correct - a valve that showed
+    its face would be a valve hanging in the bore.
+    """
+    return [
+        el((-0.3, HEAD_TOP - 2.2, VALVE_CZ - 0.3), (0.3, HEAD_TOP + 2.9, VALVE_CZ + 0.3), "steel"),
+        # The spring, drawn as three coils so it reads as a spring rather than a tube.
+        *[el((-0.8, HEAD_TOP + 0.5 + i * 0.75, VALVE_CZ - 0.8),
+             (0.8, HEAD_TOP + 0.95 + i * 0.75, VALVE_CZ + 0.8), "brass") for i in range(3)],
+        # The retainer the rocker presses on.
+        el((-0.85, HEAD_TOP + 2.75, VALVE_CZ - 0.85), (0.85, HEAD_TOP + 3.3, VALVE_CZ + 0.85), "steel"),
+    ]
+
+
 # ===========================================================================
 # CAMSHAFT - the valvetrain, one per engine
 # ===========================================================================
@@ -1107,6 +1408,13 @@ def air_filter_elements():
 # standard item pose by the display block below.
 CAM_TEX = {"particle": "journal", "steel": "journal", "web": "crank_web",
            "gear": "cast_iron"}
+
+# The moving valve gear. Steel for the shafts and rods, brass for the bearing
+# surfaces and the springs - the same two materials the rest of the engine's
+# working parts are drawn in, so the valvetrain reads as part of the machine
+# rather than as something bolted to the outside of it.
+VALVETRAIN_TEX = {"particle": "journal", "steel": "journal", "brass": "brass",
+                  "web": "crank_web"}
 
 # Lobe pairs, one per cylinder the mod supports. Spaced on the same 3.2 pitch the
 # crank webs use, so the two shafts read as parts of one engine.
@@ -1241,6 +1549,22 @@ def main():
     # The parts a block entity renderer draws are not turned by the blockstate,
     # so anything whose shape is not symmetric about the cylinder axis needs one
     # model per crank axis - the same rule the connecting rod already follows.
+    # The valvetrain's moving parts. One pair per axis for anything whose shape
+    # is not symmetric about the cylinder axis - the same rule the connecting rod
+    # and the spark plug already follow, because a partial model is not turned by
+    # the blockstate.
+    cam = camshaft_running_elements()
+    write("block/camshaft_running_x.json", model(CAM_TEX, cam))
+    write("block/camshaft_running_z.json", model(CAM_TEX, [transpose(x) for x in cam]))
+    for name, parts in (("pushrod", pushrod_running_elements()),
+                        ("rocker", rocker_running_elements()),
+                        ("valve", valve_running_elements())):
+        # Authored about x = 0 so the renderer places each one at its own bore
+        # position; shifted onto the block before writing, and mirrored for Z.
+        centred = [shift(part, 8.0, 0.0, 0.0) for part in parts]
+        write(f"block/{name}_x.json", model(VALVETRAIN_TEX, centred))
+        write(f"block/{name}_z.json", model(VALVETRAIN_TEX, [transpose(x) for x in centred]))
+
     write("block/spark_plug_x.json", model(SPARK_PLUG_TEX, plug))
     write("block/spark_plug_z.json",
           model(SPARK_PLUG_TEX, [rotate_y90(x) for x in plug]))

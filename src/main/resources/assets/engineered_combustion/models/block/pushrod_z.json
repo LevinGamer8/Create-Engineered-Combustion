@@ -1,0 +1,200 @@
+{
+  "parent": "minecraft:block/block",
+  "textures": {
+    "particle": "engineered_combustion:block/journal",
+    "steel": "engineered_combustion:block/journal",
+    "brass": "engineered_combustion:block/brass",
+    "web": "engineered_combustion:block/crank_web"
+  },
+  "elements": [
+    {
+      "from": [
+        -1.85,
+        -10.3,
+        7.05
+      ],
+      "to": [
+        0.05,
+        -8.9,
+        8.95
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            14.6,
+            1.9,
+            16
+          ],
+          "texture": "#steel"
+        },
+        "east": {
+          "uv": [
+            7.05,
+            14.6,
+            8.95,
+            16
+          ],
+          "texture": "#steel"
+        },
+        "south": {
+          "uv": [
+            0,
+            14.6,
+            1.9,
+            16
+          ],
+          "texture": "#steel"
+        },
+        "west": {
+          "uv": [
+            7.05,
+            14.6,
+            8.95,
+            16
+          ],
+          "texture": "#steel"
+        },
+        "up": {
+          "uv": [
+            0,
+            7.05,
+            1.9,
+            8.95
+          ],
+          "texture": "#steel"
+        },
+        "down": {
+          "uv": [
+            0,
+            7.05,
+            1.9,
+            8.95
+          ],
+          "texture": "#steel"
+        }
+      },
+      "shade": true
+    },
+    {
+      "from": [
+        -1.35,
+        -8.9,
+        7.55
+      ],
+      "to": [
+        -0.45,
+        18.8,
+        8.45
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            0,
+            0.9,
+            16
+          ],
+          "texture": "#steel"
+        },
+        "east": {
+          "uv": [
+            7.55,
+            0,
+            8.45,
+            16
+          ],
+          "texture": "#steel"
+        },
+        "south": {
+          "uv": [
+            0,
+            0,
+            0.9,
+            16
+          ],
+          "texture": "#steel"
+        },
+        "west": {
+          "uv": [
+            7.55,
+            0,
+            8.45,
+            16
+          ],
+          "texture": "#steel"
+        }
+      },
+      "shade": true
+    },
+    {
+      "from": [
+        -1.65,
+        18.45,
+        7.25
+      ],
+      "to": [
+        -0.15,
+        19.05,
+        8.75
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            0,
+            1.5,
+            0.6
+          ],
+          "texture": "#brass"
+        },
+        "east": {
+          "uv": [
+            7.25,
+            0,
+            8.75,
+            0.6
+          ],
+          "texture": "#brass"
+        },
+        "south": {
+          "uv": [
+            0,
+            0,
+            1.5,
+            0.6
+          ],
+          "texture": "#brass"
+        },
+        "west": {
+          "uv": [
+            7.25,
+            0,
+            8.75,
+            0.6
+          ],
+          "texture": "#brass"
+        },
+        "up": {
+          "uv": [
+            0,
+            7.25,
+            1.5,
+            8.75
+          ],
+          "texture": "#brass"
+        },
+        "down": {
+          "uv": [
+            0,
+            7.25,
+            1.5,
+            8.75
+          ],
+          "texture": "#brass"
+        }
+      },
+      "shade": true
+    }
+  ]
+}

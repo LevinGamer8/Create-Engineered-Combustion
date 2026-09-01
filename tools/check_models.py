@@ -279,19 +279,54 @@ STACKED_ONLY_VERTICALLY = ["cylinder.json", "cylinder_manifold_negative.json",
                            "spark_plug_x.json", "spark_plug_z.json",
                            "carburetor.json", "oil_sump.json"]
 
+# THE ONE DELIBERATE EXCEPTION, and it is bounded rather than waved through.
+#
+# Milestone 15B's valve gear stands proud of the intake flank, because that is
+# what an exposed overhead-valve engine looks like and because the horizontal
+# lines it draws - cam, pushrod gallery, rocker shaft - are what make four
+# cylinders read as one machine rather than four. It earns the exception by
+# being the opposite of the floating spark plug the rule was written for: it is
+# one assembly running the whole length of the engine, carried at every seam,
+# rather than a fragment beside one block.
+#
+# What the bound buys is that it can never grow into the problem again:
+#
+#   * only towards NEGATIVE Z - the intake flank. The +Z flank stays clear for
+#     the exhaust manifold a later milestone will put there, and nothing may
+#     quietly start using it;
+#   * never past VALVETRAIN_REACH, so the gear hugs the engine instead of
+#     hanging off it. A block placed against the flank overlaps a couple of
+#     units of pushrod, the way a Create cogwheel overlaps its neighbour;
+#   * never past the block in X at all, so an engine's ends stay square and two
+#     engines end to end do not interpenetrate.
+#
+# Must match VALVETRAIN_REACH in tools/generate_engine_models.py.
+VALVETRAIN_REACH = 2.0
+
 
 def check_sideways_reach():
     problems = []
     for name in STACKED_ONLY_VERTICALLY:
         for element in json.loads((ROOT / name).read_text())["elements"]:
             lo, hi = box(element)
-            for axis, label in ((0, "x"), (2, "z")):
-                if lo[axis] < -EPS or hi[axis] > 16.0 + EPS:
-                    problems.append(
-                        f"{name}: {lo}->{hi} reaches out of the block sideways "
-                        f"({label} {lo[axis]:.2f}..{hi[axis]:.2f}) - it will hang "
-                        "in the air beside the engine")
-                    break
+            # X is absolute: nothing may leave the block along the crank axis.
+            if lo[0] < -EPS or hi[0] > 16.0 + EPS:
+                problems.append(
+                    f"{name}: {lo}->{hi} reaches out of the block along the crank "
+                    f"axis (x {lo[0]:.2f}..{hi[0]:.2f}) - it will collide with the "
+                    "next section")
+                continue
+            if hi[2] > 16.0 + EPS:
+                problems.append(
+                    f"{name}: {lo}->{hi} reaches out of the block on the EXHAUST "
+                    f"flank (z up to {hi[2]:.2f}) - that side is reserved for the "
+                    "exhaust manifold and must stay clear")
+                continue
+            if lo[2] < -VALVETRAIN_REACH - EPS:
+                problems.append(
+                    f"{name}: {lo}->{hi} reaches {-lo[2]:.2f} out of the block on "
+                    f"the intake flank, past the {VALVETRAIN_REACH} the valve gear "
+                    "is allowed - it will hang in the air beside the engine")
     return problems
 
 

@@ -323,6 +323,33 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	}
 
 	/**
+	 * Where this cylinder is in its four-stroke cycle, part way through the current
+	 * frame, in {@code [0, 720)}.
+	 *
+	 * <p>What the valve gear is drawn from. Read from the crankshaft for the same
+	 * reason the crank angle is: there is one cycle position in an engine and every
+	 * cylinder is a view of it, so a valve cannot be drawn at an instant the piston
+	 * beneath it is not at.
+	 *
+	 * <p>Zero with no crankshaft, which is harmless - a cylinder standing on nothing
+	 * has no engine to be in step with, and {@link #hasCamshaft()} is false there
+	 * anyway, so nothing that reads this is drawn.
+	 */
+	public float getCycleAngleForRender(float partialTicks) {
+		CrankshaftBlockEntity crankshaft = getCrankshaft();
+		if (crankshaft == null)
+			return 0.0F;
+		return crankshaft.getEngineState()
+			.getLocalRenderCycleAngleDegrees(crankshaft.getCylinderIndex(), partialTicks);
+	}
+
+	/** Whether this cylinder's engine has a Camshaft, and therefore a valve gear to draw. */
+	public boolean hasCamshaft() {
+		CrankshaftBlockEntity crankshaft = getCrankshaft();
+		return crankshaft != null && crankshaft.engineHasCamshaft();
+	}
+
+	/**
 	 * How brightly the combustion chamber should be drawn this frame, 0 when
 	 * nothing is burning.
 	 *
