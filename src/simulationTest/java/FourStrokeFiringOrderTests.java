@@ -226,7 +226,7 @@ public class FourStrokeFiringOrderTests {
 			for (int cylinder = 0; cylinder < 4; cylinder++) {
 				FourStrokeCylinderTiming timing = engine.cylinder(cylinder);
 				float expected = FourStrokeCycle.normalizeRevolution(
-					engine.masterPhysicalAngle() + r4.geometricOffsetDegrees(cylinder));
+					engine.physicalAngle() + r4.geometricOffsetDegrees(cylinder));
 				if (!near(timing.physicalAngle(), expected))
 					consistent = false;
 			}
@@ -356,8 +356,8 @@ public class FourStrokeFiringOrderTests {
 		// Stop at 473 degrees - the milestone's own example, deep in the exhaust stroke.
 		for (int i = 0; i < 473; i++)
 			engine.step(1.0F, true);
-		check("stopped at cycle angle 473", near(engine.masterCycleAngle(), 473.0F),
-			engine.masterCycleAngle() + "");
+		check("stopped at cycle angle 473", near(engine.cycleAngle(), 473.0F),
+			engine.cycleAngle() + "");
 		check("cylinder 1 is on EXHAUST", engine.cylinder(0).phase() == FourStrokePhase.EXHAUST,
 			engine.cylinder(0).phase().toString());
 
@@ -366,7 +366,7 @@ public class FourStrokeFiringOrderTests {
 		reloaded.restore(save);
 
 		check("the cycle angle comes back as 473, not 113",
-			near(reloaded.masterCycleAngle(), 473.0F), reloaded.masterCycleAngle() + "");
+			near(reloaded.cycleAngle(), 473.0F), reloaded.cycleAngle() + "");
 		boolean strokesMatch = true;
 		boolean armingMatches = true;
 		for (int i = 0; i < 4; i++) {

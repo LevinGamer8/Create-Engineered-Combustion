@@ -127,10 +127,12 @@ var simulationTestClasses = [
     "LastPowerStrokeTests",
     "EngineCoastDownTests",
     "EngineWearTests",
-    // Milestone 15A prototype. Drives src/prototype/java, which nothing in the
-    // mod depends on.
+    // Milestone 15A/15A.1 prototype. Drives src/prototype/java, which nothing in
+    // the mod depends on.
     "FourStrokeCycleTests",
     "FourStrokeFiringOrderTests",
+    "FourStrokeStateTests",
+    "FourStrokeBalanceTests",
 ]
 
 var simulationTestTasks = simulationTestClasses.collect { className ->

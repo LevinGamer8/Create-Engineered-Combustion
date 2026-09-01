@@ -49,24 +49,46 @@ public enum FourStrokeFiringOrder {
 
 	/**
 	 * Inline-2 on a <b>360-degree crank</b>: both throws together, firing alternately
-	 * one revolution apart.
+	 * one revolution apart. Even-fire, and the runner-up.
 	 *
-	 * <p>The even-fire twin, and the recommended default, because it is the only
-	 * inline-2 four-stroke that fires evenly - and an engine family in which
-	 * smoothness rises monotonically with cylinder count is the one the mod wants.
-	 * Both pistons rise and fall together, which is a visible change from today's
-	 * alternating pair and is mechanically honest.
+	 * <p>Measurably the smoother of the two twins - 9.4 % speed ripple at idle
+	 * against 15.6 % - and its engine-level torque waveform is <i>identical</i> to
+	 * that of today's production inline-1, because one bang per 360 degrees at
+	 * double the impulse is exactly what the current model already delivers. Passed
+	 * over for character rather than for engineering: see {@link #R2_UNEVEN}.
+	 *
+	 * <p>Kept implemented, and one line from being the default, because it is the
+	 * fallback if playtesting finds the uneven twin's idle too rough.
 	 */
 	R2_EVEN(new float[] { 0.0F, 360.0F }),
 
 	/**
 	 * Inline-2 on a <b>180-degree crank</b>: throws opposed, firing 180 and then 540
-	 * degrees apart.
+	 * degrees apart. <b>The frozen default.</b>
 	 *
-	 * <p>Uneven-fire, and offered because it keeps today's alternating piston motion
-	 * and has real character - it is the classic parallel twin. Not the default: its
-	 * lumpiness is closer to an R1's than an R3's, which breaks the smoothness
-	 * ladder. A gameplay decision, deliberately left open.
+	 * <p>Uneven-fire, and chosen deliberately with the cost measured rather than
+	 * guessed. It is the only engine in the mod's lineup that does not fire evenly,
+	 * and that syncopation - {@code bang-bang..........bang-bang..........} - is the
+	 * classic parallel twin, instantly distinguishable by ear from the inline-1's
+	 * single thump and the inline-3's even beat. Its throws oppose, so its pistons
+	 * alternate, which reads as a different machine from a single through the
+	 * crankcase window.
+	 *
+	 * <p><b>What it costs, measured with the real flywheel and the real friction:</b>
+	 * 15.6 % speed ripple at idle against the even twin's 9.4 %, and 4.0 % against
+	 * 2.6 % at full throttle. That leaves it sitting correctly between the inline-1
+	 * (23.8 %) and the inline-3 (3.7 %), so the smoothness ladder stays monotone, and
+	 * it never approaches a stall - the worst case measured, 95 % load at idle, dips
+	 * to 52.5 RPM against a stall threshold of 10.
+	 *
+	 * <p><b>Correcting Milestone 15A.</b> That milestone reported the uneven twin as
+	 * having the <i>lower</i> ripple, and used it as an argument. That measurement
+	 * was RMS torque with no inertia; under RMS torque the uneven twin does still
+	 * win, because its opposed throws let one cylinder's compression hide under the
+	 * other's power stroke. But a flywheel integrates torque, so what a player
+	 * actually sees and hears is speed ripple - and by that measure the ranking
+	 * reverses. The decision therefore rests on character, and the smoothness cost
+	 * above is real and accepted.
 	 */
 	R2_UNEVEN(new float[] { 0.0F, 180.0F }),
 
@@ -117,11 +139,22 @@ public enum FourStrokeFiringOrder {
 	public static FourStrokeFiringOrder forCylinderCount(int cylinderCount) {
 		return switch (cylinderCount) {
 			case 1 -> R1;
-			case 2 -> R2_EVEN;
+			case 2 -> DEFAULT_R2;
 			case 3 -> R3;
 			default -> R4;
 		};
 	}
+
+	/**
+	 * The frozen inline-2 crank: <b>180 degrees, opposed, uneven-fire</b>.
+	 *
+	 * <p>Named rather than inlined into {@link #forCylinderCount} so that the one
+	 * decision lives at one identifier, and so that reversing it - should
+	 * playtesting want the smoother twin - is a single edit with a single test to
+	 * update. See {@link #R2_UNEVEN} for what it was weighed against and what it
+	 * costs.
+	 */
+	public static final FourStrokeFiringOrder DEFAULT_R2 = R2_UNEVEN;
 
 	/**
 	 * Crank travel from cylinder 1's ignition to cylinder {@code index}'s, in

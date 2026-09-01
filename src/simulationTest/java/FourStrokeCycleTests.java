@@ -55,7 +55,7 @@ public class FourStrokeCycleTests {
 		for (int i = 0; i < 72; i++)
 			engine.step(10.0F, false);
 		check("720 degrees of stepping returns the master angle to 0",
-			near(engine.masterCycleAngle(), 0.0F), engine.masterCycleAngle() + "");
+			near(engine.cycleAngle(), 0.0F), engine.cycleAngle() + "");
 	}
 
 	/**
