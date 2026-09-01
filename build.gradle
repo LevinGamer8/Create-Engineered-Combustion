@@ -90,14 +90,22 @@ neoForge {
 // The tests are plain classes with a main method rather than JUnit, on purpose:
 // adding a test framework would mean a dependency to resolve, and the one thing
 // this source set is for is being runnable with nothing but a JDK.
+//
+// src/prototype/java is the Milestone 15A four-stroke prototype, and it is added
+// HERE AND NOWHERE ELSE. sourceSets.main never sees that directory, so the
+// mod jar cannot contain the prototype and no production class can compile
+// against it - the isolation the milestone requires is enforced by the build
+// rather than by a promise in a comment.
 sourceSets {
     simulationTest {
         java {
             srcDir "src/main/java"
             srcDir "src/simulationTest/java"
+            srcDir "src/prototype/java"
             include "dev/engineeredcombustion/content/engine/*.java"
             exclude "dev/engineeredcombustion/content/engine/EngineComponents.java"
             exclude "dev/engineeredcombustion/content/engine/CombustionAudio.java"
+            include "dev/engineeredcombustion/prototype/**/*.java"
             include "*.java"
         }
         compileClasspath = files()
@@ -120,6 +128,18 @@ var simulationTestClasses = [
     "EngineCoastDownTests",
     "EngineWearTests",
     "EngineEventTests",
+    // Milestone 15A/15A.1 prototype. Drives src/prototype/java, which nothing in
+    // the mod depends on.
+    "FourStrokeCycleTests",
+    "FourStrokeFiringOrderTests",
+    "FourStrokeStateTests",
+    "FourStrokeBalanceTests",
+    // Milestone 15A.2 valvetrain prototype.
+    "ValvetrainTests",
+    // Milestone 15A.3 legacy save migration prototype.
+    "EngineMigrationTests",
+    // Engine-wide installed-component ownership and conservation.
+    "InstalledComponentConservationTests",
 ]
 
 var simulationTestTasks = simulationTestClasses.collect { className ->
