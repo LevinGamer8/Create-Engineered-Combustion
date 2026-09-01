@@ -87,8 +87,34 @@ TRANSLATIONS = {
         "Beide Enden der Kurbelwelle funktionieren.",
     "One engine uses one Flywheel. Two is not a valid engine.":
         "Ein Motor nutzt genau ein Schwungrad. Zwei ergeben keinen gültigen Motor.",
-    "An Air Filter is optional. It protects the cylinders from long-term wear.":
-        "Ein Luftfilter ist optional. Er schützt die Zylinder vor langfristigem Verschleiß.",
+    # The four-stroke scene.
+    "The Four-Stroke Cycle":
+        "Der Viertakt-Zyklus",
+    "A running engine turns the Crankshaft twice for every combustion.":
+        "Ein laufender Motor dreht die Kurbelwelle zweimal pro Verbrennung.",
+    "1. Intake. The Camshaft opens a valve and the piston draws fuel in.":
+        "1. Ansaugen. Die Nockenwelle öffnet ein Ventil, der Kolben saugt Kraftstoff an.",
+    "2. Compression. Both valves shut and the piston squeezes the charge.":
+        "2. Verdichten. Beide Ventile sind zu, der Kolben verdichtet das Gemisch.",
+    "3. Power. The Spark Plug lights it, and the Crankshaft is pushed round.":
+        "3. Arbeiten. Die Zündkerze zündet es, und die Kurbelwelle wird angetrieben.",
+    "4. Exhaust. The other valve opens and the burnt charge is pushed out.":
+        "4. Ausstoßen. Das andere Ventil öffnet, das verbrannte Gemisch wird ausgeschoben.",
+    "Only one stroke pushes. The Flywheel carries the engine through the rest.":
+        "Nur ein Takt treibt an. Das Schwungrad trägt den Motor durch die übrigen.",
+    "That is why a single thumps, and why more cylinders run smoother.":
+        "Deshalb stampft ein Einzylinder, und deshalb laufen mehr Zylinder runder.",
+
+    "An engine with no Camshaft will crank for ever and never catch.":
+        "Ein Motor ohne Nockenwelle dreht ewig und springt nie an.",
+    "One Camshaft is installed into the Crankshaft, and works every valve.":
+        "Eine Nockenwelle wird in die Kurbelwelle eingebaut und betätigt alle Ventile.",
+    "Without one the Cylinder cannot draw fuel in, so it never fires.":
+        "Ohne sie kann der Zylinder keinen Kraftstoff ansaugen und zündet nie.",
+    "An Air Filter clamps onto the Carburetor, and is optional.":
+        "Ein Luftfilter wird auf den Vergaser geklemmt und ist optional.",
+    "Without one, the cylinders take more long-term wear.":
+        "Ohne ihn verschleißen die Zylinder langfristig stärker.",
     "This engine is mechanically complete.":
         "Dieser Motor ist mechanisch vollständig.",
 

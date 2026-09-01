@@ -191,6 +191,7 @@ ENGINES = {
     "engine_controls": ((3, 2, 2), 1, "first"),
     "engine_maintenance": ((2, 2, 2), 4, "first"),
     "diagnosing_an_engine": ((3, 2, 2), 2, "first"),
+    "the_four_stroke_cycle": ((3, 2, 2), 1, "first"),
 }
 
 
@@ -355,6 +356,19 @@ def diagnosing_an_engine():
     return s
 
 
+def the_four_stroke_cycle():
+    """An inline-1, complete, for watching one cylinder go round its cycle.
+
+    A single on purpose. Four strokes explained on an inline-4 is four cylinders
+    on four different strokes at once, which is the thing to understand SECOND.
+    """
+    size = (7, 6, 5)
+    s = Structure(size)
+    base_plate(s, size)
+    place_engine(s, "the_four_stroke_cycle")
+    return s
+
+
 def from_shale_to_fuel():
     """The petroleum chain, as somewhere to stand the real processing blocks."""
     size = (9, 5, 5)
@@ -373,6 +387,7 @@ SCENES = {
     "engine_controls": engine_controls,
     "engine_maintenance": engine_maintenance,
     "diagnosing_an_engine": diagnosing_an_engine,
+    "the_four_stroke_cycle": the_four_stroke_cycle,
     "from_shale_to_fuel": from_shale_to_fuel,
 }
 

@@ -87,8 +87,12 @@ public class EngineAssemblyScenes {
 				.position(ENGINE.cylinder(0)), Direction.DOWN);
 		scene.idle(15);
 		scene.overlay()
+			// BOTH, because the sentence is about the RELATIONSHIP between them:
+			// "each Crankshaft section supports one Cylinder". Boxing only the
+			// Cylinder taught where a Cylinder goes and left the player to work out
+			// what it was going on.
 			.showOutline(PonderPalette.WHITE, "cylinder", util.select()
-				.position(ENGINE.cylinder(0)), 70);
+				.fromTo(ENGINE.crankshaft(0), ENGINE.cylinder(0)), 70);
 		scene.overlay()
 			.showText(70)
 			.text("Each Crankshaft section supports one Cylinder, directly above it.")
@@ -135,7 +139,39 @@ public class EngineAssemblyScenes {
 			.pointAt(ENGINE.sparkPlug(0));
 		scene.idle(90);
 
-		// STEP 5 - the Carburetor.
+		// STEP 5 - the Camshaft. ONE per engine, and mandatory: an engine without one
+		// turns over perfectly and never fires, which is the single most confusing
+		// way a correctly built engine can fail. So it is taught here, between the
+		// parts that make the engine turn and the parts that make it burn, which is
+		// where it sits mechanically.
+		scene.overlay()
+			.showControls(centre(ENGINE.crankshaft(0)), Pointing.DOWN, 40)
+			.withItem(new ItemStack(ECItems.CAMSHAFT.get()))
+			.rightClick();
+		scene.idle(20);
+		scene.overlay()
+			.showOutline(PonderPalette.WHITE, "camshaft", util.select()
+				.position(ENGINE.crankshaft(0)), 80);
+		scene.overlay()
+			.showText(80)
+			.text("One Camshaft is installed into the Crankshaft, and works every valve.")
+			.attachKeyFrame()
+			.placeNearTarget()
+			.pointAt(centre(ENGINE.crankshaft(0)));
+		scene.idle(90);
+
+		scene.overlay()
+			.showOutline(PonderPalette.MEDIUM, "camshaft_needed", util.select()
+				.position(ENGINE.cylinder(0)), 80);
+		scene.overlay()
+			.showText(80)
+			.text("Without one the Cylinder cannot draw fuel in, so it never fires.")
+			.attachKeyFrame()
+			.placeNearTarget()
+			.pointAt(ENGINE.bore(0));
+		scene.idle(90);
+
+		// STEP 6 - the Carburetor.
 		scene.world()
 			.showSection(util.select()
 				.position(ENGINE.carburetor()), Direction.DOWN);
@@ -151,7 +187,7 @@ public class EngineAssemblyScenes {
 			.pointAt(centre(ENGINE.carburetor()));
 		scene.idle(90);
 
-		// STEP 6 - the Oil Sump, underneath, as a real one is.
+		// STEP 7 - the Oil Sump, underneath, as a real one is.
 		scene.world()
 			.showSection(util.select()
 				.position(ENGINE.oilSump()), Direction.UP);
@@ -167,7 +203,7 @@ public class EngineAssemblyScenes {
 			.pointAt(centre(ENGINE.oilSump()));
 		scene.idle(80);
 
-		// STEP 7 - ONE Flywheel, at one axial end.
+		// STEP 8 - ONE Flywheel, at one axial end.
 		scene.world()
 			.showSection(util.select()
 				.position(ENGINE.flywheel()), Direction.WEST);
@@ -193,8 +229,11 @@ public class EngineAssemblyScenes {
 				.position(ENGINE.farFlywheel()), Direction.EAST);
 		scene.idle(15);
 		scene.overlay()
+			// "Either end of the crankshaft" names three things: the shaft and both of
+			// its ends. Boxing only the far Flywheel taught a third of that, and left
+			// the player looking at the one end the sentence is NOT about.
 			.showOutline(PonderPalette.GREEN, "far_flywheel", util.select()
-				.position(ENGINE.farFlywheel()), 70);
+				.fromTo(ENGINE.farFlywheel(), ENGINE.flywheel()), 70);
 		scene.overlay()
 			.showText(70)
 			.text("Either end of the crankshaft will do.")
@@ -232,7 +271,7 @@ public class EngineAssemblyScenes {
 				.position(ENGINE.farFlywheel()), Direction.WEST);
 		scene.idle(15);
 
-		// STEP 8 - the Air Filter, and the fact that it is OPTIONAL.
+		// STEP 9 - the Air Filter, and the fact that it is OPTIONAL.
 		//
 		// The filter clamps onto the Carburetor's air horn, so the hand offers it
 		// there, the text points there, and the outline is of the Carburetor - the
@@ -247,14 +286,29 @@ public class EngineAssemblyScenes {
 		scene.idle(20);
 		scene.overlay()
 			.showOutline(PonderPalette.WHITE, "air_filter", util.select()
-				.position(ENGINE.carburetor()), 90);
+				.position(ENGINE.carburetor()), 70);
 		scene.overlay()
-			.showText(90)
-			.text("An Air Filter is optional. It protects the cylinders from long-term wear.")
+			.showText(70)
+			.text("An Air Filter clamps onto the Carburetor, and is optional.")
 			.attachKeyFrame()
 			.placeNearTarget()
 			.pointAt(ENGINE.airFilter());
-		scene.idle(100);
+		scene.idle(80);
+
+		// TWO STEPS, because it was two sentences about two different parts. The
+		// filter is on the Carburetor and what it protects is the bore, so the box
+		// moves off the one and onto the other rather than staying put while the
+		// subject changes underneath it.
+		scene.overlay()
+			.showOutline(PonderPalette.MEDIUM, "filtered_bore", util.select()
+				.position(ENGINE.cylinder(0)), 80);
+		scene.overlay()
+			.showText(80)
+			.text("Without one, the cylinders take more long-term wear.")
+			.attachKeyFrame()
+			.placeNearTarget()
+			.pointAt(ENGINE.bore(0));
+		scene.idle(90);
 
 		// The one step that is genuinely about the whole machine, so the one step
 		// whose outline covers it: sump, crankcase, barrel, carburetor and

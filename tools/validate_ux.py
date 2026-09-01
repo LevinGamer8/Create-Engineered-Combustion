@@ -768,6 +768,184 @@ def check_ponder_section_lifecycle():
        f"section that exists by then", started)
 
 
+def check_ponder_highlight_lifetimes():
+    """No text step may be read while an EARLIER step's highlight is still drawn.
+
+    THIS IS THE ONE THE PLAY-TEST FOUND, and it is not what "the highlight points
+    at the wrong block" sounds like. Every outline in these scenes points at the
+    right block for the step that started it. What went wrong is that outlines
+    OUTLIVE their step: `showOutline(..., 80)` draws for eighty ticks, and if the
+    step it belongs to has moved on after fifty, the next sentence is read with the
+    previous sentence's box still on screen. A player being told about the Air
+    Filter while two red boxes sit round the flywheels does not conclude that the
+    boxes are stale - they conclude the mod is pointing at the flywheels.
+
+    So the timeline is walked the way Ponder walks it. `idle(n)` advances the
+    clock; an outline is alive for its declared duration from the moment it is
+    declared; a text step begins when `showText` is declared. Any outline still
+    alive when the NEXT step's text begins, and not re-declared for that step, is a
+    stale highlight and is reported with the sentence it would have contaminated.
+
+    Deliberately not a check that the outline names the right block - that is
+    check_ponder_targets, and it passes. This is the other half.
+    """
+    started = len(problems)
+    checked = 0
+    statement = re.compile(
+        r"\.idle\((\d+)\)"
+        r'|showOutline\(\s*PonderPalette\.(\w+),\s*"([^"]+)",.*?,\s*(\d+)\s*\)\s*;'
+        r"|showText\((\d+)\)")
+
+    for path in sorted(PONDER_SRC.glob("*Scenes.java")):
+        source = re.sub(r"\s+", " ", path.read_text(encoding="utf-8"))
+        for scene in re.finditer(r'scene\.title\("([^"]+)"', source):
+            scene_id = scene.group(1)
+            end = source.find("scene.title(", scene.end())
+            body = source[scene.end():end if end > 0 else len(source)]
+
+            clock = 0
+            # name -> the clock time at which it stops being drawn
+            alive = {}
+            # what the step currently being built has (re-)declared
+            declared = set()
+            step = 0
+            for match in statement.finditer(body):
+                if match.group(1):
+                    clock += int(match.group(1))
+                elif match.group(2):
+                    alive[match.group(3)] = clock + int(match.group(4))
+                    declared.add(match.group(3))
+                else:
+                    step += 1
+                    checked += 1
+                    stale = sorted(name for name, until in alive.items()
+                                   if until > clock and name not in declared)
+                    if stale:
+                        problem(f"{scene_id}: step {step} is read with "
+                                f"{', '.join(stale)} still outlined from an earlier "
+                                f"step - re-declare the outline for this step or "
+                                f"shorten it so it ends first")
+                    alive = {name: until for name, until in alive.items()
+                             if until > clock and name in declared}
+                    declared = set()
+    ok(f"{checked} ponder text step(s), none read under a stale highlight", started)
+
+
+# What each engine part is CALLED in a sentence, and which PonderEngine accessors
+# put a box round it. The left column is what a player reads; the right is what
+# they must be looking at while they read it.
+#
+# Two accessors sit under more than one noun on purpose. A Piston Assembly and a
+# Spark Plug are installed INSIDE a Cylinder block, so the finest box either can
+# have is that block - and a sentence about a piston is correctly answered by an
+# outlined cylinder. Everything else is one part, one box.
+HIGHLIGHT_NOUNS = {
+    "crankshaft": {"crankshaft", "lastCrankshaft", "ignition"},
+    "cylinder": {"cylinder", "lastCylinder", "bore", "sparkPlug"},
+    "piston": {"cylinder", "lastCylinder", "bore"},
+    "spark plug": {"cylinder", "lastCylinder", "sparkPlug"},
+    "camshaft": {"crankshaft", "lastCrankshaft"},
+    "carburetor": {"carburetor", "carburetorSeat", "throttle", "floatBowl", "airFilter"},
+    "throttle": {"carburetor", "carburetorSeat", "throttle"},
+    "gasoline": {"carburetor", "carburetorSeat", "floatBowl"},
+    "air filter": {"carburetor", "carburetorSeat", "airFilter"},
+    "oil sump": {"oilSump", "oilSumpSeat", "dipstick"},
+    "engine oil": {"oilSump", "oilSumpSeat", "dipstick"},
+    "flywheel": {"flywheel", "farFlywheel"},
+}
+
+# A fromTo draws ONE box from one corner to the other, so it contains everything
+# between - and a sentence about something in the middle is correctly answered by
+# it. Each entry is the pair of endpoints and what the box between them swallows.
+#
+# Both of these are boxes a scene genuinely wants. Sump to carburetor is the whole
+# engine, which is what "this engine is complete" and the goggle readout steps are
+# about. Flywheel to flywheel spans the crank run between them, which is what
+# "either end of the crankshaft will do" is about.
+SPANS = [
+    ({"oilSump", "oilSumpSeat"}, {"carburetor", "carburetorSeat"}, None),
+    ({"flywheel"}, {"farFlywheel"}, {"crankshaft", "lastCrankshaft", "ignition"}),
+]
+
+# Steps where a part's NAME appears without the sentence being about the part.
+# Each one is a user-interface label that happens to contain a part's name, and
+# each is listed with the label so the exemption can be checked rather than
+# trusted. Keyed by scene and step number; the list may only grow with a reason.
+HIGHLIGHT_LABEL_EXEMPTIONS = {
+    # "Manual, Ignition, Throttle, or both" are the Redstone Control Module's four
+    # MODE names, not a reference to the Carburetor. The module and its value box
+    # are in the Crankshaft, which is what the step correctly outlines.
+    ("engine_controls", 5): {"throttle"},
+}
+
+
+def check_ponder_highlights_teach_their_sentence():
+    """Whatever a sentence NAMES has to be inside the box drawn while it is read.
+
+    The milestone's rule, made mechanical: "for every text step, identify exactly
+    what object the sentence teaches, and highlight THAT object". The check cannot
+    read English, so it does the half it can - it finds the engine parts a sentence
+    names by name, and insists each one is inside one of the outlines alive while
+    that sentence is up. A step that says "One crankshaft, one Carburetor, one Oil
+    Sump, one Flywheel" and boxes only the cylinders fails; a step that says
+    "The Flywheel transfers engine power" and boxes the Flywheel passes.
+
+    What it deliberately does NOT do is insist the box is tight. A sentence about a
+    Spark Plug is answered by an outlined Cylinder, because that is the block the
+    plug is inside and there is no finer box to draw - see HIGHLIGHT_NOUNS.
+
+    Steps with no outline at all are skipped rather than failed: several teach a
+    Create process that has no block in the scene to point at, and pointing at
+    something anyway would be worse than pointing at nothing.
+    """
+    started = len(problems)
+    checked = 0
+    accessor = re.compile(r"\b[A-Z][A-Z_]*\.(\w+)\(")
+    statement = re.compile(
+        r"\.idle\((\d+)\)"
+        r'|showOutline\(\s*PonderPalette\.\w+,\s*"[^"]+",(.*?),\s*\d+\s*\)\s*;'
+        r'|showText\(\d+\)\s*((?:\.\w+\([^;]*?\))*?)\s*\.text\(\s*"([^"]*)"')
+
+    for path in sorted(PONDER_SRC.glob("*Scenes.java")):
+        source = re.sub(r"\s+", " ", path.read_text(encoding="utf-8"))
+        for scene in re.finditer(r'scene\.title\("([^"]+)"', source):
+            scene_id = scene.group(1)
+            end = source.find("scene.title(", scene.end())
+            body = source[scene.end():end if end > 0 else len(source)]
+
+            outlined = set()
+            step = 0
+            for match in statement.finditer(body):
+                if match.group(2) is not None:
+                    outlined.update(accessor.findall(match.group(2)))
+                    continue
+                if match.group(4) is None:
+                    continue
+                step += 1
+                text = match.group(4).lower()
+                if outlined:
+                    checked += 1
+                    covered = set(outlined)
+                    everything = False
+                    for lower, upper, swallowed in SPANS:
+                        if not (lower & outlined and upper & outlined):
+                            continue
+                        if swallowed is None:
+                            everything = True
+                        else:
+                            covered |= swallowed
+                    exempt = HIGHLIGHT_LABEL_EXEMPTIONS.get((scene_id, step), set())
+                    for noun, accessors in HIGHLIGHT_NOUNS.items():
+                        if noun in exempt or everything:
+                            continue
+                        if noun in text and not (accessors & covered):
+                            problem(f"{scene_id}: step {step} says \"{noun}\" but "
+                                    f"outlines only {sorted(covered)} - highlight the "
+                                    "thing the sentence teaches")
+                outlined = set()
+    ok(f"{checked} outlined ponder step(s), each boxing what its sentence names", started)
+
+
 def check_tooltips(lang):
     """Tooltip lines are numbered from 1 with no gaps, or the scan stops early."""
     started = len(problems)
@@ -870,6 +1048,8 @@ def main():
     check_structure_geometry()
     check_ponder_targets()
     check_ponder_section_lifecycle()
+    check_ponder_highlight_lifetimes()
+    check_ponder_highlights_teach_their_sentence()
     check_tooltips(lang)
     check_blocks_are_obtainable(lang)
     check_items_are_named(lang)

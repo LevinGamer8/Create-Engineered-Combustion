@@ -78,7 +78,7 @@ public class ECPonderPlugin implements PonderPlugin {
 
 		helper.forComponents(key(ECBlocks.CRANKSHAFT.get()), key(ECBlocks.CYLINDER.get()),
 			key(ECItems.PISTON_ASSEMBLY.get()), key(ECBlocks.FLYWHEEL.get()), key(ECItems.SPARK_PLUG.get()),
-			key(ECItems.AIR_FILTER.get()))
+			key(ECItems.CAMSHAFT.get()), key(ECItems.AIR_FILTER.get()))
 			.addStoryBoard("assembling_an_engine", EngineAssemblyScenes::buildingABasicEngine, ENGINES);
 
 		helper.forComponents(key(ECBlocks.CARBURETOR.get()), key(ECBlocks.OIL_SUMP.get()),
@@ -87,8 +87,16 @@ public class ECPonderPlugin implements PonderPlugin {
 			.addStoryBoard("fuel_and_lubrication", EngineAssemblyScenes::fuelAndLubrication, ENGINES);
 
 		helper.forComponents(key(ECBlocks.CRANKSHAFT.get()), key(ECItems.SPARK_PLUG.get()),
-			key(ECBlocks.FLYWHEEL.get()))
+			key(ECItems.CAMSHAFT.get()), key(ECBlocks.FLYWHEEL.get()))
 			.addStoryBoard("starting_an_engine", EngineOperationScenes::startingAnEngine, ENGINES);
+
+		// Filed under the parts that only make sense once you know what the strokes
+		// are: the Camshaft that opens the valves, the Spark Plug that lights the
+		// charge, the Cylinder it happens in and the Flywheel that carries the three
+		// strokes which do not push.
+		helper.forComponents(key(ECItems.CAMSHAFT.get()), key(ECBlocks.CYLINDER.get()),
+			key(ECItems.SPARK_PLUG.get()), key(ECBlocks.FLYWHEEL.get()))
+			.addStoryBoard("the_four_stroke_cycle", FourStrokeScenes::theFourStrokeCycle, ENGINES);
 
 		helper.forComponents(key(ECBlocks.CRANKSHAFT.get()), key(ECBlocks.CYLINDER.get()),
 			key(ECItems.PISTON_ASSEMBLY.get()))

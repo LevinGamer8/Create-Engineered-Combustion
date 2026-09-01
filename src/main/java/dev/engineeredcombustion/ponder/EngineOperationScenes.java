@@ -120,6 +120,20 @@ public class EngineOperationScenes {
 			.showControls(centre(HAND_CRANK), Pointing.DOWN, 60)
 			.rightClick();
 		scene.idle(20);
+		// Before the crank, the one part whose absence looks exactly like a fault:
+		// an engine with no Camshaft cranks perfectly and never catches, which is
+		// the single most confusing thing a correctly built engine can do.
+		scene.overlay()
+			.showOutline(PonderPalette.MEDIUM, "needs_camshaft", util.select()
+				.position(ENGINE.crankshaft(0)), 90);
+		scene.overlay()
+			.showText(90)
+			.text("An engine with no Camshaft will crank for ever and never catch.")
+			.attachKeyFrame()
+			.placeNearTarget()
+			.pointAt(centre(ENGINE.crankshaft(0)));
+		scene.idle(100);
+
 		scene.overlay()
 			.showOutline(PonderPalette.WHITE, "hand_crank", util.select()
 				.position(HAND_CRANK), 90);
