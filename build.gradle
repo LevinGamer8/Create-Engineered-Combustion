@@ -105,6 +105,10 @@ sourceSets {
             include "dev/engineeredcombustion/content/engine/*.java"
             exclude "dev/engineeredcombustion/content/engine/EngineComponents.java"
             exclude "dev/engineeredcombustion/content/engine/CombustionAudio.java"
+            // The four-stroke cycle, in production. Pure arithmetic by construction -
+            // there is deliberately no Minecraft type anywhere under it, and this
+            // include is what keeps that true rather than merely intended.
+            include "dev/engineeredcombustion/content/engine/fourstroke/*.java"
             include "dev/engineeredcombustion/prototype/**/*.java"
             include "*.java"
         }
@@ -140,6 +144,10 @@ var simulationTestClasses = [
     "EngineMigrationTests",
     // Engine-wide installed-component ownership and conservation.
     "InstalledComponentConservationTests",
+    // Milestone 15B, PRODUCTION. The suites above drive src/prototype; this one
+    // drives the classes the mod actually ships, so the two cannot diverge
+    // silently.
+    "ProductionFourStrokeTests",
 ]
 
 var simulationTestTasks = simulationTestClasses.collect { className ->
