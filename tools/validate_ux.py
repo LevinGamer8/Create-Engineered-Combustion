@@ -784,6 +784,81 @@ def check_tooltips(lang):
     ok(f"{len(lines)} item tooltips, all numbered from 1 without gaps", started)
 
 
+def registered_blocks():
+    """Every block ECBlocks registers, read out of the Java rather than listed here."""
+    source = (ROOT / "src/main/java/dev/engineeredcombustion/registry/ECBlocks.java").read_text()
+    return sorted(set(re.findall(r'BLOCKS\.register\("([a-z_]+)"', source)))
+
+
+def registered_items():
+    """Every item ECItems registers, likewise."""
+    source = (ROOT / "src/main/java/dev/engineeredcombustion/registry/ECItems.java").read_text()
+    return sorted(set(re.findall(r'ITEMS\.register\("([a-z_]+)"', source)))
+
+
+def check_blocks_are_obtainable(lang):
+    """A registered block must be minable, droppable and nameable.
+
+    THIS CHECK EXISTS BECAUSE ALL FIVE MACHINE BLOCKS FAILED IT. Every one of them
+    is registered with `requiresCorrectToolForDrops()`, which is satisfied by
+    membership of a `mineable/*` tag and by nothing else - and only Oil Shale was
+    in one. So mining a Crankshaft, a Cylinder, a Flywheel, a Carburetor or an Oil
+    Sump destroyed it and returned nothing, with a perfectly correct loot table
+    sitting beside it that never ran. Nothing compiled wrong, no test failed, and
+    the only way to find it was to break a block in a real world.
+
+    Four things every placeable block needs, checked against the registry itself
+    rather than against a list somebody has to remember to update:
+
+      * a `mineable/pickaxe` entry, or it drops nothing, ever;
+      * a mining-tier entry, or the tier is unstated;
+      * a loot table, or there is nothing to drop;
+      * a name in both languages, or it reads as its own key on screen.
+    """
+    started = len(problems)
+    blocks = registered_blocks()
+
+    def tag_values(path):
+        file = DATA.parent / path
+        if not file.exists():
+            problem(f"{path} is missing entirely")
+            return set()
+        return set(json.loads(file.read_text())["values"])
+
+    mineable = tag_values("minecraft/tags/block/mineable/pickaxe.json")
+    tiered = tag_values("minecraft/tags/block/needs_stone_tool.json")
+
+    for block in blocks:
+        full = f"{NS}:{block}"
+        if full not in mineable:
+            problem(f"block {block} is not in mineable/pickaxe - it will drop "
+                    f"NOTHING, because it requires a correct tool for drops")
+        if full not in tiered:
+            problem(f"block {block} is in no mining-tier tag")
+        if not (DATA / "loot_table/blocks" / f"{block}.json").exists():
+            problem(f"block {block} has no loot table, so it drops nothing")
+        for code in ("en_us", "de_de"):
+            key = f"block.{NS}.{block}"
+            item_key = f"item.{NS}.{block}"
+            if key not in lang[code] and item_key not in lang[code]:
+                problem(f"block {block} has no name in {code}")
+    ok(f"{len(blocks)} blocks, each minable, tiered, dropping and named", started)
+
+
+def check_items_are_named(lang):
+    """A registered item must have a name in both languages and a model."""
+    started = len(problems)
+    items = registered_items()
+    models = ASSETS / "models/item"
+    for item in items:
+        for code in ("en_us", "de_de"):
+            if f"item.{NS}.{item}" not in lang[code] and f"block.{NS}.{item}" not in lang[code]:
+                problem(f"item {item} has no name in {code}")
+        if not (models / f"{item}.json").exists():
+            problem(f"item {item} has no model, so it renders as a missing texture")
+    ok(f"{len(items)} items, each named in both languages and modelled", started)
+
+
 def main():
     print("checking the player-visible surface\n")
     lang = load_lang()
@@ -796,6 +871,8 @@ def main():
     check_ponder_targets()
     check_ponder_section_lifecycle()
     check_tooltips(lang)
+    check_blocks_are_obtainable(lang)
+    check_items_are_named(lang)
 
     print()
     if problems:

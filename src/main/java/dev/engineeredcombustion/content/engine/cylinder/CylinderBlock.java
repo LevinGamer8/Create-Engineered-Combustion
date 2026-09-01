@@ -2,6 +2,8 @@ package dev.engineeredcombustion.content.engine.cylinder;
 
 import org.jetbrains.annotations.Nullable;
 
+import com.simibubi.create.content.equipment.wrench.IWrenchable;
+
 import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlock;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
@@ -22,6 +24,7 @@ import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.LevelReader;
@@ -59,7 +62,7 @@ import net.minecraft.world.phys.BlockHitResult;
  * fitted only a piston should never have to aim, and one who has fitted both is
  * already looking at two visibly different parts of the casting.
  */
-public class CylinderBlock extends Block implements EntityBlock, EngineCasting {
+public class CylinderBlock extends Block implements EntityBlock, EngineCasting, IWrenchable {
 
 	/**
 	 * Where the head casting starts, as a fraction of the block. Matches the head
@@ -358,4 +361,29 @@ public class CylinderBlock extends Block implements EntityBlock, EngineCasting {
 		}
 		super.onRemove(state, level, pos, newState, movedByPiston);
 	}
+
+	/**
+	 * Dismantled with a Create Wrench, exactly as Create's own machines are.
+	 *
+	 * <p><b>Sneak-wrench only.</b> {@code IWrenchable}'s default non-sneaking
+	 * behaviour rotates the block, and this one has no rotation of its own to
+	 * offer: which way it faces is read from the Crankshaft underneath it and
+	 * re-derived on every neighbour change, so a wrench that turned it would be
+	 * undone before the player let go. Passing leaves the click to whatever else
+	 * wants it.
+	 *
+	 * <p>The sneaking default is inherited unchanged, and that is the point: it
+	 * calls {@code Block#getDrops} - the loot table, with this block entity in
+	 * hand, so every data component the table copies comes with it - and then
+	 * destroys the block WITHOUT dropping it again. Destroying it runs
+	 * {@link #onRemove}, which is where installed parts come out. So a wrench and
+	 * a pickaxe reach the same one path and return the same one of everything;
+	 * there is deliberately no wrench-specific drop code anywhere in this mod,
+	 * because a wrench that dropped a part itself would hand the player two.
+	 */
+	@Override
+	public ItemInteractionResult onWrenched(BlockState state, UseOnContext context) {
+		return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+	}
+
 }

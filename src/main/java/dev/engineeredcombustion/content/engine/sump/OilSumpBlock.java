@@ -2,6 +2,8 @@ package dev.engineeredcombustion.content.engine.sump;
 
 import org.jetbrains.annotations.Nullable;
 
+import com.simibubi.create.content.equipment.wrench.IWrenchable;
+
 import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlock;
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
@@ -14,6 +16,7 @@ import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
@@ -38,7 +41,7 @@ import net.neoforged.neoforge.fluids.FluidUtil;
  * NeoForge's standard helper, so an Engine Oil Bucket works without any
  * bucket-specific code - the same path the carburetor uses.
  */
-public class OilSumpBlock extends Block implements EntityBlock, EngineCasting {
+public class OilSumpBlock extends Block implements EntityBlock, EngineCasting, IWrenchable {
 
 	/**
 	 * Which way the engine over this pan runs.
@@ -126,6 +129,11 @@ public class OilSumpBlock extends Block implements EntityBlock, EngineCasting {
 	@Override
 	public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
 		if (!state.is(newState.getBlock()))
+			// THE OIL IN THE PAN IS NOT KEPT. Carrying it on the item would need a
+			// fluid data component, and the two routes to an emptied sump - mined, or
+			// drained into a pipe - would then have to agree about the millibucket.
+			// Losing it is the unambiguous answer: nothing duplicated, nothing created,
+			// and a player who cares drains it first. Same rule as the Carburetor.
 			notifyCrankshaft(level, pos);
 		super.onRemove(state, level, pos, newState, movedByPiston);
 	}
@@ -144,4 +152,29 @@ public class OilSumpBlock extends Block implements EntityBlock, EngineCasting {
 			&& level.getBlockEntity(crankshaftPos) instanceof CrankshaftBlockEntity crankshaft)
 			crankshaft.onSurroundingsChanged();
 	}
+
+	/**
+	 * Dismantled with a Create Wrench, exactly as Create's own machines are.
+	 *
+	 * <p><b>Sneak-wrench only.</b> {@code IWrenchable}'s default non-sneaking
+	 * behaviour rotates the block, and this one has no rotation of its own to
+	 * offer: which way it faces is read from the Crankshaft underneath it and
+	 * re-derived on every neighbour change, so a wrench that turned it would be
+	 * undone before the player let go. Passing leaves the click to whatever else
+	 * wants it.
+	 *
+	 * <p>The sneaking default is inherited unchanged, and that is the point: it
+	 * calls {@code Block#getDrops} - the loot table, with this block entity in
+	 * hand, so every data component the table copies comes with it - and then
+	 * destroys the block WITHOUT dropping it again. Destroying it runs
+	 * {@link #onRemove}, which is where installed parts come out. So a wrench and
+	 * a pickaxe reach the same one path and return the same one of everything;
+	 * there is deliberately no wrench-specific drop code anywhere in this mod,
+	 * because a wrench that dropped a part itself would hand the player two.
+	 */
+	@Override
+	public ItemInteractionResult onWrenched(BlockState state, UseOnContext context) {
+		return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+	}
+
 }

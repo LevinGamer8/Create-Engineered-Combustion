@@ -1,6 +1,11 @@
 {
   "replace": false,
   "values": [
+    "engineered_combustion:crankshaft",
+    "engineered_combustion:cylinder",
+    "engineered_combustion:flywheel",
+    "engineered_combustion:carburetor",
+    "engineered_combustion:oil_sump",
     "engineered_combustion:oil_shale"
   ]
 }

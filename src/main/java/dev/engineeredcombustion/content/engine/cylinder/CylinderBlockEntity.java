@@ -344,6 +344,30 @@ public class CylinderBlockEntity extends BlockEntity implements IHaveGoggleInfor
 	 * vertical anyway, so the choice is invisible.
 	 */
 	public Direction.Axis getEngineAxisForRender() {
+		// THIS BLOCK'S OWN BLOCK STATE, not the crankshaft's.
+		//
+		// The Cylinder already carries the engine's axis as a synchronised block state
+		// property - it is what turns the baked model, and what puts the intake port on
+		// the flank facing away from the crank run. Asking the Crankshaft's block entity
+		// instead was the orientation bug: that entity may simply not be there on the
+		// client (an unloaded chunk, a section not yet synchronised, or no Crankshaft at
+		// all), and the fallback was Axis.X - so on a Z-axis engine the Spark Plug and
+		// the connecting rod were drawn a quarter turn out from the casting they belong
+		// to, while the Cylinder's own model was correctly turned around them.
+		//
+		// The block state is present on the client by construction and cannot disagree
+		// with the model it turns, which is what makes this the one right source.
+		BlockState state = getBlockState();
+		if (state.hasProperty(CylinderBlock.AXIS)) {
+			Direction.Axis axis = state.getValue(CylinderBlock.AXIS)
+				.axis();
+			if (axis != null)
+				return axis;
+		}
+		// EngineAxis.NONE - this Cylinder is not standing on a Crankshaft at all, so
+		// there is no engine to be aligned with and any answer draws the same picture.
+		// Asking the section below is still worth one try: it is right on the tick a
+		// Cylinder is placed, before updateShape has run.
 		CrankshaftBlockEntity crankshaft = getCrankshaft();
 		return crankshaft == null ? Direction.Axis.X : crankshaft.getAxis();
 	}

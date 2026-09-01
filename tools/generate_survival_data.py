@@ -365,6 +365,12 @@ def fluid_pair(name):
     return [me(name), me("flowing_" + name)]
 
 
+# Every block ECBlocks registers, in registration order. The one list both tags
+# are built from, so a block can never be mineable without a tier or the reverse.
+MINEABLE_BLOCKS = [me(name) for name in (
+    "crankshaft", "cylinder", "flywheel", "carburetor", "oil_sump", "oil_shale")]
+
+
 TAGS = {
     "c/tags/fluid/gasoline": {"replace": False, "values": fluid_pair("gasoline")},
     "c/tags/fluid/engine_oil": {"replace": False, "values": fluid_pair("engine_oil")},
@@ -374,15 +380,33 @@ TAGS = {
     f"{NS}/tags/fluid/engine_oil": {"replace": False, "values": ["#c:engine_oil"]},
     f"{NS}/tags/fluid/crude_oil": {"replace": False, "values": ["#c:crude_oil"]},
 
-    # Oil Shale needs a pickaxe, and a stone one at that: petroleum should not
-    # be punchable out of the ground. Same tier as iron ore.
+    # EVERY block this mod places, and Oil Shale.
     #
-    # Deliberately NOT in `c:ores`. It drops itself rather than a raw material,
-    # so an ore-doubling mod that saw it in that tag would either duplicate the
-    # block outright or fail to find a smelting result for it. It is a rock that
-    # is processed, not an ore that is refined.
-    "minecraft/tags/block/mineable/pickaxe": {"replace": False, "values": [me("oil_shale")]},
-    "minecraft/tags/block/needs_stone_tool": {"replace": False, "values": [me("oil_shale")]},
+    # THIS LIST IS NOT DECORATION. All of these blocks are registered with
+    # `requiresCorrectToolForDrops()`, and that flag is satisfied by being in a
+    # `mineable/*` tag and nothing else - so a machine block absent from here does
+    # not merely mine slowly. It mines slowly AND DROPS NOTHING, whatever tool is
+    # used, for ever. That is exactly what happened: only Oil Shale was listed, so
+    # a player who mined a Crankshaft, a Cylinder, a Flywheel, a Carburetor or an
+    # Oil Sump destroyed it and got back an empty hand. The loot tables were
+    # correct the whole time and never ran.
+    #
+    # `validate_ux.py` now fails the build if a registered block is missing from
+    # either list below, so this cannot silently drift again.
+    #
+    # Stone tier for all of them: the parts are andesite-and-iron tier, and an
+    # engine is not something a wooden pickaxe should take apart. Deliberately NOT
+    # `needs_iron_tool` - by the time a player can craft a Crankshaft they have
+    # iron anyway, so an iron requirement would gate nothing and only punish
+    # somebody dismantling an engine with the pickaxe they happen to be holding.
+    #
+    # Oil Shale is here for its own reason: petroleum should not be punchable out
+    # of the ground. It is deliberately NOT in `c:ores` - it drops itself rather
+    # than a raw material, so an ore-doubling mod that saw it in that tag would
+    # either duplicate the block outright or fail to find a smelting result for
+    # it. It is a rock that is processed, not an ore that is refined.
+    "minecraft/tags/block/mineable/pickaxe": {"replace": False, "values": MINEABLE_BLOCKS},
+    "minecraft/tags/block/needs_stone_tool": {"replace": False, "values": MINEABLE_BLOCKS},
 }
 
 

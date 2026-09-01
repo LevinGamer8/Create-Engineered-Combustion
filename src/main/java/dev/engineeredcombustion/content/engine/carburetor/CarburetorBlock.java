@@ -1,5 +1,6 @@
 package dev.engineeredcombustion.content.engine.carburetor;
 
+import com.simibubi.create.content.equipment.wrench.IWrenchable;
 import com.simibubi.create.foundation.block.IBE;
 
 import dev.engineeredcombustion.content.engine.EngineComponents;
@@ -18,6 +19,7 @@ import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.LevelReader;
@@ -49,7 +51,8 @@ import net.neoforged.neoforge.fluids.FluidUtil;
  * </ul>
  * Breaking the carburetor drops an installed filter rather than voiding it.
  */
-public class CarburetorBlock extends Block implements IBE<CarburetorBlockEntity>, EngineCasting {
+public class CarburetorBlock extends Block implements IBE<CarburetorBlockEntity>, EngineCasting,
+	IWrenchable {
 
 	/**
 	 * Which way the engine under this carburetor runs.
@@ -157,6 +160,14 @@ public class CarburetorBlock extends Block implements IBE<CarburetorBlockEntity>
 		if (!state.is(newState.getBlock())) {
 			// An installed filter is a real item the player paid for; it must not
 			// evaporate because the block it was bolted to was mined.
+			//
+			// THE FUEL IN THE FLOAT BOWL IS NOT KEPT, and that is deliberate. A tank
+			// that carried its contents in the item would need a fluid data component
+			// on the stack, and the two ways of ending up with one - mined, or emptied
+			// into a pipe - would then have to agree about the millibucket. Losing what
+			// is in the bowl is the honest, unambiguous behaviour: nothing is
+			// duplicated, nothing is created, and a player who cares drains it first.
+			// Same rule as the Oil Sump, for the same reason.
 			if (level.getBlockEntity(pos) instanceof CarburetorBlockEntity carburetor && carburetor.hasAirFilter())
 				popResource(level, pos, new ItemStack(ECItems.AIR_FILTER.get()));
 			notifyCrankshaft(level, pos);
@@ -190,4 +201,29 @@ public class CarburetorBlock extends Block implements IBE<CarburetorBlockEntity>
 	public BlockEntityType<? extends CarburetorBlockEntity> getBlockEntityType() {
 		return ECBlockEntityTypes.CARBURETOR.get();
 	}
+
+	/**
+	 * Dismantled with a Create Wrench, exactly as Create's own machines are.
+	 *
+	 * <p><b>Sneak-wrench only.</b> {@code IWrenchable}'s default non-sneaking
+	 * behaviour rotates the block, and this one has no rotation of its own to
+	 * offer: which way it faces is read from the Crankshaft underneath it and
+	 * re-derived on every neighbour change, so a wrench that turned it would be
+	 * undone before the player let go. Passing leaves the click to whatever else
+	 * wants it.
+	 *
+	 * <p>The sneaking default is inherited unchanged, and that is the point: it
+	 * calls {@code Block#getDrops} - the loot table, with this block entity in
+	 * hand, so every data component the table copies comes with it - and then
+	 * destroys the block WITHOUT dropping it again. Destroying it runs
+	 * {@link #onRemove}, which is where installed parts come out. So a wrench and
+	 * a pickaxe reach the same one path and return the same one of everything;
+	 * there is deliberately no wrench-specific drop code anywhere in this mod,
+	 * because a wrench that dropped a part itself would hand the player two.
+	 */
+	@Override
+	public ItemInteractionResult onWrenched(BlockState state, UseOnContext context) {
+		return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+	}
+
 }
