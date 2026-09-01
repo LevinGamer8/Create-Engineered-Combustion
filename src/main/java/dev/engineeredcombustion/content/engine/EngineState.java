@@ -349,7 +349,7 @@ public final class EngineState {
 	 * ({@code 0b1111 -> 0b1011}), that cylinder genuinely firing again
 	 * ({@code 0b1011 -> 0b1111}), or the tank running dry
 	 * ({@code 0b1111 -> 0b0000}). It is emphatically <b>not</b> a per-combustion
-	 * event channel - those are {@code EngineCombustionEventsPayload}'s business,
+	 * event channel - those are {@code EngineTickPayload}'s business,
 	 * and they stay there.
 	 *
 	 * <p>Nothing an external source does can set a bit. Being spun is not burning,
@@ -436,7 +436,7 @@ public final class EngineState {
 	 * <p>They are the <i>source</i> of the engine's event channel rather than the
 	 * channel itself. {@code CrankshaftBlockEntity} diffs them across each simulated
 	 * tick and sends the difference as two bitmasks in an
-	 * {@code EngineCombustionEventsPayload}; that packet is what the client reacts
+	 * {@code EngineTickPayload}; that packet is what the client reacts
 	 * to. Sending the counters themselves meant a full block entity synchronisation
 	 * for every spark and every bang, which an inline-4 produces four times as often
 	 * as an inline-1.
@@ -2011,6 +2011,56 @@ public final class EngineState {
 	public void adoptCyclePhase(long cycleIndex, float cycleAngleDegrees, int armedMask) {
 		position.set(cycleIndex, cycleAngleDegrees);
 		setArmedMask(armedMask);
+	}
+
+	/**
+	 * Reconciles the client's idea of where the engine is in its cycle with the
+	 * server's. <b>Client side.</b>
+	 *
+	 * <h2>The one correction that cannot be skipped</h2>
+	 * A client cannot derive a four-stroke phase from anything it can see. The piston
+	 * is in exactly the same place at cycle angle 137 and at 497, and those are
+	 * opposite halves of the cycle: on one the cylinder is sealed and compressing, on
+	 * the other a valve is wide open and it is pushing exhaust out. A client that had
+	 * drifted by a revolution would draw a completely convincing engine with its
+	 * valves an entire stroke wrong, and nothing about the crank would ever tell it
+	 * so. Hence an authoritative angle, and hence this.
+	 *
+	 * <h2>Two regimes, because a small error and a wrong stroke are different bugs</h2>
+	 * <dl>
+	 * <dt>within half a stroke</dt>
+	 * <dd>The client is on the right stroke and a little ahead or behind - which is
+	 * the ordinary state of affairs, since the anchor describes a tick that has
+	 * already passed by the time it arrives. Closing a fraction of it per anchor
+	 * converges within a second or two and is never a visible step. Applying it in
+	 * full would bake in a backward bias of exactly the packet's flight time.</dd>
+	 * <dt>half a stroke or more</dt>
+	 * <dd>The client may be drawing the wrong stroke. It snaps, because being right
+	 * matters more than being smooth, and because an error this large is one the
+	 * player can already see.</dd>
+	 * </dl>
+	 *
+	 * <p>The error is measured the short way round the 720-degree circle, so an
+	 * engine either side of the wrap corrects by a couple of degrees rather than by
+	 * seven hundred.
+	 *
+	 * @param serverCycleAngleDegrees where the server says the engine is
+	 * @param armedMask               which cylinders it says are holding a charge
+	 */
+	public void correctCyclePhase(float serverCycleAngleDegrees, int armedMask) {
+		setArmedMask(armedMask);
+		float error = FourStrokeCycle.normalizeCycle(serverCycleAngleDegrees - position.angle());
+		if (error > FourStrokeCycle.CYCLE_DEGREES / 2.0F)
+			error -= FourStrokeCycle.CYCLE_DEGREES;
+		if (Math.abs(error) >= EngineTuning.PHASE_SNAP_DEGREES) {
+			position.set(position.cycleIndex(), serverCycleAngleDegrees);
+			return;
+		}
+		// Not advance(): that would rewrite the position's record of the last step,
+		// and every crossing query reads it. A correction is not a tick of rotation
+		// and must not be mistaken for one.
+		position.set(position.cycleIndex(),
+			position.angle() + error * EngineTuning.PHASE_CORRECTION_FRACTION);
 	}
 
 	/** Restores the arming latches from their persisted or synchronised integer. */

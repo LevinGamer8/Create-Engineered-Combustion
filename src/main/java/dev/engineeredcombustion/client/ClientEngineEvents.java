@@ -1,7 +1,7 @@
 package dev.engineeredcombustion.client;
 
 import dev.engineeredcombustion.content.engine.crankshaft.CrankshaftBlockEntity;
-import dev.engineeredcombustion.network.EngineCombustionEventsPayload;
+import dev.engineeredcombustion.network.EngineTickPayload;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 
@@ -35,10 +35,12 @@ public final class ClientEngineEvents {
 	 * just happened. A chunk coming into view carries no events with it, which is
 	 * what stops a player who arrives at a running engine from being greeted by a
 	 * burst of bangs that happened while they were elsewhere.
+	 *
+	 * <p>The phase anchor is applied whether or not anything fired, and before the
+	 * events are played: a packet sent with both masks empty is an anchor for a
+	 * motored engine, which is the one case that has no bangs to anchor on.
 	 */
-	public static void onCombustionEvents(EngineCombustionEventsPayload payload, IPayloadContext context) {
-		if (payload.isEmpty())
-			return;
+	public static void onEngineTick(EngineTickPayload payload, IPayloadContext context) {
 		Player player = context.player();
 		if (player == null)
 			return;
@@ -47,6 +49,9 @@ public final class ClientEngineEvents {
 			return;
 		if (!(level.getBlockEntity(payload.controllerPos()) instanceof CrankshaftBlockEntity crankshaft))
 			return;
-		crankshaft.playCombustionEvents(payload.sparkMask(), payload.combustionMask());
+		crankshaft.getEngineState()
+			.correctCyclePhase(payload.cycleAngleDegrees(), payload.armedMask());
+		if (payload.hasEvents())
+			crankshaft.playCombustionEvents(payload.sparkMask(), payload.combustionMask());
 	}
 }

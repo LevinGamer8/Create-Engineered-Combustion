@@ -31,25 +31,25 @@ public final class ECPackets {
 	 * connection between two installations whose versions disagree, which is a far
 	 * better failure than a silently misread packet.
 	 */
-	private static final String VERSION = "1";
+	private static final String VERSION = "2";
 
 	/** Registered from the mod event bus - see {@code EngineeredCombustion}. */
 	public static void register(RegisterPayloadHandlersEvent event) {
 		PayloadRegistrar registrar = event.registrar(VERSION);
-		registrar.playToClient(EngineCombustionEventsPayload.TYPE, EngineCombustionEventsPayload.STREAM_CODEC,
-			ECPackets::handleCombustionEvents);
+		registrar.playToClient(EngineTickPayload.TYPE, EngineTickPayload.STREAM_CODEC,
+			ECPackets::handleEngineTick);
 	}
 
 	/**
-	 * Hands one engine's per-tick events to the client, on the main thread.
+	 * Hands one engine's per-tick news to the client, on the main thread.
 	 *
 	 * <p>{@code PayloadRegistrar} wraps handlers in a {@code MainThreadPayloadHandler}
 	 * by default, so this already runs where particles, sounds and block entities may
 	 * safely be touched. Nothing here has to schedule anything itself.
 	 */
-	private static void handleCombustionEvents(EngineCombustionEventsPayload payload, IPayloadContext context) {
+	private static void handleEngineTick(EngineTickPayload payload, IPayloadContext context) {
 		if (!FMLEnvironment.dist.isClient())
 			return;
-		dev.engineeredcombustion.client.ClientEngineEvents.onCombustionEvents(payload, context);
+		dev.engineeredcombustion.client.ClientEngineEvents.onEngineTick(payload, context);
 	}
 }

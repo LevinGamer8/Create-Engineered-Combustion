@@ -40,7 +40,7 @@ import dev.engineeredcombustion.content.engine.sump.OilSumpBlockEntity;
 import dev.engineeredcombustion.foundation.ECLang;
 import dev.engineeredcombustion.foundation.EngineCasting;
 import dev.engineeredcombustion.foundation.EngineConditionText;
-import dev.engineeredcombustion.network.EngineCombustionEventsPayload;
+import dev.engineeredcombustion.network.EngineTickPayload;
 import dev.engineeredcombustion.registry.ECBlockEntityTypes;
 import dev.engineeredcombustion.registry.ECCriteriaTriggers;
 import dev.engineeredcombustion.registry.ECDataComponents;
@@ -340,6 +340,16 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	private EngineFlywheelBlockEntity cachedFlywheel;
 
 	private int resyncCountdown = RESYNC_INTERVAL;
+
+	/**
+	 * Ticks until this engine states where it is in its cycle, whether or not
+	 * anything fired.
+	 *
+	 * <p>Reset by every send, including one carrying real events, so a firing engine
+	 * is anchored by its own bangs and never pays for a second packet - see
+	 * {@link #dispatchCombustionEvents}.
+	 */
+	private int phaseAnchorCountdown = EngineTuning.PHASE_ANCHOR_INTERVAL_TICKS;
 
 	/**
 	 * Set when this engine's state came off disk, and cleared by the first server
@@ -759,7 +769,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 
 		// This tick's sparks and combustions, as one small packet rather than as a
 		// full block entity synchronisation per event - see
-		// EngineCombustionEventsPayload. The counters themselves are untouched and
+		// EngineTickPayload. The counters themselves are untouched and
 		// still persisted: they are the engine's own record of what happened, and the
 		// goggle diagnostics and the post-load comparison still read them. What they
 		// no longer do is force the whole engine onto the wire eight times a second.
@@ -1774,8 +1784,26 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			if (engine.getCombustionEventId(cylinder) != combustionEventsBefore[cylinder])
 				combustionMask |= 1 << cylinder;
 		}
-		if ((sparkMask | combustionMask) == 0)
+		boolean events = (sparkMask | combustionMask) != 0;
+
+		// THE PHASE ANCHOR, and why it is not sent every tick.
+		//
+		// A running engine anchors on every bang it makes, because the packet was
+		// going anyway - so an inline-4 at full throttle corrects its clients four
+		// times a revolution for nothing. What has no bangs is an engine being MOTORED
+		// by another Create source, and that is exactly the case where the client's own
+		// integration can quietly walk a whole revolution out of phase and draw a
+		// convincing engine with its valves on the wrong stroke. Those get an anchor on
+		// a timer instead, and only while the crank is actually turning: a stopped
+		// engine cannot drift.
+		//
+		// The countdown is reset by ANY send, so a firing engine never also pays for a
+		// timed one.
+		boolean turning = engine.getMechanicalRpm() != 0.0F;
+		boolean anchorDue = turning && --phaseAnchorCountdown <= 0;
+		if (!events && !anchorDue)
 			return;
+		phaseAnchorCountdown = EngineTuning.PHASE_ANCHOR_INTERVAL_TICKS;
 
 		// Every cylinder that did anything this tick, in one packet. An inline-4 at
 		// full throttle therefore costs exactly what an inline-1 does: at most one
@@ -1785,7 +1813,8 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// entity that owns the engine and the position the payload names, so it is
 		// also the chunk a client must have in order to resolve the engine at all.
 		PacketDistributor.sendToPlayersTrackingChunk(serverLevel, new ChunkPos(worldPosition),
-			new EngineCombustionEventsPayload(worldPosition, (byte) sparkMask, (byte) combustionMask));
+			new EngineTickPayload(worldPosition, (byte) sparkMask, (byte) combustionMask,
+				engine.getCycleAngleDegrees(), (byte) engine.getArmedMask()));
 	}
 
 	/**
@@ -2655,7 +2684,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		// discarding the revolutions already banked towards the next draw.
 		engine.setCombustionEventsSinceOilDraw(tag.getInt(KEY_OIL_WEAR));
 		// The engine's own record of how many times each cylinder has sparked and
-		// burned. No longer the event channel - EngineCombustionEventsPayload is -
+		// burned. No longer the event channel - EngineTickPayload is -
 		// but still real state: it is what the server diffs each tick to decide which
 		// bits to set, so it has to survive a reload rather than restart from zero.
 		engine.setEventIds(tag.getIntArray(KEY_SPARK_EVENT), tag.getIntArray(KEY_COMBUSTION_EVENT));
@@ -2730,7 +2759,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 		tag.putInt(KEY_OIL_WEAR, engine.getCombustionEventsSinceOilDraw());
 		// One counter per cylinder, because a spark and a bang happen at a PLACE. They
 		// are the server's running tally, not the wire format: the live events reach
-		// the client through EngineCombustionEventsPayload, and these are what the
+		// the client through EngineTickPayload, and these are what the
 		// server diffs each tick to work out which of its bits to set. Saved so that
 		// diff has something to compare against after a reload; carried in the client
 		// packet too, for the goggle diagnostics.

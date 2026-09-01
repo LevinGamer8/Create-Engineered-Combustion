@@ -28,6 +28,7 @@ public class ProductionEngineFourStrokeTests {
 		activeCylindersSurviveTheWait();
 		immediateInvalidation();
 		saveAndReloadKeepsThePhase();
+		clientPhaseCorrection();
 		externalRotationGeneratesNothing();
 
 		System.out.println();
@@ -348,6 +349,60 @@ public class ProductionEngineFourStrokeTests {
 				fuelBefore - back.tank.mb <= 2 * EngineTuning.FUEL_PER_COMBUSTION_MB * 2,
 				(fuelBefore - back.tank.mb) + " mB in 8 ticks");
 		}
+	}
+
+	/** L2. The client's phase correction: eased when small, snapped when a stroke out. */
+	static void clientPhaseCorrection() {
+		section("L2 THE CLIENT CANNOT STAY A STROKE OUT OF PHASE");
+
+		// A whole revolution wrong is the failure this exists to make impossible: the
+		// piston looks perfect and the valves are on the wrong stroke.
+		EngineState client = new EngineState();
+		client.setCyclePosition(0L, 137.0F);
+		check("a revolution out is the same piston position",
+			near(client.getCrankAngleDegrees(), FourStrokeCycle.physicalAngle(497.0F), 0.01F),
+			String.format("%.1f", client.getCrankAngleDegrees()));
+		check("... and the opposite stroke",
+			FourStrokePhase.at(137.0F) != FourStrokePhase.at(497.0F),
+			FourStrokePhase.at(137.0F) + " vs " + FourStrokePhase.at(497.0F));
+
+		client.correctCyclePhase(497.0F, 0);
+		check("one anchor snaps it onto the right stroke",
+			near(client.getCycleAngleDegrees(), 497.0F, 0.01F),
+			String.format("%.1f", client.getCycleAngleDegrees()));
+
+		// A small error is eased rather than jumped, and converges.
+		client.setCyclePosition(0L, 100.0F);
+		client.correctCyclePhase(110.0F, 0);
+		check("a small error is only partly closed, so nothing visibly jumps",
+			client.getCycleAngleDegrees() > 100.0F && client.getCycleAngleDegrees() < 110.0F,
+			String.format("%.1f", client.getCycleAngleDegrees()));
+		for (int anchor = 0; anchor < 8; anchor++)
+			client.correctCyclePhase(110.0F, 0);
+		check("... and converges within a couple of seconds of anchors",
+			near(client.getCycleAngleDegrees(), 110.0F, 0.2F),
+			String.format("%.2f", client.getCycleAngleDegrees()));
+
+		// Either side of the wrap, the short way round.
+		client.setCyclePosition(0L, 715.0F);
+		client.correctCyclePhase(5.0F, 0);
+		check("an error across the 720 wrap corrects by degrees, not by a cycle",
+			client.getCycleAngleDegrees() > 715.0F || client.getCycleAngleDegrees() < 10.0F,
+			String.format("%.1f", client.getCycleAngleDegrees()));
+
+		client.setCyclePosition(0L, 5.0F);
+		client.correctCyclePhase(715.0F, 0);
+		check("and the same backwards across it",
+			client.getCycleAngleDegrees() > 700.0F || client.getCycleAngleDegrees() < 5.0F,
+			String.format("%.1f", client.getCycleAngleDegrees()));
+
+		// A correction is not a tick of rotation, and must not be mistaken for one:
+		// nothing may fire because the client was told where the server is.
+		client.setCyclePosition(0L, 170.0F);
+		client.setArmedMask(0b1);
+		client.correctCyclePhase(600.0F, 0b1);
+		check("a correction never counts as crank travel", client.getArmedMask() == 0b1,
+			Integer.toBinaryString(client.getArmedMask()));
 	}
 
 	/** L. Being spun is not running, however fast. */

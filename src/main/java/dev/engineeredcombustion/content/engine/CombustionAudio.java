@@ -17,7 +17,7 @@ import net.minecraft.world.level.Level;
  * open - and not a smooth loop pitched up and down to imply a speed.
  *
  * <p>Every pulse this class plays is one charge that really burned. It is driven
- * from the combustion bits of {@code EngineCombustionEventsPayload} - the server's
+ * from the combustion bits of {@code EngineTickPayload} - the server's
  * own record of the same event that consumed the fuel, delivered the torque,
  * advanced the start attempt and lit the chamber flash, sent once per engine per
  * tick. There is no audio timer anywhere in the mod,

@@ -479,6 +479,49 @@ public final class EngineTuning {
 	 */
 	public static final int POST_LOAD_RECONCILE_WAIT_TICKS = 100;
 
+	// --- four-stroke phase synchronisation ----------------------------------
+
+	/**
+	 * How often an engine with no combustion to anchor on states where it is in its
+	 * cycle, in ticks.
+	 *
+	 * <p>A second. It matters only for an engine being <b>motored</b> by another
+	 * Create source: a firing one anchors its clients on every bang, at no cost,
+	 * because the packet was going anyway.
+	 *
+	 * <p>Chosen against what can actually go wrong. Both sides integrate the same
+	 * cycle position from the same synchronised speed, so a steady engine does not
+	 * drift at all; error accrues only in the few ticks around each speed change,
+	 * where the client's Create speed lags the server's. A second bounds how many of
+	 * those can pile up before the truth arrives, and costs one fifteen-byte packet
+	 * per motored engine per second.
+	 */
+	public static final int PHASE_ANCHOR_INTERVAL_TICKS = 20;
+
+	/**
+	 * How wrong the client's cycle angle has to be before it is corrected outright
+	 * rather than eased, in degrees.
+	 *
+	 * <p>Half a stroke. Below it the client is on the right stroke and merely a
+	 * little ahead or behind, which nothing visible depends on - so the error is
+	 * closed gradually and the player sees no jump. At or above it the client may be
+	 * drawing the wrong stroke entirely: open valves on a compressing cylinder, a
+	 * camshaft pointing the wrong way. Being right then matters more than being
+	 * smooth, so it snaps.
+	 */
+	public static final float PHASE_SNAP_DEGREES = 90.0F;
+
+	/**
+	 * Fraction of a small phase error closed by each anchor.
+	 *
+	 * <p>Half, so an error decays by half a second and is gone within two - fast
+	 * enough that nothing accumulates, gentle enough that a correction is never a
+	 * visible step. Deliberately not 1: applying an anchor in full would bake in a
+	 * systematic backward bias of exactly the packet's flight time, because the
+	 * server has moved on since it stated the angle.
+	 */
+	public static final float PHASE_CORRECTION_FRACTION = 0.5F;
+
 	// --- fuel ---------------------------------------------------------------
 
 	/**
