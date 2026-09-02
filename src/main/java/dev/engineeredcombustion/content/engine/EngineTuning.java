@@ -948,16 +948,49 @@ public final class EngineTuning {
 	public static final float SOUND_COMBUSTION_VOLUME_JITTER = 0.10F;
 
 	/**
+	 * Firing rate at or below which a pulse is the entire voice of the engine, and
+	 * gets {@link #SOUND_COMBUSTION_SPARSE_GAIN}.
+	 *
+	 * <p>A four-stroke single fires every 720 degrees: 0.53 times a second at idle,
+	 * 1.6 at full throttle. Between two of those there is nearly two seconds of
+	 * nothing but the mechanical bed, and an event tuned for an engine that fired
+	 * twice as often is not merely quiet in that gap - it is <i>indistinct</i>,
+	 * because there is nothing next to it to be loud in comparison with. A bang
+	 * that has to carry a whole cycle has to be worth the wait.
+	 */
+	public static final float SOUND_COMBUSTION_SPARSE_RATE_HZ = 2.0F;
+
+	/**
+	 * Firing rate at and above which pulses get no help at all: they are dense
+	 * enough to carry the engine by being frequent.
+	 *
+	 * <p>6 Hz is an inline-4 at full throttle, which is the densest this engine
+	 * gets. So the gain is a ramp from the lumpy single to the smooth four, and an
+	 * R4 is left exactly where it was.
+	 */
+	public static final float SOUND_COMBUSTION_DENSE_RATE_HZ = 6.0F;
+
+	/**
+	 * How much louder a pulse is when it is the only thing happening.
+	 *
+	 * <p>This is a <b>mixing</b> decision, not an event: it changes how loud a real
+	 * combustion is, never how many there are, and it is driven by the rate measured
+	 * from the events themselves. Nothing here may ever add a bang the engine did
+	 * not make.
+	 */
+	public static final float SOUND_COMBUSTION_SPARSE_GAIN = 1.35F;
+
+	/**
 	 * Firing rate, in events per second, above which individual pulses stop being
 	 * played one for one.
 	 *
-	 * <p>The current engine cannot reach this: one cylinder firing once per
-	 * revolution tops out at 3.2 Hz at {@link #FULL_THROTTLE_RPM}. It exists so
-	 * that the audio scheduler does not <i>have</i> to be rewritten when a faster
-	 * engine, a four-stroke, or a second cylinder arrives - see
-	 * {@code EngineCombustionAudio}, which decimates pulses and fades in a
-	 * continuous combustion layer above this rate instead of machine-gunning
-	 * one-shots.
+	 * <p>The current engine cannot reach this. Since Milestone 15B a cylinder fires
+	 * once per <b>720</b> degrees, so the densest layout there is - an inline-4 at
+	 * {@link #FULL_THROTTLE_RPM} - reaches 6.4 Hz, and a single manages 1.6. It
+	 * exists so that the audio scheduler does not <i>have</i> to be rewritten when a
+	 * faster engine arrives - see {@code CombustionAudio}, which decimates pulses
+	 * and fades in a continuous combustion layer above this rate instead of
+	 * machine-gunning one-shots.
 	 *
 	 * <p>12 Hz is roughly where a human ear stops resolving separate impacts and
 	 * starts hearing a pitch, which is exactly where discrete pulses stop being the
@@ -1687,6 +1720,29 @@ public final class EngineTuning {
 	 * it exists now so that crossing it later is a tuning change rather than an
 	 * audio rewrite.
 	 */
+	/**
+	 * How much louder one combustion pulse is because there are few of them.
+	 *
+	 * <p>Full {@link #SOUND_COMBUSTION_SPARSE_GAIN} at and below
+	 * {@link #SOUND_COMBUSTION_SPARSE_RATE_HZ}, sliding to 1.0 by
+	 * {@link #SOUND_COMBUSTION_DENSE_RATE_HZ}. So a four-stroke single, whose every
+	 * bang has a whole cycle of silence to carry, is deliberate; an inline-4, whose
+	 * bangs carry each other, is untouched.
+	 *
+	 * <p><b>It scales pulses, it never adds them.</b> The rate it reads is measured
+	 * from the events themselves, so an engine that stops firing gets a louder next
+	 * bang, not a fabricated one.
+	 */
+	public static float combustionSparseGain(float rateHz) {
+		if (rateHz <= SOUND_COMBUSTION_SPARSE_RATE_HZ)
+			return SOUND_COMBUSTION_SPARSE_GAIN;
+		if (rateHz >= SOUND_COMBUSTION_DENSE_RATE_HZ)
+			return 1.0F;
+		float t = (rateHz - SOUND_COMBUSTION_SPARSE_RATE_HZ)
+			/ (SOUND_COMBUSTION_DENSE_RATE_HZ - SOUND_COMBUSTION_SPARSE_RATE_HZ);
+		return SOUND_COMBUSTION_SPARSE_GAIN + (1.0F - SOUND_COMBUSTION_SPARSE_GAIN) * t;
+	}
+
 	public static float combustionLoopBlend(float rateHz) {
 		if (rateHz <= SOUND_COMBUSTION_PULSE_MAX_RATE_HZ)
 			return 0.0F;

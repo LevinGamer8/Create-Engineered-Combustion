@@ -478,17 +478,28 @@ anchor puts it on the right one.
 
 ## 13. Sound
 
-Unchanged, and checked rather than assumed. `CombustionAudio` measures its rate
-from the events themselves:
+The **event wiring** needed no change and got none. `CombustionAudio` measures
+its rate from the events themselves:
 
 ```java
 float instant = 20.0F / Math.max(1L, now - lastEventTick);
 ```
 
 It never derived a rate from RPM, so the four-stroke cadence, including the
-uneven twin's 180/540 limp, emerges from the events with no retune. R4 at full
-throttle peaks at 6.4 Hz against the 12 Hz threshold where individual pulses
-stop being distinguishable, so nothing needed rebalancing there either.
+uneven twin's 180/540 limp, emerges from the events. R4 at full throttle peaks
+at 6.4 Hz against the 12 Hz threshold where individual pulses stop being
+distinguishable, so nothing is ever aggregated or thinned either.
+
+The **assets** did need changing, and the first in-game test is what found it.
+`engine_mechanical.ogg` carried one compression swell and one over-centre knock
+per crank *revolution*, which is a two-stroke's load pattern: on a four-stroke
+that puts a percussive event squarely between two real bangs, and it was heard
+as an engine firing twice as often as it did. The loop is now built on the
+720° cycle, the pulse carries an exhaust blowdown so each bang is worth the
+wait, and a sparse-pulse gain separates the lumpy single from the smooth four.
+
+The whole audit, the measurements, and an honest costing of the engine-RPM
+versus Create-RPM question are in `milestone-15b-audio.md`.
 
 ---
 

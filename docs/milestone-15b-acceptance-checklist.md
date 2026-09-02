@@ -32,6 +32,23 @@ Two behaviour changes to expect before you start, so they do not read as bugs:
 
 ---
 
+## F11-F15 — Sound
+
+The reason for these is in `milestone-15b-audio.md`. In one line: the mechanical
+loop used to carry a compression knock once per **revolution**, which on a
+four-stroke put a percussive event between two real bangs and was heard as a
+second firing. Listen for that specifically.
+
+| | Do this | Expect |
+| --- | --- | --- |
+| **F11** | Stand next to a running inline-1 at idle. Watch the piston and listen at the same time. | **One bang per visible combustion, and nothing at the non-firing TDC.** There is a mechanical bed all the way through - swell, breathing, whirr - and exactly one percussive event per 720°. |
+| **F12** | Compare 64, then 128, then 192 RPM on the inline-1. | 0.53, 1.07 and 1.60 bangs per second. It should sound **intentionally lumpy** at idle, like a big slow single, rather than broken or arrhythmic. If any speed sounds like it is firing twice as often as the piston shows, that is the phantom and it is a regression. |
+| **F13** | Listen to R1, R2, R3, R4 at idle in turn. | Four clearly different rhythms: R1 one bang every 1.9 s; **R2 uneven, a bang 0.47 s after the previous one and then 1.41 s of gap**; R3 even at 0.62 s; R4 even at 0.47 s. R2's limp is the one to check - it is a deliberate design decision, not a fault. |
+| **F14** | Run an engine out of fuel while it is still being turned, or pull the Camshaft on a spinning one. | The mechanical layer carries on unchanged and there is **no combustion sound at all**. A turning engine that is not burning must sound like dead weight. |
+| **F15** | Hand-crank an engine from cold. | "rrrr, PUT, rrrr, PUT, PUT-BRUM": the coil ticks are quiet and clearly not bangs, and each pre-catch firing is duller and quieter than a running one. |
+
+---
+
 ## V — Visual
 
 | | Do this | Expect |

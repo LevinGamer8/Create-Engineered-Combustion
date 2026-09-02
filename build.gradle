@@ -151,6 +151,9 @@ var simulationTestClasses = [
     // ... and the engine built out of them: schedules, balance, the Camshaft gate,
     // the exploits, save/reload and external rotation, all on EngineState itself.
     "ProductionEngineFourStrokeTests",
+    // The audio contract: that every bang is one paid combustion, at the rate the
+    // four-stroke actually fires, and that nothing scales into inventing one.
+    "EngineAudioTests",
 ]
 
 var simulationTestTasks = simulationTestClasses.collect { className ->

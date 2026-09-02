@@ -10,11 +10,18 @@ import net.minecraft.world.level.Level;
  * Turns real combustion events into sound, one engine at a time.
  *
  * <h2>The pulses are the engine</h2>
- * A single-cylinder engine fires once per revolution: 1.07 times a second at
- * idle, 3.2 at full throttle. The ear resolves every one of those, so the honest
- * sound of this machine is a train of separate bangs over a mechanical bed -
- * <b>PUT ... PUT ... PUT</b> at idle, <b>PUT-PUT-PUT-PUT</b> with the throttle
- * open - and not a smooth loop pitched up and down to imply a speed.
+ * A four-stroke single fires once per <b>720</b> degrees: 0.53 times a second at
+ * idle, 1.6 at full throttle. The ear resolves every one of those with room to
+ * spare, so the honest sound of this machine is a train of separate bangs over a
+ * mechanical bed - <b>PUT ... ... PUT ... ... PUT</b> at idle, <b>PUT .. PUT ..
+ * PUT</b> with the throttle open - and not a smooth loop pitched up and down to
+ * imply a speed.
+ *
+ * <p>Those gaps are wide, and they are supposed to be: a four-stroke spends three
+ * of its four strokes making no power. What fills them is the mechanical layer,
+ * which since Milestone 15B carries the four-stroke's own load pattern - one
+ * compression per cycle, and breathing on the strokes that pump - so the engine
+ * sounds busy between bangs without ever sounding like it fired between them.
  *
  * <p>Every pulse this class plays is one charge that really burned. It is driven
  * from the combustion bits of {@code EngineTickPayload} - the server's
@@ -25,15 +32,16 @@ import net.minecraft.world.level.Level;
  * crank angle - which is what makes the rhythm the player hears the rhythm the
  * engine actually has, including when it is uneven, and including when it stops.
  *
- * <h2>Scaling past one slow cylinder</h2>
- * One-shot per event is right at 3.2 Hz and would be absurd at 60. Rather than
- * bake that assumption in, the scheduler <i>measures</i> the rate the events are
- * arriving at and, past
- * {@link EngineTuning#SOUND_COMBUSTION_PULSE_MAX_RATE_HZ}, thins the pulses out
- * by an integer stride while a continuous combustion layer fades in underneath
- * them (see {@link EngineTuning#combustionLoopBlend}). The current engine cannot
- * reach that threshold, so today this is entirely dormant - but a faster engine,
- * a four-stroke or a second cylinder will not need the audio rewritten to arrive.
+ * <h2>Scaling across layouts, and across the gaps</h2>
+ * The measured rate does two jobs, and both of them are mixing rather than
+ * scheduling. Below {@link EngineTuning#SOUND_COMBUSTION_SPARSE_RATE_HZ} a pulse
+ * is the entire voice of the engine and is weighted accordingly
+ * ({@link EngineTuning#combustionSparseGain}); above
+ * {@link EngineTuning#SOUND_COMBUSTION_PULSE_MAX_RATE_HZ} the pulses are thinned
+ * by an integer stride while a continuous layer fades in underneath them
+ * ({@link EngineTuning#combustionLoopBlend}). The first is live today - it is what
+ * separates an inline-1 at 0.53 Hz from an inline-4 at 6.4. The second is still
+ * dormant, and exists so a faster engine is a tuning change rather than a rewrite.
  *
  * <h2>Why this is not in the client package</h2>
  * It is only ever driven from client-side paths, but it touches no client-only
@@ -168,9 +176,14 @@ public final class CombustionAudio {
 		// Pulses give way as the continuous layer takes over, so the two never
 		// simply stack. Zero blend at every rate this engine can reach today.
 		float blend = 1.0F - EngineTuning.combustionLoopBlend(eventRateHz);
+		// And weight for how alone this bang is. A four-stroke single fires every
+		// 720 degrees, so each of its pulses has a whole cycle of mechanical bed to
+		// carry on its own; an inline-4's pulses carry each other. This scales the
+		// event, it never invents one.
+		float sparse = EngineTuning.combustionSparseGain(eventRateHz);
 		float volume = (running ? EngineTuning.SOUND_COMBUSTION_VOLUME
 			: EngineTuning.SOUND_COMBUSTION_STARTING_VOLUME)
-			* jitter(random, EngineTuning.SOUND_COMBUSTION_VOLUME_JITTER) * blend;
+			* jitter(random, EngineTuning.SOUND_COMBUSTION_VOLUME_JITTER) * blend * sparse;
 		float pitch = EngineTuning.combustionPulsePitch(engine.getMechanicalRpm())
 			* jitter(random, EngineTuning.SOUND_COMBUSTION_PITCH_JITTER)
 			* (running ? 1.0F : STARTING_PITCH_FACTOR);

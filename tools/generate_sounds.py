@@ -260,52 +260,127 @@ def engine_mechanical():
     reads as a bang would make a dead engine sound alive, which is precisely the
     confusion the two-layer split exists to remove.
 
-    Built from what actually makes noise while a crank goes round:
+    ONE ENGINE CYCLE, NOT ONE REVOLUTION
+    ------------------------------------
+    This loop used to carry one compression swell and one over-centre knock per
+    CRANK REVOLUTION, which was right for an engine that fired every 360 degrees
+    and is wrong for a four-stroke. A four-stroke compresses once per 720: on the
+    other upstroke the exhaust valve is open and the piston is pushing burnt gas
+    out against almost nothing. Leaving the old shape in place put a rhythmic
+    mid-range knock on the non-firing revolution, exactly halfway between two real
+    bangs - which is heard as a second firing event, and is the reason the engine
+    sounded out of time with itself even though every combustion pulse was landing
+    on a genuine paid event.
+
+    So the loop is now one full 720-degree cycle. It still spans two crank
+    revolutions in two seconds, so the pitch mapping, the rumble and the whirr are
+    untouched; what changed is that the load pattern inside it is the four-stroke's:
+
+        cycle    0 ......... 180 ......... 360 ......... 540 ....... 720
+        stroke   COMPRESSION  |   POWER     |  EXHAUST    |  INTAKE
+        piston   BDC -> TDC   | TDC -> BDC  | BDC -> TDC  | TDC -> BDC
+        valves   shut         | shut        | exhaust     | intake
+        load     builds       | gives back  | breathing   | breathing
+
+    Built from what actually makes noise while a four-stroke crank goes round:
 
       * bearing and flywheel rumble  - low, continuous, the bed of the whole thing
-      * compression swell            - once per revolution the piston comes up
-                                       against a closed cylinder, the load builds,
-                                       and it releases over top dead centre. This
-                                       is the "rrrr ... rrrr" of cranking
-      * over-centre knock            - a soft mechanical thud as it goes over, not
-                                       a firing event: no bark, no low pressure
-                                       body, and about a fifth of the level
-      * gear whirr                   - a quiet fixed tone, integer cycles so it
-                                       loops seamlessly
+      * compression swell            - ONCE per cycle, over the compression stroke,
+                                       releasing over top dead centre. This is the
+                                       "rrrr ... rrrr" of cranking
+      * over-centre knock            - a soft mechanical thud as it goes over the
+                                       compression TDC, not a firing event: no bark,
+                                       no low pressure body, and about a fifth of
+                                       the level
+      * exhaust-TDC tick             - the piston also reverses at 540, but with a
+                                       valve open and no gas spring behind it. It
+                                       gets a tick, bright only and a third of the
+                                       knock, because that reversal is real and a
+                                       thud there is what caused the problem
+      * breathing                    - band-limited hiss over the exhaust and intake
+                                       strokes, driven by valve lift times piston
+                                       speed, which is the gas actually moving. It
+                                       is what fills the non-firing revolution with
+                                       something the ear reads as a machine working
+                                       rather than as a machine missing a beat
+      * gear and cam whirr           - quiet fixed tones, integer cycles so they
+                                       loop seamlessly. The cam one is at half the
+                                       gear rate because that is what a camshaft
+                                       turns at
 
-    One revolution per second across a two-second loop: two revolutions exactly,
-    so it wraps, and close enough to the engine's 1.07 rev/s idle that the swell
-    rate reads as this engine at its reference speed.
+    Two revolutions per two-second loop, one cycle, so it wraps; one revolution per
+    second is close enough to the engine's 1.07 rev/s idle that the rates read as
+    this engine at its reference speed.
     """
     rev_hz = 1.0
-    dur = 2.0                        # 2 revolutions exactly -> seamless
+    dur = 2.0                        # 1 engine cycle = 2 revolutions -> seamless
     n = int(SR * dur)
-    period = SR / rev_hz
+    period = SR / rev_hz             # one CRANK revolution, in samples
+    cycle = 2.0 * period             # one 720-degree ENGINE cycle
     buf = np.zeros(n)
     t = np.arange(n) / SR
 
-    # Compression: a slow asymmetric build, then a fast release over the top.
-    phase = (t * rev_hz) % 1.0
-    load = np.where(phase < 0.72, (phase / 0.72) ** 1.8, np.exp(-(phase - 0.72) / 0.05))
+    # Where we are in the 720-degree cycle, and in the revolution inside it.
+    cyc = (t * rev_hz / 2.0) % 1.0                    # 0..1 over 720 degrees
+    theta = 2.0 * np.pi * ((t * rev_hz) % 1.0)        # crank angle, radians
+    piston_speed = np.abs(np.sin(theta))              # 0 at both dead centres
+
+    # Compression: a slow asymmetric build over the compression stroke only, then
+    # a fast release over the top. Zero everywhere else - there is no second one.
+    comp_phase = np.clip(cyc / 0.25, 0.0, None)
+    load = np.where(cyc < 0.25 * 0.72, (comp_phase / 0.72) ** 1.8,
+                    np.where(cyc < 0.5, np.exp(-(cyc - 0.25 * 0.72) / (0.25 * 0.05)), 0.0))
+    load = np.clip(load, 0.0, 1.0)
+
+    # Pumping: how hard the engine is shifting gas. Exhaust and intake only, and
+    # shaped by the same raised-cosine lift the simulation runs, times piston
+    # speed - so it peaks mid-stroke, where the flow really is fastest.
+    lift = np.where((cyc >= 0.5) & (cyc < 1.0),
+                    0.5 - 0.5 * np.cos(2.0 * np.pi * ((cyc - 0.5) / 0.25 % 1.0)), 0.0)
+    pump = lift * piston_speed
 
     rumble = periodic(noise(n), lambda v: lowpass(v, 220.0))
-    buf += rumble * (0.22 + 0.34 * load)
+    buf += rumble * (0.22 + 0.30 * load + 0.07 * pump)
 
     # A low tone that sags as the compression load comes on, like the crank
     # being held back - and recovers as it goes over.
     drag_f = 44.0 - 8.0 * load
     buf += np.sin(2.0 * np.pi * np.cumsum(drag_f) / SR) * (0.12 + 0.22 * load)
 
-    for i in range(int(round(dur * rev_hz))):
-        # Deliberately mid-range and quiet. A low thump here would be a firing
-        # pulse, and this layer must never contain one.
-        add_wrapped(buf, i * period + 0.73 * period,
-                    mechanical_clack(decay=0.016, length=0.10, tone=1150.0) * 0.34)
-        add_wrapped(buf, i * period + 0.75 * period,
-                    mechanical_clack(decay=0.030, length=0.14, tone=430.0) * 0.20)
+    # Breathing. Deliberately high and quiet: it must be audible on the non-firing
+    # revolution and impossible to mistake for a bang, so it carries no low content
+    # at all and sits ABOVE the knock's own tones rather than across them. Air
+    # moving, underneath everything else.
+    breath = periodic(noise(n), lambda v: highpass(lowpass(v, 3200.0), 1100.0))
+    buf += breath * pump * 0.08
 
-    # Gear whirr: 156 cycles over 2 s, an integer, so it wraps.
+    # The over-centre knock, once, at the compression TDC (cycle 180 degrees).
+    # Deliberately mid-range and quiet. A low thump here would be a firing pulse,
+    # and this layer must never contain one.
+    #
+    # AND HALF THE LEVEL IT USED TO BE, which is the other half of the fix. This
+    # loop FREE-RUNS: Minecraft gives a looping instance a volume and a pitch and
+    # no way to seek, so nothing in here is phase-locked to the crank. A percussive
+    # event in a free-running loop therefore walks slowly in and out of step with
+    # the real combustion pulses, and at four-stroke rates it spends part of that
+    # walk sitting squarely between two bangs, which is heard as a firing rate
+    # twice what the engine has. The transients have to come from the events; the
+    # bed keeps this one as texture and no more.
+    add_wrapped(buf, 0.25 * cycle - 0.02 * period,
+                mechanical_clack(decay=0.016, length=0.10, tone=1150.0) * 0.16)
+    add_wrapped(buf, 0.25 * cycle,
+                mechanical_clack(decay=0.030, length=0.14, tone=430.0) * 0.07)
+
+    # The exhaust TDC, at cycle 540 degrees. The piston really does reverse here,
+    # so it is not silent - but there is no gas spring behind it, so it is a tick
+    # and not a thud: bright only, a third of the knock, and no 430 Hz component.
+    add_wrapped(buf, 0.75 * cycle,
+                mechanical_clack(decay=0.010, length=0.06, tone=1750.0) * 0.06)
+
+    # Gear whirr: 156 cycles over 2 s, an integer, so it wraps. The cam whirr is
+    # at half of it, which is both an integer and the speed a camshaft turns.
     buf += np.sin(2.0 * np.pi * 78.0 * t) * 0.05 * (0.6 + 0.4 * load)
+    buf += np.sin(2.0 * np.pi * 39.0 * t) * 0.030 * (0.5 + 0.5 * lift)
 
     return normalize(body_periodic(buf, 0.5), 0.58)
 
@@ -359,7 +434,8 @@ def engine_spark():
     return normalize(declick(tick * 0.7 + ring, ms=1.5), 0.5)
 
 
-def combustion_pulse(sweep_from, sweep_to, decay, bark_hi, bark_decay, tick_tone, tick_level, peak):
+def combustion_pulse(sweep_from, sweep_to, decay, bark_hi, bark_decay, tick_tone, tick_level, peak,
+                     blowdown=0.13, blowdown_decay=0.105):
     """
     One charge burning: the PUT.
 
@@ -371,8 +447,9 @@ def combustion_pulse(sweep_from, sweep_to, decay, bark_hi, bark_decay, tick_tone
                                         raised-cosine attack instead of an
                                         instantaneous onset, and there is no
                                         broadband crack at sample zero
-      * it must not be an EXPLOSION   - so the noise decays inside 40 ms and there
-                                        is no long tail
+      * it must not be an EXPLOSION   - so the BRIGHT noise decays inside 40 ms and
+                                        the only thing that outlasts it is the dark,
+                                        quiet blowdown described below
       * it must not be a CLICK        - so the high transient sits 7 ms in, at a
                                         fifth of the level, behind the body
       * it must not be a BASS DRUM    - so the low body SWEEPS downward as the
@@ -385,8 +462,23 @@ def combustion_pulse(sweep_from, sweep_to, decay, bark_hi, bark_decay, tick_tone
     The variants differ only in sweep, brightness and tick colour. They are the
     same cylinder firing under slightly different conditions, which is what
     cycle-to-cycle variation in a real single is.
+
+    THE BLOWDOWN, AND WHY A FOUR-STROKE NEEDS IT
+    --------------------------------------------
+    A four-stroke fires once per 720 degrees, which at this engine's speeds is
+    every 1.9 seconds at idle. A pulse tuned for an engine that fired twice that
+    often is a short event with a long silence after it, and a short event in a
+    long silence does not read as an engine labouring - it reads as something
+    tapping. Each bang has to be worth the wait.
+
+    So the pulse now carries the exhaust blowdown: the burnt charge leaving through
+    the valve after the bang, dark and quiet and about a tenth of a second long. It
+    is deliberately NOT a longer version of the bark. The bark is bright, it is what
+    would read as an explosion if it were allowed to ring on, and it still decays
+    inside 40 ms. This is underneath it, rolled off above 520 Hz, at an eighth of
+    the level - the difference between a crack and a PUTT.
     """
-    n = int(SR * 0.34)
+    n = int(SR * 0.46)
     buf = np.zeros(n)
 
     # 1. Pressure body. Leads, sweeps down, and rises rather than starting.
@@ -404,25 +496,35 @@ def combustion_pulse(sweep_from, sweep_to, decay, bark_hi, bark_decay, tick_tone
     t = np.arange(n) / SR
     buf += lowpass(noise(n), 240.0) * np.exp(-t / 0.045) * 0.18
 
+    # 4. The blowdown: burnt gas leaving the port after the event. Dark - rolled
+    # off hard above 520 Hz and below 120 - quiet, and the only layer allowed to
+    # outlast the bark. Starts 22 ms in, behind the pressure peak, because the
+    # valve does not open until the charge has done its work.
+    add_at(buf, SR * 0.022,
+           highpass(lowpass(noise(int(SR * 0.34)), 520.0), 120.0)
+           * np.exp(-np.arange(int(SR * 0.34)) / SR / blowdown_decay) * blowdown)
+
     return normalize(declick(body(buf, 0.66), ms=4.0), peak)
 
 
 def engine_fire_1():
     """The baseline pulse: mid sweep, moderately bright port."""
-    return combustion_pulse(sweep_from=76.0, sweep_to=41.0, decay=0.062, bark_hi=1500.0,
+    return combustion_pulse(sweep_from=76.0, sweep_to=41.0, decay=0.072, bark_hi=1500.0,
                             bark_decay=0.026, tick_tone=2300.0, tick_level=0.20, peak=0.76)
 
 
 def engine_fire_2():
     """A slightly softer cycle: lower sweep, duller port, a touch longer."""
-    return combustion_pulse(sweep_from=70.0, sweep_to=37.0, decay=0.070, bark_hi=1250.0,
-                            bark_decay=0.030, tick_tone=1950.0, tick_level=0.16, peak=0.73)
+    return combustion_pulse(sweep_from=70.0, sweep_to=37.0, decay=0.082, bark_hi=1250.0,
+                            bark_decay=0.030, tick_tone=1950.0, tick_level=0.16, peak=0.73,
+                            blowdown=0.15, blowdown_decay=0.120)
 
 
 def engine_fire_3():
     """A crisper cycle: higher sweep, brighter port, faster decay."""
-    return combustion_pulse(sweep_from=82.0, sweep_to=45.0, decay=0.055, bark_hi=1800.0,
-                            bark_decay=0.023, tick_tone=2650.0, tick_level=0.23, peak=0.78)
+    return combustion_pulse(sweep_from=82.0, sweep_to=45.0, decay=0.064, bark_hi=1800.0,
+                            bark_decay=0.023, tick_tone=2650.0, tick_level=0.23, peak=0.78,
+                            blowdown=0.11, blowdown_decay=0.090)
 
 
 def engine_start():
