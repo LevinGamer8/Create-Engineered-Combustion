@@ -391,6 +391,14 @@ same trade as the arming reset.
 
 ## 10. The valvetrain, and what it is for
 
+> **Superseded in part.** The first in-game R1 test found the Camshaft
+> unreadable as an item, invisible as an installed part, and the 2:1 timing
+> relationship drawn nowhere at all. The redesign, the timing drive it gained,
+> and the two geometry clashes it turned up are in
+> `milestone-15b-camshaft-visuals.md`. The mechanism described below is
+> unchanged; what it looks like is not.
+
+
 Side-mounted **OHV with pushrods and rockers**, not overhead cam. That was a
 deliberate design choice and it earns its keep twice over here.
 

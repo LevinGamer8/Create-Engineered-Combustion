@@ -64,6 +64,24 @@ second firing. Listen for that specifically.
 | **V9** | Reconnect to the world while an engine is running and watch immediately. | Valves settle onto the right stroke within a second or two, without a visible jump through half a cycle. |
 | **V10** | Listen to R1, then R2, then R4 at idle. | R1 distinctly lumpy, R2 **uneven** (two bangs then a gap), R4 smooth. |
 
+
+## V11-V18 — the Camshaft and the timing drive
+
+Why these exist is in `milestone-15b-camshaft-visuals.md`. In one line: the item
+was an unreadable comb, the installed camshaft was under a cover, and the 2:1
+that defines a four-stroke was drawn nowhere at all.
+
+| | Do this | Expect |
+| --- | --- | --- |
+| **V11** | Look at the Camshaft in your inventory. | A toothed timing wheel at one end, a shaft, three lobes with visible noses. It should be identifiable **without reading the name**. |
+| **V12** | Drop one on the ground, and put one in an item frame. | Still recognisable in both. Not a sliver in the grass, not a gear seen dead end-on. |
+| **V13** | Install it and look at the engine's flank. | The **same part**: same wheel, same lobes, same materials. Not one mechanism in the hand and an unrelated machine in the engine. |
+| **V14** | Look along the intake flank of a running R1 at the camshaft. | The shaft is **visible**, not under a cover, carried by bearing caps, with two lobes whose noses you can watch come round. |
+| **V15** | Look at the front of the engine — the end **opposite** the Flywheel. | An open timing case with two gears in it: a small one above, and one visibly **twice its diameter** below on the camshaft. Watch them turn: the big one goes round once for every two of the small one. |
+| **V16** | Watch the gears where their teeth meet. | They turn in **opposite** directions, and nothing passes through anything. |
+| **V17** | Watch one cylinder's pushrod and rocker through a full cycle. | The pushrod's foot stays **on** its lobe at every angle, the rocker visibly **pivots** rather than sliding, and its brass pad rises as the valve on the far side goes down. |
+| **V18** | Find the Spark Plug and the ignition switch. | The plug is still on the head and reachable; the switch has moved along the crankcase, out of the camshaft's way, and is still on the intake flank at eye level. |
+
 ---
 
 ## P — Ponder
