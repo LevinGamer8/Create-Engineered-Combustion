@@ -1681,6 +1681,22 @@ public final class EngineState {
 			.camAngle(getRenderCycleAngleDegrees(partialTicks));
 	}
 
+	/**
+	 * The camshaft angle <b>one section</b> of the engine draws its slice of the
+	 * shaft at.
+	 *
+	 * <p>The same convention the crankshaft already uses, and for the same reason:
+	 * each section draws one part at its own phase, so a cylinder's lobes are always
+	 * the ones lifting that cylinder's own pushrods. Drawing every section at the
+	 * master angle instead put an inline-4's four lobe pairs all at the same clock
+	 * position while their four pushrods moved a quarter cycle apart, which is a
+	 * mechanism that cannot exist.
+	 */
+	public float getLocalRenderCamshaftAngleDegrees(int cylinder, float partialTicks) {
+		return dev.engineeredcombustion.content.engine.fourstroke.CamshaftTiming
+			.camAngle(getLocalRenderCycleAngleDegrees(cylinder, partialTicks));
+	}
+
 	/** Whether this engine has a Camshaft, and therefore a valvetrain at all. */
 	public boolean hasCamshaft() {
 		return camshaftInstalled;

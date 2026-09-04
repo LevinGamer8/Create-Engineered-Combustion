@@ -19,6 +19,8 @@ CRANK_AXIS_Y, CRANK_R, ROD_L = 8.0, 3.0, 14.5
 # Must match the same names in tools/generate_engine_models.py and, for the
 # swing, CamshaftTiming.ROCKER_MAX_SWING_DEGREES in the Java.
 CAM_CY, CAM_CZ = 4.5, -0.9
+TIMING_DRIVE_R, TIMING_CAM_R = 1.5, 3.0
+TIMING_DRIVE_CY, TIMING_DRIVE_CZ = CAM_CY + TIMING_DRIVE_R + TIMING_CAM_R, CAM_CZ
 VALVE_X = (5.0, 11.0)
 ROCKER_PIVOT_Y, ROCKER_PIVOT_Z = 19.9, 0.2
 ROCKER_SWING = 10.0
@@ -269,9 +271,26 @@ def section(theta, index, count, carburetor, sump, spark_plug=True):
     # Translate onto the real axis, THEN turn about the block centre - which is
     # exactly the pair CrankshaftRenderer applies, in the same order, because
     # Create's rotateCentered can only pivot about the block's own centre.
-    q += quads_of("block/camshaft_running_x.json",
+    # The first section carries the timing drive - the sprocket on the end of the
+    # camshaft, the smaller one on the crank, and the chain between them. One per
+    # engine, at the free end, opposite the flywheel.
+    q += quads_of("block/camshaft_running_drive_x.json" if index == 0
+                  else "block/camshaft_running_x.json",
                   mk_xform((x, CAM_CY - 8.0, CAM_CZ - 8.0), pivot=(8, 8, 8),
                            angle=math.radians(cycle / 2.0), axis="x"))
+    if index == 0:
+        # The drive gear turns at crank speed and the camshaft's at half, which
+        # is the whole point - and it is the same pair of transforms, translate
+        # then rotate about the block centre, for the same reason.
+        # NEGATED, and that is not a fudge: meshing gears turn in opposite senses,
+        # so a drive gear drawn the same way round as the wheel it drives would be
+        # visibly impossible at the one place a player looks - where the teeth
+        # meet. Its speed is still exactly the crank's, which is what a gear
+        # geared 1:1 to the crankshaft through the case turns at.
+        q += quads_of("block/timing_gear_x.json",
+                      mk_xform((x, TIMING_DRIVE_CY - 8.0, TIMING_DRIVE_CZ - 8.0),
+                               pivot=(8, 8, 8), angle=math.radians(-angle), axis="x"))
+        q += quads_of("block/timing_case_x.json", mk_xform((x, 0, 0)))
     lifts = (valve_lift(cycle, INTAKE_OPEN), valve_lift(cycle, EXHAUST_OPEN))
     cylinder = "block/cylinder.json"
     if back and ahead:

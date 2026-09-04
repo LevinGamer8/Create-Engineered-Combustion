@@ -49,8 +49,16 @@ import net.minecraft.core.Direction.AxisDirection;
  * drift from the pistons - see {@code CamshaftTiming}.
  *
  * <p>Nothing is drawn when no Camshaft is installed, and that absence is the whole
- * diagnostic: an engine turning over with a bare cradle where its cam should be is
- * an engine that will never fire, and it says so by looking like one.
+ * diagnostic: an engine turning over with a bare cradle and an empty timing case
+ * where its cam should be is an engine that will never fire, and it says so by
+ * looking like one.
+ *
+ * <h2>And the timing drive, on the first section only</h2>
+ * An engine has one timing drive and it goes at the free end, so the section whose
+ * cylinder index is 0 draws three things nobody else does: the camshaft slice with
+ * its gear on the end, the gear the crankshaft turns, and the case the two run in.
+ * The small wheel is half the diameter of the big one and turns twice as fast,
+ * which is the four-stroke's defining ratio drawn rather than asserted.
  */
 public class CrankshaftRenderer implements BlockEntityRenderer<CrankshaftBlockEntity> {
 
@@ -80,15 +88,48 @@ public class CrankshaftRenderer implements BlockEntityRenderer<CrankshaftBlockEn
 		// order is what makes this work: rotateCentered can only pivot about the
 		// centre, so the model is authored there, spun, and moved into its cradle
 		// afterwards - see EngineValvetrain.
-		PartialModel camshaft =
-			axis == Axis.X ? ECPartialModels.CAMSHAFT_RUNNING_X : ECPartialModels.CAMSHAFT_RUNNING_Z;
+		// The FIRST section carries the timing drive, so it draws the shaft with its
+		// gear on the end. Every other section draws the plain slice.
+		boolean drive = be.getCylinderIndex() == 0;
+		PartialModel camshaft = axis == Axis.X
+			? (drive ? ECPartialModels.CAMSHAFT_DRIVE_X : ECPartialModels.CAMSHAFT_RUNNING_X)
+			: (drive ? ECPartialModels.CAMSHAFT_DRIVE_Z : ECPartialModels.CAMSHAFT_RUNNING_Z);
+		// This section's OWN cam angle, exactly as the crank above uses this
+		// section's own crank angle. A shaft drawn at the master angle would put an
+		// inline-4's four lobe pairs at one clock position while their four pushrods
+		// moved a quarter cycle apart.
 		float camAngle = (float) Math.toRadians(be.getEngineState()
-			.getRenderCamshaftAngleDegrees(partialTicks));
+			.getLocalRenderCamshaftAngleDegrees(be.getCylinderIndex(), partialTicks));
 		float offsetZ = EngineValvetrain.camOffsetZ();
 		CachedBuffers.partial(camshaft, be.getBlockState())
 			.translate(axis == Axis.X ? 0.0F : offsetZ, EngineValvetrain.camOffsetY(),
 				axis == Axis.X ? offsetZ : 0.0F)
 			.rotateCentered(camAngle, rotationAxis)
+			.light(light)
+			.renderInto(ms, vertices);
+
+		if (!drive)
+			return;
+
+		// The case, which does not move, and the gear the crankshaft turns, which
+		// does. NEGATED, and that is not a fudge: meshing wheels turn in opposite
+		// senses, so a drive gear drawn the same way round as the one it drives
+		// would be visibly impossible at the one place a player looks - where the
+		// teeth meet. Its speed is still exactly the crank's, which is what a gear
+		// geared 1:1 to the crankshaft through the case turns at, and the wheel it
+		// drives is twice its diameter and therefore turns at half. That is the
+		// four-stroke's 2:1, drawn rather than asserted.
+		CachedBuffers.partial(axis == Axis.X ? ECPartialModels.TIMING_CASE_X
+			: ECPartialModels.TIMING_CASE_Z, be.getBlockState())
+			.light(light)
+			.renderInto(ms, vertices);
+
+		float driveOffsetZ = EngineValvetrain.timingDriveOffsetZ();
+		CachedBuffers.partial(axis == Axis.X ? ECPartialModels.TIMING_GEAR_X
+			: ECPartialModels.TIMING_GEAR_Z, be.getBlockState())
+			.translate(axis == Axis.X ? 0.0F : driveOffsetZ, EngineValvetrain.timingDriveOffsetY(),
+				axis == Axis.X ? driveOffsetZ : 0.0F)
+			.rotateCentered(-angle, rotationAxis)
 			.light(light)
 			.renderInto(ms, vertices);
 	}

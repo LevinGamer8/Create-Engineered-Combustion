@@ -70,6 +70,21 @@ public class ECPartialModels {
 	public static final PartialModel CAMSHAFT_RUNNING_Z = block("camshaft_running_z");
 
 	/**
+	 * The same shaft with its timing gear on the end, drawn by the engine's FIRST
+	 * section only - an engine has one timing drive, and it goes at the free end.
+	 */
+	public static final PartialModel CAMSHAFT_DRIVE_X = block("camshaft_running_drive_x");
+	public static final PartialModel CAMSHAFT_DRIVE_Z = block("camshaft_running_drive_z");
+
+	/** The gear the crankshaft turns, meshing with the camshaft's own. */
+	public static final PartialModel TIMING_GEAR_X = block("timing_gear_x");
+	public static final PartialModel TIMING_GEAR_Z = block("timing_gear_z");
+
+	/** The case those two run in. Static: nothing about it moves. */
+	public static final PartialModel TIMING_CASE_X = block("timing_case_x");
+	public static final PartialModel TIMING_CASE_Z = block("timing_case_z");
+
+	/**
 	 * The three moving parts of one cylinder's valve gear: the pushrod the lobe
 	 * lifts, the rocker it swings, and the valve that rocker presses off its seat.
 	 *

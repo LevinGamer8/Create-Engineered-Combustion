@@ -101,14 +101,45 @@ CAM_CZ = -0.9           # camshaft centreline, just proud of the crankcase's fla
 CAM_CY = 4.5            # low in the crankshaft block, under the cutaway window so
                         # it never hides the crank a player is meant to watch
 CAM_R = 0.95            # journal radius
-CAM_LOBE_R = 1.7        # lobe tip radius. The difference is the lift.
+CAM_BASE_R = 1.3        # lobe base circle: the part the follower rides doing nothing
 PUSHROD_CZ = -0.9       # pushrods run straight up from the cam, clear of the fins
 PUSHROD_R = 0.45
+# Where each lobe's nose is authored to point, as a (z, y) unit vector, so that
+# the shaft turned to that valve's peak-lift cam angle has the nose up under the
+# follower. Intake peaks at cam 315 and exhaust at cam 225 - a quarter turn
+# apart, always, because their windows are always 180 cycle degrees apart - and
+# a nose that has to be up at cam L is authored at (cos L, -sin L).
+CAM_LOBE_NOSE = ((0.7071, 0.7071), (0.7071, -0.7071))
+
+# THE TIMING POCKET: the machined opening in the controller section's crankcase
+# that the timing drive lives in, as (x0, x1, depth in z). Everything in the
+# crankcase and the cam cradle steps around this box, and everything the drive
+# renderer draws lives inside it, so a turning gear never passes through a
+# casting. It sits at the free end of the engine, which is where a timing case
+# goes, and it is on the controller's section because an engine has one drive.
+TIMING_POCKET = (1.0, 3.6, 1.3, 11.0, 2.7)   # x0, x1, y0, y1, depth in z
 VALVE_CZ = 5.6          # valve stems, over the bore and clear of the manifold runner
 VALVE_X = (5.0, 11.0)   # intake and exhaust, side by side across the bore
 ROCKER_PIVOT_Y = 19.9   # cylinder-local, above the head and below the manifold rail
 ROCKER_PIVOT_Z = 0.2    # inboard of the pushrods, so the short arm reaches out to them
 VALVE_LIFT = 1.1        # how far a valve travels off its seat, in model units
+# Lobe tip radius, and it is DERIVED. A follower riding a lobe rises by exactly
+# the difference between the base circle and the nose, so a lobe whose
+# eccentricity did not equal the lift would have its pushrod float clear of the
+# nose at full lift - which is precisely what happened while this was a number of
+# its own, and is the kind of thing nobody sees until they look for it.
+CAM_LOBE_R = CAM_BASE_R + VALVE_LIFT
+
+# WHERE THE CASTING HAS TO GET OUT OF THE LOBES' WAY.
+#
+# A lobe sweeps a circle of CAM_LOBE_R about an axis only CAM_CZ outside the
+# block, so anything on the intake flank inside that circle is something the
+# nose passes through - and the crankcase's own lower rail was. The gallery is
+# machined out to a thin web over the bands the lobes actually swing in, and the
+# rail is left full depth between them, which is what a cam-in-block engine
+# looks like and what leaves solid casting for the controls to sit on.
+CAM_GALLERY_BANDS = tuple((x - 1.5, x + 1.5) for x in VALVE_X)
+CAM_GALLERY_Z = 1.9     # the web's inner face: CAM_LOBE_R clear of the axis
 HEAD_TOP = 17.8         # where the head casting stops, and the valves emerge
 
 
@@ -222,6 +253,27 @@ def fine_steps(half, flat, corner):
     return [(half, flat), ((half + corner) / 2, (flat + corner) / 2),
             (corner, corner), ((flat + corner) / 2, (half + corner) / 2),
             (flat, half)]
+
+
+def round_section_x(cy, cz, x0, x1, section, tex):
+    """A round section on a shaft that runs along X, built as strips.
+
+    The same construction as round_section_at and for the same reason - strips
+    partition the silhouette so no two boxes share a contested plane - but with
+    the extrusion along the crank axis instead of up. Everything on the camshaft
+    is a disc on a shaft, so this is how all of it is drawn.
+
+    `section` is a widest-first list of (y half extent, z half extent) pairs.
+    """
+    out = []
+    for k in range(len(section) - 1):
+        (a, b), (inner, _) = section[k], section[k + 1]
+        for sign in (-1, 1):
+            y0, y1 = sorted((cy + sign * inner, cy + sign * a))
+            out.append(el((x0, y0, cz - b), (x1, y1, cz + b), tex))
+    a, b = section[-1]
+    out.append(el((x0, cy - a, cz - b), (x1, cy + a, cz + b), tex))
+    return out
 
 
 def round_section_at(cx, cz, y0, y1, section, tex, top_tex=None):
@@ -424,9 +476,43 @@ def model(textures, specs, parent="minecraft:block/block", display=None):
 
 # Parts that deliberately do not fill their block look lost in an inventory
 # slot at the standard 0.625, so their icons are scaled up.
+#
+# What "correct" means here is measurable rather than a matter of taste: a full
+# block item at the standard 0.625 covers about 26 units of screen at the
+# standard pose, so a part scaled until its own longest projected span reaches
+# the same 26 fills the slot exactly as a block does and no more. Anything past
+# that is cropped by the slot, which is worse than being small.
 def gui_scale(scale, rotation=(30, 225, 0)):
     return {"gui": {"rotation": list(rotation), "translation": [0, 0, 0],
                     "scale": [scale, scale, scale]}}
+
+
+def long_part_display(gui, rotation=(30, 225, 0)):
+    """The display block for a part that is a SHAFT rather than a box.
+
+    Three contexts need saying for one, and only three:
+
+      * <b>gui</b> - as gui_scale, above.
+      * <b>ground</b> - block/block drops items at 0.25, which is right for a
+        cube and wrong for a shaft: a quarter-scale shaft on the floor is a
+        four-unit sliver in the grass, and a player who drops one has to hunt
+        for it. Scaled up and lifted so it lies on the ground legibly.
+      * <b>fixed</b> - an item frame shows the model face-on at the default
+        rotation, which for a part authored along X is dead end-on: a frame
+        would show a Camshaft as a gear and nothing else. Turned to the same
+        pose the inventory uses so the frame shows the part.
+
+    The two held poses are deliberately left to block/block. Every other engine
+    part in this mod inherits them, a shaft carried like a rod reads perfectly
+    well at [75, 45], and one part posing differently in the hand from the rest
+    of the set would be the odd thing rather than the fixed one.
+    """
+    return {"gui": {"rotation": list(rotation), "translation": [0, 0, 0],
+                    "scale": [gui, gui, gui]},
+            "ground": {"rotation": [0, 0, 0], "translation": [0, 3, 0],
+                       "scale": [0.4, 0.4, 0.4]},
+            "fixed": {"rotation": [0, 235, 0], "translation": [0, 0, 0],
+                      "scale": [0.62, 0.62, 0.62]}}
 
 
 def sprite_item(path):
@@ -461,7 +547,11 @@ CASE_TEX = {"particle": "crankshaft", "case": "crankshaft",
 # visible behind it. That rail is only three units tall, so the switch is small
 # and its travel is short; what makes the two positions readable at a glance is
 # that the knob moves from below the pivot to above it.
-SWITCH_X0, SWITCH_X1 = 10.6, 12.8
+# MOVED, and not for looks: at its old place the exhaust lobe swept straight
+# through it. The bands the lobes swing in are CAM_GALLERY_BANDS, and this is
+# the widest piece of solid rail outside them - so the switch is on full-depth
+# casting, in front of nothing, and out of the valve gear's way.
+SWITCH_X0, SWITCH_X1 = 12.55, 14.75
 
 
 def ignition_switch_elements(ignition_on, near_flank):
@@ -480,14 +570,14 @@ def ignition_switch_elements(ignition_on, near_flank):
 
     e = [
         part(SWITCH_X0, 2.2, SWITCH_X1, 4.9, 0.1, 0.7, "cast"),      # mounting plate
-        part(11.25, 3.1, 12.15, 4.0, 0.05, 0.9, "steel"),            # pivot boss
+        part(13.2, 3.1, 14.1, 4.0, 0.05, 0.9, "steel"),            # pivot boss
     ]
     if ignition_on:
-        e.append(part(11.45, 3.55, 11.95, 4.65, 0.2, 0.78, "steel"))   # arm, raised
-        e.append(part(11.15, 4.05, 12.25, 4.75, 0.06, 0.98, "brass"))  # knob
+        e.append(part(13.4, 3.55, 13.9, 4.65, 0.2, 0.78, "steel"))   # arm, raised
+        e.append(part(13.1, 4.05, 14.2, 4.75, 0.06, 0.98, "brass"))  # knob
     else:
-        e.append(part(11.45, 2.45, 11.95, 3.55, 0.2, 0.78, "steel"))   # arm, dropped
-        e.append(part(11.15, 2.35, 12.25, 3.05, 0.06, 0.98, "brass"))
+        e.append(part(13.4, 2.45, 13.9, 3.55, 0.2, 0.78, "steel"))   # arm, dropped
+        e.append(part(13.1, 2.35, 14.2, 3.05, 0.06, 0.98, "brass"))
     return e
 
 
@@ -570,10 +660,55 @@ def crankcase_elements(ignition_on=False, joined=False):
         e.append(el((x0, -0.65, 1.0), (x0 + 1.1, -0.05, 1.35), "steel"))
         e.append(el((x0, -0.65, 14.65), (x0 + 1.1, -0.05, 15.0), "steel"))
     # --- side walls, cut away so the crank is visible ---------------------
+    #
+    # The intake flank of the FIRST section is cut away twice: once for the crank,
+    # as every section is, and once more for the timing pocket - see
+    # TIMING_POCKET, which is where the drive gear and the camshaft's own gear
+    # live. That pocket is on the controller's section only, because an engine
+    # has one timing drive, and it is at the free end because that is where a
+    # timing case goes.
+    px0, px1, py0, py1, pz = TIMING_POCKET
     for z0, z1 in ((0.5, 2.5), (13.5, 15.5)):
-        e.append(el((1.0, 2.0, z0), (15.0, 5.0, z1), "case"))      # lower rail
-        e.append(el((1.0, 12.8, z0), (15.0, 14.0, z1), "case"))    # upper rail
-        e.append(el((1.0, 2.0, z0), (3.5, 14.0, z1), "case"))      # post
+        pocket = not joined and z0 < 8.0
+        # The rails and the front post, cut around the pocket where they cross it
+        # and drawn whole where they do not.
+        # THE CAM GALLERY, on the intake flank only: the lower rail is machined
+        # back to a thin web over the bands the lobes swing in, and left at full
+        # depth between them. See CAM_GALLERY_BANDS.
+        runs = []
+        for y0, y1, a, b in ((2.0, 5.0, 1.0, 15.0), (12.8, 14.0, 1.0, 15.0),
+                             (2.0, 5.0, 1.0, 3.5), (5.0, 14.0, 1.0, 3.5)):
+            if z0 > 8.0 or y0 >= 5.0:
+                runs.append((y0, y1, a, b, z0))
+                continue
+            edge = a
+            for band0, band1 in CAM_GALLERY_BANDS:
+                band0, band1 = max(band0, a), min(band1, b)
+                if band1 <= edge + 0.05 or band1 <= band0 + 0.05:
+                    continue
+                if band0 > edge + 0.05:
+                    runs.append((y0, y1, edge, band0, z0))
+                runs.append((y0, y1, band0, band1, CAM_GALLERY_Z))
+                edge = band1
+            if edge < b - 0.05:
+                runs.append((y0, y1, edge, b, z0))
+        for y0, y1, a, b, zg in runs:
+            if not (pocket and a < px1 and b > px0 and y0 < py1 and y1 > py0):
+                e.append(el((a, y0, zg), (b, y1, z1), "case"))
+                continue
+            if a < px0 - 0.2:
+                e.append(el((a, y0, zg), (px0, y1, z1), "case"))
+            if px1 < b - 0.2:
+                e.append(el((px1, y0, zg), (b, y1, z1), "case"))
+            # The wall behind the pocket, so the gears are seen against a
+            # machined face and not against a hole into nothing.
+            if pz < z1:
+                e.append(el((max(a, px0), y0, pz), (min(b, px1), y1, z1), "case"))
+            # And whatever of this piece lies above or below the opening.
+            if y1 > py1 + 0.2:
+                e.append(el((max(a, px0), py1, zg), (min(b, px1), y1, z1), "case"))
+            if y0 < py0 - 0.2:
+                e.append(el((max(a, px0), y0, zg), (min(b, px1), py0, z1), "case"))
         e.append(el((12.5, 2.0, z0), (15.0, 14.0, z1), "case"))    # post
     # --- the main oil gallery, along both flanks just above the joint band.
     # It is the lubrication system made visible: one pipe fed from the one Oil
@@ -585,11 +720,25 @@ def crankcase_elements(ignition_on=False, joined=False):
     # state: at a seam two of them meet and read as a coupling, and at the end of
     # the engine the one that is left reads as the blank cap on a pipe run.
     for za, zb in ((0.15, 0.95), (15.05, 15.85)):
-        e.append(el((back, 1.5, za), (15.5, 2.15, zb), "steel"))
+        if not joined and za < 8.0:
+            # Round the timing pocket, where the camshaft's gear sweeps through
+            # the line the pipe would otherwise take.
+            e.append(el((px1, 1.5, za), (15.5, 2.15, zb), "steel"))
+        else:
+            e.append(el((back, 1.5, za), (15.5, 2.15, zb), "steel"))
         e.append(el((0.1, 1.25, za - 0.1), (1.4, 2.4, zb + 0.1), "cast"))
         e.append(el((14.6, 1.25, za - 0.1), (15.9, 2.4, zb + 0.1), "cast"))
     # --- end walls carrying the main bearings ------------------------------
-    e.append(el((0.0, 2.0, 0.5), (2.0, 14.0, 15.5), "case"))
+    if joined:
+        e.append(el((0.0, 2.0, 0.5), (2.0, 14.0, 15.5), "case"))
+    else:
+        # The controller's front wall IS the timing case, so its intake corner is
+        # open to the depth of the pocket. Everything above and inboard of the
+        # gears is untouched, and the front main bearing web behind it - the box
+        # at z 3.5 and in - is not cut at all.
+        e.append(el((0.0, 2.0, pz), (2.0, 14.0, 15.5), "case"))
+        e.append(el((0.0, py1, 0.5), (2.0, 14.0, pz), "case"))
+        e.append(el((0.0, 2.0, 0.5), (2.0, py0, pz), "case"))
     e.append(el((14.0, 2.0, 0.5), (16.0, 14.0, 15.5), "case"))
     e.append(el((0.0, 3.5, 3.5), (3.5, 12.5, 12.5), "case"))
     e.append(el((12.5, 3.5, 3.5), (16.0, 12.5, 12.5), "case"))
@@ -983,18 +1132,39 @@ def camshaft_cradle_elements(joined):
     """
     back = -0.5 if joined else 0.5
     z0, z1 = -VALVETRAIN_REACH + 0.1, CAM_CZ + 1.4
-    e = [
-        el((back, CAM_CY - 2.0, z0), (15.5, CAM_CY - 1.1, z1), "cast"),   # cradle
-        el((back, CAM_CY + 1.1, z0), (15.5, CAM_CY + 2.0, z1), "cast"),   # cap
-        # The back wall, closing the housing against the crankcase so the cam is
-        # seen against cast iron rather than against a hole into the block.
-        el((back, CAM_CY - 2.0, z1 - 0.4), (15.5, CAM_CY + 2.0, z1), "case"),
-    ]
-    # Bearing webs. One at each end of every section, so a seam gets two halves
-    # that read as one wide bearing and the end of the engine gets a finished cap.
+    px0, px1 = TIMING_POCKET[0], TIMING_POCKET[1]
+    e = []
+    # THE CAP IS NOT CONTINUOUS ANY MORE, and that is the fix rather than an
+    # omission. A cap running the length of the section put a lid over the one
+    # part of a four-stroke worth watching: from anywhere above the horizontal a
+    # player saw the housing and never the shaft. It also, at CAM_LOBE_R, was
+    # geometry a turning lobe passed straight through.
+    #
+    # So the cradle keeps its lower rail, which the shaft sits in, and its cap is
+    # cut back to the bearings that need one - which is what an overhead-valve
+    # engine with its cam cover off actually looks like, and what leaves the
+    # lobes open to the sky.
+    # The gallery's machined floor, over each band the casting was cut back for -
+    # so the camshaft is seen against a finished face there rather than against a
+    # hole, and against the full rail everywhere else.
+    for band0, band1 in CAM_GALLERY_BANDS:
+        if not joined and band1 <= px1:
+            continue
+        e.append(el((max(band0, px1 if not joined else band0), CAM_CY - 2.9, 1.5),
+                    (band1, CAM_CY + 2.9, CAM_GALLERY_Z), "case"))
+    # Bearing webs, and the cap over each. One at each end of every section, so a
+    # seam gets two halves that read as one wide bearing and the end of the
+    # engine gets a finished cap.
     for x0, x1 in ((0.0, 1.4), (14.6, 16.0)):
         e.append(el((x0, CAM_CY - 2.5, z0 - 0.05), (x1, CAM_CY + 2.5, z1 + 0.05), "case"))
+        e.append(el((x0, CAM_CY + 1.1, z0), (x1, CAM_CY + 2.0, z1), "cast"))
         e.append(el((x0 + 0.35, CAM_CY + 1.3, z0 - 0.02), (x1 - 0.35, CAM_CY + 2.1, z0 + 0.35), "brass"))
+    # And an intermediate bearing cap between the two lobes, so a shaft this long
+    # is still visibly carried rather than cantilevered off its ends.
+    mid = (VALVE_X[0] + VALVE_X[1]) / 2.0
+    e.append(el((mid - 0.9, CAM_CY - 2.5, z0 - 0.05), (mid + 0.9, CAM_CY + 2.5, z1 + 0.05), "case"))
+    e.append(el((mid - 0.9, CAM_CY + 1.1, z0), (mid + 0.9, CAM_CY + 2.0, z1), "cast"))
+    e.append(el((mid - 0.55, CAM_CY + 1.3, z0 - 0.02), (mid + 0.55, CAM_CY + 2.1, z0 + 0.35), "brass"))
     return e
 
 
@@ -1310,7 +1480,43 @@ def air_filter_elements():
 # All four are pure functions of the engine's one authoritative cycle position -
 # see CamshaftTiming and ValveTiming in the Java - so none of them has an
 # animation timer and none of them can drift from the piston below it.
-def camshaft_running_elements():
+# THE TIMING DRIVE, and why it looks the way it does.
+#
+# The 2:1 between crank and camshaft is the defining visible fact of a
+# four-stroke, so it has to be drawn. Drawing it as a gear on the crankshaft
+# meshing with a gear on the camshaft turns out to be impossible here, and the
+# arithmetic is worth writing down so nobody tries again:
+#
+#   * the crankshaft runs down the middle of its block, at (8, 8);
+#   * the camshaft has to be out on the intake flank, at (CAM_CY, CAM_CZ), or it
+#     cannot be seen at all - which was the whole complaint;
+#   * that is 9.56 units apart, and a meshing pair spanning 9.56 at 2:1 needs a
+#     camshaft gear 12.7 units ACROSS. Most of a block, hanging seven units out
+#     into whatever the player built beside the engine.
+#
+# What the engine has instead is what a real one has: the crankshaft turns a
+# DRIVE GEAR inside the crankcase, and that gear meshes with the camshaft's own.
+# Both of those are visible, they are the right sizes, and they mesh - so the
+# ratio is read straight off the parts. The drive gear turns at exactly crank
+# speed, which is what a gear geared 1:1 to the crankshaft does, and the wheel it
+# drives is twice its diameter and therefore turns at half. Nothing here is a
+# separate clock: the small one is given the crank angle and the big one the cam
+# angle, and the cam angle IS half the cycle by construction.
+#
+# Both live inside TIMING_POCKET, the machined opening the crankcase and the cam
+# cradle are cut back for, so a turning gear never passes through a casting.
+TIMING_X0, TIMING_X1 = 1.5, 3.3      # inside the pocket, clear of the first lobe
+TIMING_DRIVE_R = 1.5                 # the gear the crankshaft turns
+TIMING_CAM_R = 3.0                   # twice it, because that is the ratio
+
+# Where the drive gear sits: straight up from the camshaft's axis, at the mesh
+# distance, which puts it at very nearly the crankshaft's own height and clear of
+# every casting on the flank. Its axis is a stub out of the timing case.
+TIMING_DRIVE_CY = CAM_CY + TIMING_DRIVE_R + TIMING_CAM_R
+TIMING_DRIVE_CZ = CAM_CZ
+
+
+def camshaft_running_elements(drive=False):
     """The shaft and its lobes, authored ON THE BLOCK CENTRE so it can be turned.
 
     Everything that rotates in this mod is drawn with Create's
@@ -1320,16 +1526,73 @@ def camshaft_running_elements():
     turns it on its own axis and then puts it where it belongs. That is why the
     numbers here are 8 and not CAM_CY: the renderer supplies the offset, and the
     previewer applies the identical pair.
+
+    Built from the SAME two builders the item is - cam_lobe_elements and
+    cam_gear_elements, at the same proportions and in the same three materials -
+    so what the player installs and what appears in the engine cannot drift into
+    looking like different machines. The item shows three lobes because it is an
+    icon; the installed shaft shows the two its cylinder actually has.
+
+    WHERE THE NOSES POINT is not decoration. Each lobe is authored so that when
+    the shaft has turned to that valve's peak-lift cam angle, its nose is pointing
+    straight up at the follower - see CamshaftTiming.lobeAngleDegrees, which is
+    where those angles come from. The intake peaks at cam 315 and the exhaust at
+    cam 225, a quarter turn apart, which is what puts the two noses on the two
+    octants below.
     """
-    e = [el((0.0, 8.0 - CAM_R, 8.0 - CAM_R), (16.0, 8.0 + CAM_R, 8.0 + CAM_R), "steel")]
-    for x in VALVE_X:
-        # A lobe is a round base circle with a nose on it. The base circle is the
-        # journal widened - the follower rides it and nothing happens - and the
-        # nose is what a player watches come round and push.
-        e.append(el((x - 1.05, 6.75, 6.75), (x + 1.05, 9.25, 9.25), "web"))
-        e.append(el((x - 1.05, 8.6, 7.2), (x + 1.05, 8.0 + CAM_LOBE_R, 8.8), "web"))
-        e.append(el((x - 1.05, 8.0 + CAM_LOBE_R - 0.35, 7.45),
-                    (x + 1.05, 8.0 + CAM_LOBE_R + 0.2, 8.55), "web"))
+    e = round_section_x(8.0, 8.0, 0.0, 16.0, octagon(CAM_R), "steel")
+    for x, nose in zip(VALVE_X, CAM_LOBE_NOSE):
+        # Journals either side of each lobe, so the shaft is carried where the
+        # load is rather than reading as a bare rod with bumps threaded onto it.
+        for jx in (x - 2.3, x + 1.5):
+            e += round_section_x(8.0, 8.0, jx, jx + 0.8, octagon(CAM_R + 0.35), "steel")
+        e += cam_lobe_elements(x - 1.35, x + 1.35, 8.0, 8.0,
+                               CAM_BASE_R, CAM_LOBE_R, nose)
+    if drive:
+        e += cam_gear_elements(TIMING_X0, TIMING_X1, 8.0, 8.0, TIMING_CAM_R)
+    return e
+
+
+def timing_drive_gear_elements():
+    """The gear the crankshaft turns, authored about the block centre.
+
+    Half the diameter of the one on the camshaft, and that is the whole message:
+    a player who can see a small wheel driving one twice its size can read the
+    ratio without being told it, and the camshaft turning visibly slower than the
+    crankshaft then confirms what the wheels already said.
+    """
+    return cam_gear_elements(TIMING_X0, TIMING_X1, 8.0, 8.0, TIMING_DRIVE_R)
+
+
+def timing_case_elements():
+    """The static half of the drive: the case the pocket is machined into.
+
+    A rim round the opening so it reads as a deliberate aperture rather than as a
+    chunk missing out of the casting, the boss the drive gear's stub comes out
+    of, and the bolt bosses a real cover would be held on by. None of it moves,
+    so none of it can drift from anything.
+    """
+    px0, px1, py0, py1, pz = TIMING_POCKET
+    e = [
+        # The machined face at the back of the pocket, which is what the gears
+        # are seen against.
+        el((px0, py0, pz - 0.45), (px1, py1, pz), "deck"),
+        # The stub the drive gear runs on. It runs along the crank axis like every
+        # other shaft here, so it comes out of the pocket's INBOARD wall - the one
+        # at px1 - and not out of the face behind the gears.
+        *round_section_x(TIMING_DRIVE_CY, TIMING_DRIVE_CZ, TIMING_X1 - 0.15, px1 + 0.5,
+                         octagon(0.75), "steel"),
+    ]
+    # The rim, on three sides: the fourth is open to the cam cradle below, which
+    # is where the camshaft comes through.
+    e.append(el((px0, py1 - 0.45, -0.55), (px1, py1, pz), "deck"))
+    for x0 in (px0, px1 - 0.5):
+        e.append(el((x0, py0, -0.55), (x0 + 0.5, py1, pz), "deck"))
+    # Bolt bosses for the cover that is not fitted, which is the same joke the
+    # open cam cradle tells: this is an engine you can see the works of.
+    for y in (2.4, 6.0, 9.6):
+        e.append(el((px0 + 0.1, y, -0.8), (px0 + 0.65, y + 0.7, -0.5), "steel"))
+        e.append(el((px1 - 0.65, y, -0.8), (px1 - 0.1, y + 0.7, -0.5), "steel"))
     return e
 
 
@@ -1343,7 +1606,10 @@ def pushrod_running_elements():
     already takes.
     """
     # Cylinder-local: the cam sits at crankshaft-local CAM_CY, one block below.
-    foot = CAM_CY - 16.0 + CAM_LOBE_R
+    # On the BASE circle, which is where a follower sits when its valve is shut.
+    # The renderer lifts it by the lift, and base + lift is the nose - so the
+    # follower is on the lobe at both ends of the travel and everywhere between.
+    foot = CAM_CY - 16.0 + CAM_BASE_R
     return [
         # The follower riding the lobe.
         el((-0.95, foot - 0.5, PUSHROD_CZ - 0.95), (0.95, foot + 0.9, PUSHROD_CZ + 0.95), "steel"),
@@ -1421,25 +1687,132 @@ VALVETRAIN_TEX = {"particle": "journal", "steel": "journal", "brass": "brass",
 CAM_LOBE_X = (3.4, 6.6, 9.8, 13.0)
 
 
+# The item's own layout. It is an ICON before it is a drawing: what has to
+# survive being shrunk to sixteen pixels is a big toothed wheel at one end and a
+# shaft with a few unmistakable bumps on it. The previous version tried to be an
+# inline-4's camshaft - eight lobe plates on a 3.2 pitch - and at inventory scale
+# eight one-pixel plates are a comb, not a camshaft.
+#
+# So the item shows THREE lobes, widely spaced, each with a nose long enough to
+# break the shaft's outline, and the timing gear it is actually driven by. The
+# installed camshaft grows a lobe pair per cylinder; the item is the part, not
+# the parts list.
+ITEM_LOBE_X = (6.4, 9.9, 13.4)
+
+# Nose directions, one per lobe, as (z, y) unit offsets. Three different clock
+# angles, because a camshaft's lobes are staggered and a shaft whose bumps all
+# point the same way reads as a threaded rod.
+ITEM_LOBE_NOSE = ((0.0, 1.0), (-0.7071, 0.7071), (-1.0, 0.0))
+
+CAM_GEAR_HUB_R = 2.0
+CAM_GEAR_WEB_R = 4.2
+CAM_GEAR_TIP_R = 5.6
+
+
+def ray_box(x0, x1, cy, cz, direction, a, b, w, tex):
+    """A box standing off a shaft's axis, from radius `a` out to radius `b`.
+
+    `direction` is a (z, y) unit vector: the four axes give a clean rectangle,
+    the four diagonals give the square block that reads as a feature pointing
+    between two axes. Everything that stands off a round shaft in this file - a
+    gear tooth, a cam nose - is one of these, so they are all the same shape
+    language and all bounded the same way.
+    """
+    dz, dy = direction
+    ya, za = cy + dy * a, cz + dz * a
+    yb, zb = cy + dy * b, cz + dz * b
+    py, pz = abs(dz) * w, abs(dy) * w
+    return el((x0, min(ya, yb) - py, min(za, zb) - pz),
+              (x1, max(ya, yb) + py, max(za, zb) + pz), tex)
+
+
+# Eight directions, in the order a wheel's teeth go round.
+OCTANTS = ((0.0, 1.0), (0.7071, 0.7071), (1.0, 0.0), (0.7071, -0.7071),
+           (0.0, -1.0), (-0.7071, -0.7071), (-1.0, 0.0), (-0.7071, 0.7071))
+
+
+def octagon(r):
+    """The three-step section of a regular octagon of circumradius `r`."""
+    return steps(r, r * 0.383, r * 0.707)
+
+
+def cam_gear_elements(x0, x1, cy, cz, tip_r, tex="web", tooth_tex="steel", hub_tex="steel"):
+    """A timing gear: hub, web, and eight teeth standing off the rim.
+
+    The teeth are the whole point. A plain disc on the end of a shaft is a
+    flange, and a flange says nothing about what drives what - where a toothed
+    wheel says "this is geared to something", which is the one fact the timing
+    drive exists to communicate. Eight is enough to read as toothed at inventory
+    scale and few enough that each one survives being a pixel and a half wide.
+
+    The teeth are drawn in the brighter steel rather than in the web's cast iron,
+    so the rim catches the light and the wheel reads as toothed from across the
+    room instead of only in the hand.
+    """
+    web_r = tip_r * 0.74
+    hub_r = tip_r * 0.34
+    e = round_section_x(cy, cz, x0, x1, octagon(web_r), tex)
+    for direction in OCTANTS:
+        e.append(ray_box(x0 + 0.15, x1 - 0.15, cy, cz, direction,
+                         web_r * 0.86, tip_r, tip_r * 0.17, tooth_tex))
+    # The hub, proud of the web on both faces, so the wheel reads as a casting
+    # keyed to a shaft rather than as a disc cut out of card.
+    e += round_section_x(cy, cz, x0 - 0.6, x1 + 0.3, octagon(hub_r), hub_tex)
+    return e
+
+
+def cam_lobe_elements(x0, x1, cy, cz, base_r, nose_r, nose, tex="web", tip_tex="steel"):
+    """One lobe: a round base circle with a nose standing off it.
+
+    A cam lobe is not a disc and must not be drawn as one. The base circle is
+    the part the follower rides while nothing happens; the nose is the part a
+    player watches come round and push. Drawing only the circle - which is what
+    a plain plate is - loses the single fact the shape carries, and loses the
+    rotation with it, because a circle on a shaft looks identical at every angle.
+
+    The nose is built as a flank and a tip, and the tip is in the brighter steel:
+    a hardened cam nose really is the polished part of the shaft, and it is also
+    what makes the lobe's clock angle readable while it turns.
+    """
+    e = round_section_x(cy, cz, x0, x1, octagon(base_r), tex)
+    e.append(ray_box(x0 + 0.1, x1 - 0.1, cy, cz, nose,
+                     base_r * 0.4, nose_r - 0.5, base_r * 0.55, tex))
+    e.append(ray_box(x0 + 0.25, x1 - 0.25, cy, cz, nose,
+                     nose_r - 0.75, nose_r, base_r * 0.42, tip_tex))
+    return e
+
+
 def camshaft_elements():
+    """The Camshaft as it looks in the hand.
+
+    Read left to right: the timing gear it is driven by, a brass thrust collar,
+    three staggered lobes on a machined shaft, and the rear journal it is
+    supported on. That is the same object, in the same materials, as the one the
+    Crankshaft renderer puts in the engine - see camshaft_running_elements, which
+    uses these same builders at the same proportions so the two cannot drift into
+    looking like different machines.
+    """
     e = [
         # The journal, running the length of the part and out at both ends -
         # a camshaft is supported at both ends and driven from one.
-        el((0.0, 7.0, 7.0), (16.0, 9.0, 9.0), "steel"),
+        *round_section_x(8.0, 8.0, 0.0, 16.0, octagon(1.0), "steel"),
     ]
-    for i, x in enumerate(CAM_LOBE_X):
-        # Two lobes per cylinder - intake and exhaust - and each PAIR is turned a
-        # little further round than the last. That stagger is the firing order
-        # made visible: a player looking along the shaft is looking at 1-3-4-2.
-        lean = 0.55 * i
-        e.append(el((x - 1.0, 6.4, 6.4), (x + 0.2, 9.6, 9.6), "web"))
-        e.append(el((x - 1.0, 9.6 - lean, 6.9), (x + 0.2, 10.9 - lean, 9.1), "web"))
-        e.append(el((x + 0.4, 6.4, 6.4), (x + 1.6, 9.6, 9.6), "web"))
-        e.append(el((x + 0.4, 9.6 - lean, 6.9), (x + 1.6, 10.9 - lean, 9.1), "web"))
-    # The timing drive, integrated: there is no separate Timing Gear item, and
-    # this is where that decision is visible.
-    e.append(el((0.6, 4.6, 4.6), (2.2, 11.4, 11.4), "gear"))
-    e.append(el((0.2, 6.2, 6.2), (2.6, 9.8, 9.8), "steel"))
+    e += cam_gear_elements(1.5, 3.4, 8.0, 8.0, CAM_GEAR_TIP_R)
+    # The retaining nut on the nose of the shaft, outboard of the gear.
+    #
+    # And it is STEEL, not brass. A brass one was tried and it is the wrong
+    # accent twice over: on a wheel this size it lands square on the gear's face
+    # at every pose the icon is drawn at, so it reads as a gold boss rather than
+    # as a nut, and a camshaft is a hardened steel part with no brass on it
+    # anywhere. What separates this part is the machined steel of the teeth and
+    # the lobe tips against the cast iron of the web and the lobe bodies, which
+    # is the same three-material language the Crankshaft is drawn in.
+    e += round_section_x(8.0, 8.0, 0.2, 1.2, octagon(1.5), "steel")
+    for x, nose in zip(ITEM_LOBE_X, ITEM_LOBE_NOSE):
+        e += cam_lobe_elements(x - 1.1, x + 1.1, 8.0, 8.0, 1.8, 4.3, nose)
+    # The rear journal: wider than the shaft, so the part ends in a bearing
+    # surface rather than in a cut.
+    e += round_section_x(8.0, 8.0, 14.9, 16.0, octagon(1.45), "steel")
     return e
 
 
@@ -1553,9 +1926,23 @@ def main():
     # is not symmetric about the cylinder axis - the same rule the connecting rod
     # and the spark plug already follow, because a partial model is not turned by
     # the blockstate.
-    cam = camshaft_running_elements()
-    write("block/camshaft_running_x.json", model(CAM_TEX, cam))
-    write("block/camshaft_running_z.json", model(CAM_TEX, [transpose(x) for x in cam]))
+    #
+    # The camshaft comes in two: the plain slice every section draws, and the
+    # DRIVE slice - the same shaft with its sprocket on the end - which only the
+    # engine's first section has, because an engine has one timing drive and it
+    # goes at the free end, opposite the flywheel.
+    for suffix, parts in (("", camshaft_running_elements()),
+                          ("_drive", camshaft_running_elements(drive=True))):
+        write(f"block/camshaft_running{suffix}_x.json", model(CAM_TEX, parts))
+        write(f"block/camshaft_running{suffix}_z.json",
+              model(CAM_TEX, [transpose(x) for x in parts]))
+    drive_gear = timing_drive_gear_elements()
+    write("block/timing_gear_x.json", model(CAM_TEX, drive_gear))
+    write("block/timing_gear_z.json", model(CAM_TEX, [transpose(x) for x in drive_gear]))
+    case = timing_case_elements()
+    write("block/timing_case_x.json", model({**CAM_TEX, **CASE_TEX}, case))
+    write("block/timing_case_z.json",
+          model({**CAM_TEX, **CASE_TEX}, [transpose(x) for x in case]))
     for name, parts in (("pushrod", pushrod_running_elements()),
                         ("rocker", rocker_running_elements()),
                         ("valve", valve_running_elements())):
@@ -1627,11 +2014,17 @@ def main():
     # other bolt-on parts do. A steeper pitch than the default puts the board's
     # face - the part carrying the redstone and the tube - towards the camera
     # instead of showing it edge-on.
-    # The Camshaft, turned so the lobes and the timing gear are both visible: at
-    # the standard 30/225 the shaft is looked down on and the lobe stagger - the
-    # firing order made visible - flattens into the journal behind it.
+    # The Camshaft, at the standard block-item pose, because the redesign earned
+    # it back. The old comb of eight lobe plates had to be turned nearly side-on
+    # to show any stagger at all; a shaft with a big toothed wheel on the end of
+    # it reads best exactly where every other part in this mod reads best - three
+    # quarters on, with the gear's face towards the camera.
+    #
+    # 1.05 is measured, not chosen: at this pose it puts the part's longest
+    # projected span at 26 units, which is what a full block item covers. Bigger
+    # and the gear's teeth start being cropped by the slot.
     write("item/camshaft.json",
-          model(CAM_TEX, camshaft_elements(), display=gui_scale(1.05, (20, 200, 0))))
+          model(CAM_TEX, camshaft_elements(), display=long_part_display(1.05)))
 
     write("item/redstone_control_module.json",
           model(MODULE_TEX, control_module_elements(),
