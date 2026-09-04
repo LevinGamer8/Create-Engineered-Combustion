@@ -23,7 +23,7 @@ TIMING_DRIVE_R, TIMING_CAM_R = 1.5, 3.0
 TIMING_DRIVE_CY, TIMING_DRIVE_CZ = CAM_CY + TIMING_DRIVE_R + TIMING_CAM_R, CAM_CZ
 VALVE_X = (5.0, 11.0)
 ROCKER_PIVOT_Y, ROCKER_PIVOT_Z = 19.9, 0.2
-ROCKER_SWING = 10.0
+ROCKER_SWING = 11.5
 
 
 # --------------------------------------------------------------------------- png

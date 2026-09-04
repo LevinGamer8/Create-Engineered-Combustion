@@ -1618,7 +1618,7 @@ def pushrod_running_elements():
            (PUSHROD_R, ROCKER_PIVOT_Y - 1.1, PUSHROD_CZ + PUSHROD_R), "steel"),
         # Its cup, where the rocker presses on it.
         el((-0.75, ROCKER_PIVOT_Y - 1.45, PUSHROD_CZ - 0.75),
-           (0.75, ROCKER_PIVOT_Y - 0.85, PUSHROD_CZ + 0.75), "brass"),
+           (0.75, ROCKER_PIVOT_Y - 0.85, PUSHROD_CZ + 0.75), "steel"),
     ]
 
 
@@ -1637,8 +1637,16 @@ def rocker_running_elements():
     return [
         el((-1.15, 6.85, 6.85), (1.15, 9.15, 9.15), "steel"),          # boss on the shaft
         el((-0.75, 7.45, 8.9), (0.75, 8.55, valve_z + 0.4), "steel"),  # arm to the valve
-        el((-0.9, 7.1, valve_z - 0.7), (0.9, 8.5, valve_z + 0.7), "brass"),  # its tip
+        el((-0.9, 7.1, valve_z - 0.7), (0.9, 8.5, valve_z + 0.7), "steel"),  # its tip
         el((-0.7, 7.5, rod_z - 0.4), (0.7, 8.5, 7.1), "steel"),        # the short end
+        # THE ONE BRASS POINT ON THE WHOLE VALVE GEAR, and it is on THIS end for
+        # a reason worth writing down. The pad over the valve is the contact that
+        # matters mechanically, and it is also the one a player never sees: it
+        # sits over the bore, on the far side of the head from the flank the
+        # valve gear is on. This pad is where the pushrod pushes, it is on the
+        # side the player is standing, and watching it rise is how the linkage
+        # explains itself. Everything else up here is steel, so the eye goes to
+        # the one thing that is moving rather than to a scattering of gold.
         el((-0.85, 7.05, rod_z - 0.85), (0.85, 7.65, rod_z + 0.85), "brass"),
     ]
 
@@ -1652,9 +1660,12 @@ def valve_running_elements():
     """
     return [
         el((-0.3, HEAD_TOP - 2.2, VALVE_CZ - 0.3), (0.3, HEAD_TOP + 2.9, VALVE_CZ + 0.3), "steel"),
-        # The spring, drawn as three coils so it reads as a spring rather than a tube.
+        # The spring, drawn as three coils so it reads as a spring rather than a
+        # tube - and in STEEL, which is what a valve spring is. It was brass, and
+        # with the rocker pads and the plug's terminal beside it the head had
+        # half a dozen gold points on it and no hierarchy at all.
         *[el((-0.8, HEAD_TOP + 0.5 + i * 0.75, VALVE_CZ - 0.8),
-             (0.8, HEAD_TOP + 0.95 + i * 0.75, VALVE_CZ + 0.8), "brass") for i in range(3)],
+             (0.8, HEAD_TOP + 0.95 + i * 0.75, VALVE_CZ + 0.8), "steel") for i in range(3)],
         # The retainer the rocker presses on.
         el((-0.85, HEAD_TOP + 2.75, VALVE_CZ - 0.85), (0.85, HEAD_TOP + 3.3, VALVE_CZ + 0.85), "steel"),
     ]

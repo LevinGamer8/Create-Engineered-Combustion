@@ -30,9 +30,19 @@ public final class CamshaftTiming {
 	 * Rocker swing at full valve lift, in degrees.
 	 *
 	 * <p>Shallow on purpose: a rocker that swept far would read as a lever rather than
-	 * as a valve gear.
+	 * as a valve gear. But not arbitrary either - it is the angle whose tip travel is
+	 * exactly the valve's:
+	 *
+	 * <pre>
+	 * atan(VALVE_LIFT / (VALVE_CZ - ROCKER_PIVOT_Z)) = atan(1.1 / 5.4) = 11.5 degrees
+	 * </pre>
+	 *
+	 * <p>At ten the pad lifted 0.95 while the valve fell 1.1, so the two separated by
+	 * a sixth of the travel at full lift - a rocker not quite touching the valve it is
+	 * supposed to be pressing, which is the sort of thing nobody sees and everybody
+	 * feels.
 	 */
-	public static final float ROCKER_MAX_SWING_DEGREES = 10.0F;
+	public static final float ROCKER_MAX_SWING_DEGREES = 11.5F;
 
 	private CamshaftTiming() {
 	}
