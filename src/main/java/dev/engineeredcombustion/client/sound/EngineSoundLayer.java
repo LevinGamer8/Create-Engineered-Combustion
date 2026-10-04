@@ -4,6 +4,7 @@ import dev.engineeredcombustion.content.engine.EngineState;
 import dev.engineeredcombustion.content.engine.EngineTuning;
 import dev.engineeredcombustion.content.engine.EngineWearMath;
 import dev.engineeredcombustion.content.engine.LubricationState;
+import dev.engineeredcombustion.content.engine.RecordedEngineAudio;
 import dev.engineeredcombustion.content.engine.WearCondition;
 import dev.engineeredcombustion.registry.ECSounds;
 import net.minecraft.sounds.SoundEvent;
@@ -40,31 +41,80 @@ import net.minecraft.sounds.SoundEvent;
  * and the running loop had firing baked into it, which meant an engine that had
  * run out of fuel went on sounding like it was burning some until it fell below
  * the swap threshold.
+ *
+ * <h2>Recorded inline-4 layers (experimental)</h2>
+ * {@link #RECORDED_R4_IDLE} and {@link #RECORDED_R4_1500} are the first recorded
+ * pass: real loops of a four-cylinder engine at 1000 and 1500 RPM, cross-faded by
+ * speed. They play only for an inline-4 that is genuinely running - see
+ * {@link RecordedEngineAudio} - and while they do, the mechanical and combustion
+ * layers fall silent, because the recording already contains both. Every other
+ * engine, and an inline-4 in any other phase, sounds exactly as before. A later
+ * recording is one more constant here bound to one more
+ * {@link RecordedEngineAudio#R4_BANDS} entry.
  */
 public enum EngineSoundLayer {
 
-	MECHANICAL,
-	COMBUSTION;
+	MECHANICAL(-1),
+	COMBUSTION(-1),
+	RECORDED_R4_IDLE(0),
+	RECORDED_R4_1500(1);
+
+	/** Index into {@link RecordedEngineAudio#R4_BANDS}, or -1 for a synthetic layer. */
+	private final int recordedBand;
+
+	EngineSoundLayer(int recordedBand) {
+		this.recordedBand = recordedBand;
+	}
+
+	public boolean isRecorded() {
+		return recordedBand >= 0;
+	}
 
 	public SoundEvent soundEvent() {
 		return switch (this) {
 			case MECHANICAL -> ECSounds.ENGINE_MECHANICAL.get();
 			case COMBUSTION -> ECSounds.ENGINE_COMBUSTION_LOOP.get();
+			case RECORDED_R4_IDLE -> ECSounds.ENGINE_RECORDED_R4_IDLE.get();
+			case RECORDED_R4_1500 -> ECSounds.ENGINE_RECORDED_R4_1500.get();
 		};
+	}
+
+	/**
+	 * Whether this layer should exist at all right now. Separate from
+	 * {@link #volumeFor} because a recorded band can honestly sit at zero weight -
+	 * the 1500 RPM loop at idle - while the engine it belongs to is still running.
+	 * Retiring it there would restart it every time the speed ripples across the
+	 * end of the cross-fade, so recorded layers live for as long as the recorded
+	 * mode does and are merely faded. For the synthetic layers the two questions
+	 * are the same one, exactly as before.
+	 */
+	public boolean isWanted(EngineState engine, float eventRateHz) {
+		if (isRecorded())
+			return RecordedEngineAudio.isActive(engine)
+				&& Math.abs(engine.getMechanicalRpm()) >= EngineTuning.SOUND_MIN_AUDIBLE_RPM;
+		return volumeFor(engine, eventRateHz) > 0.0F;
 	}
 
 	/**
 	 * What this layer should be playing at, right now, for this engine.
 	 *
 	 * @param eventRateHz measured combustion events per second
-	 * @return the volume, or 0 when this layer has nothing to say - which is how a
-	 *         layer asks to be retired
+	 * @return the volume, or 0 when this layer has nothing to say - which, for a
+	 *         synthetic layer, is how it asks to be retired. A recorded layer is
+	 *         retired by {@link #isWanted} instead, and may sit at 0 while wanted.
 	 */
 	public float volumeFor(EngineState engine, float eventRateHz) {
+		if (isRecorded())
+			return RecordedEngineAudio.r4Volume(engine, recordedBand);
+		// The recording already contains the combustion and the mechanical texture;
+		// stacking the synthetic layers under it would double both.
+		if (!RecordedEngineAudio.syntheticVoiceAudible(engine))
+			return 0.0F;
 		return switch (this) {
 			case MECHANICAL -> mechanicalVolume(engine);
 			case COMBUSTION -> EngineTuning.SOUND_COMBUSTION_LOOP_VOLUME
 				* EngineTuning.combustionLoopBlend(eventRateHz);
+			default -> throw new IllegalStateException(name());
 		};
 	}
 
@@ -116,6 +166,7 @@ public enum EngineSoundLayer {
 			case MECHANICAL -> EngineTuning.mechanicalLayerPitch(engine.getMechanicalRpm());
 			case COMBUSTION -> EngineTuning.mechanicalLayerPitch(
 				eventRateHz / EngineTuning.SOUND_COMBUSTION_PULSE_MAX_RATE_HZ * EngineTuning.SOUND_REFERENCE_RPM);
+			case RECORDED_R4_IDLE, RECORDED_R4_1500 -> RecordedEngineAudio.r4Pitch(engine, recordedBand);
 		};
 		return roughen(pitch, engine, gameTime);
 	}

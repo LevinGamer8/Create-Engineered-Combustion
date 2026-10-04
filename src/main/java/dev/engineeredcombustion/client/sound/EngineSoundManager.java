@@ -96,7 +96,7 @@ public class EngineSoundManager {
 			}
 		}
 
-		boolean wanted = layer.volumeFor(engine, eventRateHz) > 0.0F;
+		boolean wanted = layer.isWanted(engine, eventRateHz);
 
 		if (current != null) {
 			if (!wanted) {

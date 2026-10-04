@@ -2,14 +2,18 @@
 """
 Generates the engine sounds for Create: Engineered Combustion.
 
-Everything is synthesised from noise, impulses and filters - there is no sampled
-material of any kind, so the resulting .ogg files are original assets of this
-project. Run it to regenerate them:
+Everything this script writes is synthesised from noise, impulses and filters -
+there is no sampled material of any kind in its output, so the resulting .ogg
+files are original assets of this project. Run it to regenerate them:
 
     pip install numpy soundfile
     python3 tools/generate_sounds.py
 
 Output goes to src/main/resources/assets/engineered_combustion/sounds/.
+
+That directory also holds the golf_r4_*.ogg files, which are real engine
+recordings and NOT output of this script (see docs/assets.md). It never writes or
+removes them.
 
 Two layers, because the engine has two voices
 ---------------------------------------------
@@ -69,8 +73,8 @@ Three details that matter for quality:
 Mono throughout: Minecraft only applies distance attenuation to mono sounds, so a
 stereo file would play at full volume everywhere and break positional audio.
 
-Everything here is synthesised from noise, impulses and filters. Nothing is
-sampled, recorded or derived from any other work.
+Everything here is synthesised from noise, impulses and filters. Nothing this
+script produces is sampled, recorded or derived from any other work.
 """
 
 import os

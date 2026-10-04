@@ -70,6 +70,10 @@ pip install numpy soundfile
 python3 tools/generate_sounds.py
 ```
 
+The `golf_r4_*.ogg` files in the sounds directory are the one exception to this
+rule: they are real engine recordings, not generator output, and are committed as
+recorded. See `docs/assets.md`.
+
 **8. Behaviour changes need tests and documentation.**
 Any change to how the engine behaves must come with:
 

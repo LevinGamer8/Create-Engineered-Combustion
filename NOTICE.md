@@ -43,7 +43,10 @@ Exact versions are declared in `gradle.properties` and `build.gradle`.
 
 At the time of writing this repository contains **no** vendored third-party source
 code or assets. Every model, texture, sound and data file under `src/` is either
-authored for this project or produced by the generators under `tools/`.
+authored for this project or produced by the generators under `tools/`. That
+includes the three `golf_r4_*.ogg` engine recordings, which were recorded by and
+for this project from a privately owned vehicle; see ASSET_LICENSE.md. No vehicle
+manufacturer supplied or endorsed them.
 
 If third-party material is added in future, it must be listed here with its origin
 and licence, and its licence text must be included in the repository. See

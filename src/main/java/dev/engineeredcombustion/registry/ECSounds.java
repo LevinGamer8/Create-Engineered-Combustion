@@ -20,9 +20,16 @@ import net.neoforged.neoforge.registries.DeferredRegister;
  *
  * <p>The asset each event points at is declared in
  * {@code assets/engineered_combustion/sounds.json}; the two must agree on the
- * subtitle keys, which live in the language files. Every asset is synthesised
- * from noise, impulses and filters by {@code tools/generate_sounds.py} - there is
- * no sampled or recorded material anywhere in this mod.
+ * subtitle keys, which live in the language files.
+ *
+ * <h2>Two kinds of asset</h2>
+ * Most events point at <b>synthetic</b> assets, generated from noise, impulses
+ * and filters by {@code tools/generate_sounds.py}. The {@code ENGINE_RECORDED_*}
+ * events are the exception: <b>real recordings</b> of a running four-cylinder
+ * petrol engine, made for this project from a privately owned VW Golf 1 Cabrio.
+ * No manufacturer supplied or endorsed them. They are not produced by any
+ * generator and must not be regenerated or hand-edited; see
+ * {@code docs/assets.md}.
  */
 public class ECSounds {
 
@@ -76,6 +83,27 @@ public class ECSounds {
 	 * mistake for a charge burning.
 	 */
 	public static final DeferredHolder<SoundEvent, SoundEvent> ENGINE_SPARK = register("engine_spark");
+
+	/**
+	 * <b>Recorded, experimental.</b> A real four-cylinder engine idling at about
+	 * 1000 RPM, as a seamless loop. One band of the recorded inline-4 voice; see
+	 * {@code RecordedEngineAudio}. Played only by a genuinely running inline-4.
+	 */
+	public static final DeferredHolder<SoundEvent, SoundEvent> ENGINE_RECORDED_R4_IDLE =
+		register("engine_recorded_r4_idle");
+
+	/** <b>Recorded, experimental.</b> The same engine held at about 1500 RPM. */
+	public static final DeferredHolder<SoundEvent, SoundEvent> ENGINE_RECORDED_R4_1500 =
+		register("engine_recorded_r4_1500");
+
+	/**
+	 * <b>Recorded, registered but deliberately never played.</b> A warm start of
+	 * the same engine - which is the real car's electric starter motor, while this
+	 * mod's engines are started with a Hand Crank. Kept for future starter-motor
+	 * work; nothing references it.
+	 */
+	public static final DeferredHolder<SoundEvent, SoundEvent> ENGINE_RECORDED_R4_WARM_START =
+		register("engine_recorded_r4_warm_start");
 
 	/** Fires once, on the STARTING to RUNNING transition. */
 	public static final DeferredHolder<SoundEvent, SoundEvent> ENGINE_START = register("engine_start");
