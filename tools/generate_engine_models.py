@@ -74,9 +74,10 @@ WRIST_AUTHOR_Y = 8.0  # piston/rod are authored with the wrist pin here
 # bolted on to solve a composition problem; it is the mechanism the simulation
 # already runs, drawn where it actually is.
 #
-# THE +Z FLANK IS DELIBERATELY LEFT EMPTY. The head's exhaust boss is there and
-# an exhaust manifold belongs there later, so the valvetrain takes the intake
-# side and the intake manifold rail moves up to sit above the rockers.
+# THE +Z FLANK IS THE EXHAUST SIDE. It was kept clear while the valvetrain went
+# in for exactly this, so the valvetrain takes the intake side, the intake
+# manifold rail sits above the rockers, and the +Z flank carries the exhaust
+# header, its log collector and the outlet - see exhaust_elements.
 # HOW FAR IT MAY STAND PROUD. The engine's own rule is that geometry leaves its
 # block vertically and not sideways, because a part reaching sideways lands in
 # whatever the player built next to it and hangs in the air - which is how the
@@ -90,6 +91,13 @@ WRIST_AUTHOR_Y = 8.0  # piston/rod are authored with the wrist pin here
 # so it reads as the gear on the side of a machine rather than as a fragment
 # beside it. tools/check_models.py enforces the bound.
 VALVETRAIN_REACH = 2.0
+
+# THE EXHAUST'S OWN BOUND, on the opposite flank. The same argument as the valve
+# gear's and the same shape of exception: the exhaust is one run from the first
+# port to the outlet, carried on the head of every cylinder, so it reads as the
+# hot side of the machine and not as a pipe hung beside it. It may stand this far
+# proud of the +Z face and no further; tools/check_models.py enforces it.
+EXHAUST_REACH = 2.75
 
 # CAM_CY/CAM_CZ, VALVE_X, ROCKER_PIVOT_* and VALVE_LIFT are duplicated in
 # src/main/java/dev/engineeredcombustion/client/EngineValvetrain.java, which is
@@ -936,9 +944,18 @@ def piston_elements():
 # ===========================================================================
 # No ceramic or brass here any more: the spark plug moved to its own model, and
 # a texture reference that nothing uses is a texture that quietly rots.
+#
+# The two sides of the head are told apart by material before anything else.
+# The intake side is clean cast alloy - the intake guide, the manifold, the runner
+# - and the exhaust side is dark, heat-aged iron with temper-coloured fittings, so
+# a player can say which is which from across a room without knowing what a
+# valve is. Every cylinder carries both, an inline-1 included: a single has an
+# exhaust as much as an inline-4 does.
 CYL_TEX = {"particle": "cylinder", "barrel": "cylinder", "fin": "cylinder_fin",
            "head": "cylinder_head", "deck": "crankcase_deck",
-           "steel": "journal", "case": "crankshaft", "cast": "cast_iron"}
+           "steel": "journal", "case": "crankshaft", "cast": "cast_iron",
+           "intake": "intake_manifold", "exhaust": "exhaust_manifold",
+           "hot": "exhaust_steel", "soot": "exhaust_soot"}
 
 # The manifold's own additions, kept off the plain Cylinder rather than folded
 # into CYL_TEX: an inline-1 has no brass on it, and a texture reference nothing
@@ -1080,13 +1097,13 @@ def manifold_elements(link_back, link_ahead):
     x0 = 0.0 if link_back else RAIL_END_BACK
     x1 = 16.0 if link_ahead else RAIL_END_AHEAD
     e = [
-        el((x0, RAIL_Y0, RAIL_Z0), (x1, RAIL_Y1, RAIL_Z1), "deck"),   # the rail
+        el((x0, RAIL_Y0, RAIL_Z0), (x1, RAIL_Y1, RAIL_Z1), "intake"),   # the rail
         # The runner: down out of the rail, past the rocker gear on the outboard
         # side of it, and onto the head's intake flange, which reaches up to
         # 17.75 and is therefore already inside it. It is the one part of this
         # that is per-cylinder, and it is what makes a shared rail visibly feed
         # THIS bore rather than merely pass over it.
-        el((6.4, 17.4, 1.2), (9.6, RAIL_Y0 + 0.15, 3.8), "head"),
+        el((6.4, 17.4, 1.2), (9.6, RAIL_Y0 + 0.15, 3.8), "intake"),
         # The joint face where the runner meets the head, so a player can see the
         # bolted flange rather than a pipe growing out of the casting. It sits
         # BETWEEN the two rockers, which is where a runner enters a crossflow
@@ -1097,16 +1114,124 @@ def manifold_elements(link_back, link_ahead):
         e.append(el((x, 17.85, 0.8), (x + 0.8, 18.65, 1.1), "brass"))
     # Half a collar at each seam, and a cap wherever the run ends.
     if link_back:
-        e.append(el((0.0, RAIL_Y0 - 0.2, RAIL_Z0 - 0.2), (1.5, RAIL_Y1 + 0.2, RAIL_Z1 + 0.2), "head"))
+        e.append(el((0.0, RAIL_Y0 - 0.2, RAIL_Z0 - 0.2), (1.5, RAIL_Y1 + 0.2, RAIL_Z1 + 0.2), "intake"))
     else:
         e.append(el((RAIL_END_BACK - 0.45, RAIL_Y0 - 0.1, RAIL_Z0 - 0.1),
-                    (RAIL_END_BACK + 0.15, RAIL_Y1 + 0.1, RAIL_Z1 + 0.1), "head"))
+                    (RAIL_END_BACK + 0.15, RAIL_Y1 + 0.1, RAIL_Z1 + 0.1), "intake"))
     if link_ahead:
-        e.append(el((14.5, RAIL_Y0 - 0.2, RAIL_Z0 - 0.2), (16.0, RAIL_Y1 + 0.2, RAIL_Z1 + 0.2), "head"))
+        e.append(el((14.5, RAIL_Y0 - 0.2, RAIL_Z0 - 0.2), (16.0, RAIL_Y1 + 0.2, RAIL_Z1 + 0.2), "intake"))
     else:
         e.append(el((RAIL_END_AHEAD - 0.15, RAIL_Y0 - 0.1, RAIL_Z0 - 0.1),
-                    (RAIL_END_AHEAD + 0.45, RAIL_Y1 + 0.1, RAIL_Z1 + 0.1), "head"))
+                    (RAIL_END_AHEAD + 0.45, RAIL_Y1 + 0.1, RAIL_Z1 + 0.1), "intake"))
     return e
+
+
+# ---------------------------------------------------------------------------
+# The exhaust side
+# ---------------------------------------------------------------------------
+# Header, log collector and outlet, on the +Z flank the valvetrain left free.
+#
+# Like the intake manifold it is geometry on the Cylinder rather than a block of
+# its own, built from the same link_back / link_ahead flags: each cylinder draws
+# its own header off its own port, its share of a log that runs the length of the
+# engine, and half a bolted joint at every seam. Unlike the intake manifold it is
+# on EVERY cylinder, an inline-1 included, because a single needs somewhere to
+# put its exhaust exactly as much as an inline-4 does.
+#
+# The log hangs below the ports, along the fin band, and the outlet is one short
+# upright stack at the positive end of the run - the flywheel end, away from the
+# Carburetor, which is where a hot pipe goes on any engine that carries its fuel
+# on the other side. An inline-1 is simply an engine whose positive end is its
+# only cylinder, so it gets the same header, the same stub of log and the same
+# stack as the end of an inline-4. Every layout therefore has one outlet, and it
+# is always in the same place relative to the flywheel.
+#
+# EXHAUST_OUTLET is where the stack's mouth is, in Cylinder block space. The
+# exhaust puff is emitted there, so it is duplicated in EngineFlowEffects.java
+# and checked against it.
+#
+# What makes it read as the hot side rather than as a second intake: it is lower,
+# heavier and darker. The intake is one clean alloy rail over the rockers; the
+# exhaust is four dark iron elbows dropping into a fat log with temper-coloured
+# joints, and a stack whose mouth is black with soot.
+EXHAUST_LOG_Y0, EXHAUST_LOG_Y1 = 8.4, 10.6
+EXHAUST_Z0, EXHAUST_Z1 = 16.4, 18.2            # the log's and the runners' core
+EXHAUST_CZ = (EXHAUST_Z0 + EXHAUST_Z1) / 2.0
+STACK_X0, STACK_X1 = 12.0, 14.0
+STACK_TOP = 21.3                               # the sooted floor inside the lip
+EXHAUST_LIP_TOP = 22.0
+EXHAUST_OUTLET = ((STACK_X0 + STACK_X1) / 2.0, EXHAUST_LIP_TOP, EXHAUST_CZ)
+# Where the log stops when the run does not continue. Just short of the first
+# runner, so it ends in a cap rather than in the middle of nothing.
+EXHAUST_LOG_END_BACK = 4.6
+
+
+def exhaust_elements(link_back, link_ahead):
+    """This cylinder's header, its share of the log, and the outlet at the end."""
+    x0 = 0.0 if link_back else EXHAUST_LOG_END_BACK
+    # On the outlet's section the log runs on into the foot of the stack.
+    x1 = 16.0 if link_ahead else STACK_X0 + 0.3
+    e = [
+        # The header flange, bolted over the head's machined exhaust face and a
+        # little smaller than it, so the face shows round it as a gasket line.
+        el((5.7, 13.1, 16.0), (10.3, 16.6, 16.7), "exhaust"),
+        # The header: one heavy cast elbow out of the port and down into the log.
+        # Two crossed boxes rather than one, so it reads as a round pipe.
+        el((7.0, EXHAUST_LOG_Y1 - 0.4, 16.7), (9.0, 16.2, EXHAUST_Z1), "exhaust"),
+        el((7.3, EXHAUST_LOG_Y1 - 0.2, 16.45), (8.7, 15.9, EXHAUST_Z1 + 0.25), "exhaust"),
+        # The log collector, low along the fin band.
+        el((x0, EXHAUST_LOG_Y0, EXHAUST_Z0), (x1, EXHAUST_LOG_Y1, EXHAUST_Z1), "exhaust"),
+        el((x0, EXHAUST_LOG_Y0 + 0.3, EXHAUST_Z0 - 0.25),
+           (x1, EXHAUST_LOG_Y1 - 0.3, EXHAUST_Z1 + 0.25), "exhaust"),
+    ]
+    # The flange's four studs, heat-coloured like every fitting on this side.
+    for x in (5.85, 9.45):
+        for y in (13.3, 15.6):
+            e.append(el((x, y, 16.7), (x + 0.7, y + 0.8, 17.05), "hot"))
+    # A bolted joint at each seam, in halves, so two sections meet as one ring.
+    joint = (EXHAUST_LOG_Y0 - 0.3, EXHAUST_Z0 - 0.35, EXHAUST_LOG_Y1 + 0.3, EXHAUST_Z1 + 0.35)
+    if link_back:
+        e.append(el((0.0, joint[0], joint[1]), (1.2, joint[2], joint[3]), "hot"))
+    else:
+        e.append(el((x0 - 0.5, EXHAUST_LOG_Y0 - 0.2, EXHAUST_Z0 - 0.15),
+                    (x0, EXHAUST_LOG_Y1 + 0.2, EXHAUST_Z1 + 0.15), "exhaust"))
+        e.append(el((x0 - 0.7, 9.0, 16.8), (x0 - 0.5, 10.0, 17.8), "hot"))
+    if link_ahead:
+        e.append(el((14.8, joint[0], joint[1]), (16.0, joint[2], joint[3]), "hot"))
+    else:
+        e += exhaust_stack_elements()
+    return e
+
+
+def exhaust_stack_elements():
+    """The outlet: a short upright stack, clamped to the head, open at the top.
+
+    Short on purpose. It stops a few units above the head, level with the rocker
+    shaft, which is enough to say "the gas leaves here" and not enough to turn a
+    small engine into a chimney. Its mouth is a lip round a recess, and the floor
+    of the recess is soot - an open pipe a player looks down into, not a capped
+    post.
+    """
+    cx0, cx1 = STACK_X0 + 0.3, STACK_X1 - 0.3
+    lip_z0, lip_z1 = EXHAUST_Z0 - 0.35, EXHAUST_Z1 + 0.35
+    hole_x0, hole_x1 = 12.5, 13.5
+    hole_z0, hole_z1 = EXHAUST_Z0 + 0.5, EXHAUST_Z1 - 0.5
+    lip_y0 = STACK_TOP - 0.3
+    return [
+        el((STACK_X0, EXHAUST_LOG_Y0 - 0.4, EXHAUST_Z0), (STACK_X1, STACK_TOP, EXHAUST_Z1),
+           "exhaust", {"up": "soot"}),
+        el((cx0, EXHAUST_LOG_Y0 - 0.1, EXHAUST_Z0 - 0.25), (cx1, STACK_TOP - 0.4, EXHAUST_Z1 + 0.25),
+           "exhaust"),
+        # The lip, as four bars round the open mouth.
+        el((STACK_X0 - 0.2, lip_y0, lip_z0), (STACK_X1 + 0.2, EXHAUST_LIP_TOP, hole_z0), "hot"),
+        el((STACK_X0 - 0.2, lip_y0, hole_z1), (STACK_X1 + 0.2, EXHAUST_LIP_TOP, lip_z1), "hot"),
+        el((STACK_X0 - 0.2, lip_y0, hole_z0), (hole_x0, EXHAUST_LIP_TOP, hole_z1), "hot"),
+        el((hole_x1, lip_y0, hole_z0), (STACK_X1 + 0.2, EXHAUST_LIP_TOP, hole_z1), "hot"),
+        # The clamp band, and the strap that bolts it to the head - so the stack
+        # is carried by the engine rather than standing on the log alone.
+        el((STACK_X0 - 0.15, 15.4, EXHAUST_Z0 - 0.32), (STACK_X1 + 0.15, 16.2, EXHAUST_Z1 + 0.32), "hot"),
+        el((12.5, 14.6, 14.6), (13.5, 15.4, EXHAUST_Z0), "exhaust"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1226,13 +1351,41 @@ def rocker_shaft_elements(link_back, link_ahead):
                     (x1, ROCKER_PIVOT_Y + 0.4, ROCKER_PIVOT_Z + 1.1), "head"))
         e.append(el((x0 - 0.3, 17.0, ROCKER_PIVOT_Z - 1.5),
                     (x1 + 0.3, 18.2, ROCKER_PIVOT_Z + 1.5), "deck"))
-    # Valve guides standing out of the head, so the stems emerge from something.
-    for x in VALVE_X:
+    # Valve guides standing out of the head, so the stems emerge from something -
+    # and in the material of the side each valve serves. The intake guide is the
+    # clean alloy of the intake manifold, standing on the intake port it opens;
+    # the exhaust guide is the dark, heat-aged iron of the exhaust side, with a
+    # temper-coloured cap. Two identical towers a hand's width apart were the
+    # reason nobody could say which valve was which.
+    for x, guide, cap in zip(VALVE_X, ("intake", "exhaust"), ("steel", "hot")):
         e.append(el((x - 1.15, 17.0, VALVE_CZ - 1.15),
-                    (x + 1.15, HEAD_TOP + 1.3, VALVE_CZ + 1.15), "head"))
+                    (x + 1.15, HEAD_TOP + 1.3, VALVE_CZ + 1.15), guide))
         e.append(el((x - 0.85, HEAD_TOP + 1.3, VALVE_CZ - 0.85),
-                    (x + 0.85, HEAD_TOP + 2.1, VALVE_CZ + 0.85), "steel"))
+                    (x + 0.85, HEAD_TOP + 2.1, VALVE_CZ + 0.85), cap))
+    e += exhaust_passage_elements()
     return e
+
+
+def exhaust_passage_elements():
+    """The exhaust port's cast passage across the top of the head.
+
+    The exhaust valve stands on the intake half of the head - both valves have to,
+    because both are worked by pushrods on the intake flank - so without this the
+    one valve whose gas leaves on the far side had no visible way of getting
+    there. A raised passage in the exhaust side's iron runs from beside its guide
+    straight across to the exhaust boss, which is what a crossflow head's exhaust
+    port is, drawn on the outside where a player can follow it.
+
+    It threads a gap that is worth writing down. The rocker over the exhaust valve
+    swings no wider than x 11.9, the spark plug's hex starts at x 11.15 and runs to
+    12.65, and the Carburetor's float bowl comes down to 17.0 over x 5.2..10.8 - so
+    the passage leaves the guide on its +X side, stays beyond 12.75 past the plug,
+    and never comes within reach of either.
+    """
+    return [
+        el((12.0, 17.2, VALVE_CZ - 1.0), (13.7, 18.3, VALVE_CZ + 1.0), "exhaust"),
+        el((12.75, 17.2, VALVE_CZ + 1.0), (13.7, 17.95, 12.9), "exhaust"),
+    ]
 
 
 def cylinder_elements(link_back=False, link_ahead=False):
@@ -1298,7 +1451,7 @@ def cylinder_elements(link_back=False, link_ahead=False):
     # The flange stops just under 17.8 so its top face misses the plane the
     # Carburetor's float bowl floor sits in, one block up.
     e.append(el((4.6, 16.6, 0.2), (11.4, 17.75, 4.2), "deck"))      # intake flange
-    e.append(el((6.0, 13.8, 11.6), (10.0, 16.4, 16.0), "head"))     # exhaust boss
+    e.append(el((6.0, 13.8, 11.6), (10.0, 16.4, 16.0), "exhaust"))  # exhaust boss
     e.append(el((5.2, 12.9, 15.0), (10.8, 16.9, 16.0), "deck"))     # exhaust flange
     # The spark plug is NOT part of this model any more. It is an installable
     # component now, so it lives in its own model that the block entity renderer
@@ -1307,6 +1460,8 @@ def cylinder_elements(link_back=False, link_ahead=False):
     # and is there whether or not anything is screwed into it.
     if link_back or link_ahead:
         e += manifold_elements(link_back, link_ahead)
+    # The exhaust, on every cylinder: see exhaust_elements.
+    e += exhaust_elements(link_back, link_ahead)
     # The valve gear's static half, on every cylinder whether or not it has
     # neighbours - unlike the manifold, a single needs its own pushrods and its
     # own rocker shaft, and the linking only decides how far they reach.
@@ -1651,13 +1806,21 @@ def rocker_running_elements():
     ]
 
 
-def valve_running_elements():
+def valve_running_elements(exhaust=False):
     """One valve, authored seated. The renderer translates it DOWN to open it.
 
     Stem, spring and retainer above the head; the head of the valve itself is
     inside the casting and never seen, which is correct - a valve that showed
     its face would be a valve hanging in the bore.
+
+    Two of them now, because the two valves of a cylinder are not the same part
+    and a player trying to read the cycle needs to know which one moved. The
+    exhaust valve's spring and retainer are drawn in the temper colours steel
+    takes on running hot - the straw-to-blue a real exhaust valve wears within
+    hours of running - and the intake valve's stay bright. Same geometry, so the
+    rocker lands on both identically; only the material says which is which.
     """
+    metal = "hot" if exhaust else "steel"
     return [
         el((-0.3, HEAD_TOP - 2.2, VALVE_CZ - 0.3), (0.3, HEAD_TOP + 2.9, VALVE_CZ + 0.3), "steel"),
         # The spring, drawn as three coils so it reads as a spring rather than a
@@ -1665,9 +1828,9 @@ def valve_running_elements():
         # with the rocker pads and the plug's terminal beside it the head had
         # half a dozen gold points on it and no hierarchy at all.
         *[el((-0.8, HEAD_TOP + 0.5 + i * 0.75, VALVE_CZ - 0.8),
-             (0.8, HEAD_TOP + 0.95 + i * 0.75, VALVE_CZ + 0.8), "steel") for i in range(3)],
+             (0.8, HEAD_TOP + 0.95 + i * 0.75, VALVE_CZ + 0.8), metal) for i in range(3)],
         # The retainer the rocker presses on.
-        el((-0.85, HEAD_TOP + 2.75, VALVE_CZ - 0.85), (0.85, HEAD_TOP + 3.3, VALVE_CZ + 0.85), "steel"),
+        el((-0.85, HEAD_TOP + 2.75, VALVE_CZ - 0.85), (0.85, HEAD_TOP + 3.3, VALVE_CZ + 0.85), metal),
     ]
 
 
@@ -1691,7 +1854,7 @@ CAM_TEX = {"particle": "journal", "steel": "journal", "web": "crank_web",
 # working parts are drawn in, so the valvetrain reads as part of the machine
 # rather than as something bolted to the outside of it.
 VALVETRAIN_TEX = {"particle": "journal", "steel": "journal", "brass": "brass",
-                  "web": "crank_web"}
+                  "web": "crank_web", "hot": "exhaust_steel"}
 
 # Lobe pairs, one per cylinder the mod supports. Spaced on the same 3.2 pitch the
 # crank webs use, so the two shafts read as parts of one engine.
@@ -1956,7 +2119,8 @@ def main():
           model({**CAM_TEX, **CASE_TEX}, [transpose(x) for x in case]))
     for name, parts in (("pushrod", pushrod_running_elements()),
                         ("rocker", rocker_running_elements()),
-                        ("valve", valve_running_elements())):
+                        ("intake_valve", valve_running_elements()),
+                        ("exhaust_valve", valve_running_elements(exhaust=True))):
         # Authored about x = 0 so the renderer places each one at its own bore
         # position; shifted onto the block before writing, and mirrored for Z.
         centred = [shift(part, 8.0, 0.0, 0.0) for part in parts]

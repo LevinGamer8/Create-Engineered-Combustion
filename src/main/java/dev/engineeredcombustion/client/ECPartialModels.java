@@ -92,13 +92,20 @@ public class ECPartialModels {
 	 * cylinder's valves and the renderer places each at its own bore position. The
 	 * pushrod and the valve only ever translate; the rocker turns, so its pivot is on
 	 * the block centre for the same reason the camshaft's axis is.
+	 *
+	 * <p>The valve is the one part with two models: the intake valve in bright
+	 * steel and the exhaust valve with its spring and retainer heat-coloured. Same
+	 * geometry, so the rocker meets both identically; the material is what tells a
+	 * player which of the two just moved.
 	 */
 	public static final PartialModel PUSHROD_X = block("pushrod_x");
 	public static final PartialModel PUSHROD_Z = block("pushrod_z");
 	public static final PartialModel ROCKER_X = block("rocker_x");
 	public static final PartialModel ROCKER_Z = block("rocker_z");
-	public static final PartialModel VALVE_X = block("valve_x");
-	public static final PartialModel VALVE_Z = block("valve_z");
+	public static final PartialModel INTAKE_VALVE_X = block("intake_valve_x");
+	public static final PartialModel INTAKE_VALVE_Z = block("intake_valve_z");
+	public static final PartialModel EXHAUST_VALVE_X = block("exhaust_valve_x");
+	public static final PartialModel EXHAUST_VALVE_Z = block("exhaust_valve_z");
 
 	/**
 	 * The spinning flywheel: rim, spokes, hub <i>and</i> the shaft through the

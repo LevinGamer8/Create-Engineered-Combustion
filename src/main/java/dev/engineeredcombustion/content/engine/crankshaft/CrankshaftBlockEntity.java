@@ -19,6 +19,7 @@ import dev.engineeredcombustion.content.engine.EngineAssemblyStatus;
 import dev.engineeredcombustion.content.engine.EngineComponents;
 import dev.engineeredcombustion.content.engine.EngineEventRecord;
 import dev.engineeredcombustion.content.engine.EngineEventTracker;
+import dev.engineeredcombustion.content.engine.EngineFlowEffects;
 import dev.engineeredcombustion.content.engine.EngineInputs;
 import dev.engineeredcombustion.content.engine.EnginePhase;
 import dev.engineeredcombustion.content.engine.EngineState;
@@ -304,6 +305,13 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 	 * client.
 	 */
 	private final CombustionAudio combustionAudio = new CombustionAudio();
+
+	/**
+	 * The exhaust puffs and the goggles' flow traces, driven from the same
+	 * combustion bits as the sound. Dist-neutral for the same reason
+	 * {@link #combustionAudio} is.
+	 */
+	private final EngineFlowEffects flowEffects = new EngineFlowEffects();
 
 	/**
 	 * What redstone at this engine is allowed to do. Only consulted while a
@@ -627,6 +635,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			// started, whichever order the two happen in.
 			engine.updateClientVisuals();
 			tickEngineAudio();
+			tickFlowEffects();
 			return;
 		}
 
@@ -1861,6 +1870,7 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			if (burned) {
 				engine.triggerCombustionFlash(cylinder);
 				combustionAudio.onCombustion(level, cylinderPos, engine);
+				flowEffects.onCombustion(cylinder);
 			}
 		}
 	}
@@ -2040,6 +2050,24 @@ public class CrankshaftBlockEntity extends KineticBlockEntity {
 			return;
 		combustionAudio.tick(clientLevel.getGameTime());
 		EngineSoundManager.tick(clientLevel, worldPosition, engine, combustionAudio.getEventRateHz());
+	}
+
+	/**
+	 * The gas made visible: a puff at the exhaust stack for every charge that
+	 * really burned, on its exhaust stroke, and - for a player wearing Engineer's
+	 * Goggles - the intake and exhaust traces that say which valve is which.
+	 *
+	 * <p>Bounded by the cylinder count {@link #adoptResolvedLayout} has already
+	 * taken off the world this tick, so the outlet is on the last Cylinder the
+	 * player can actually see, and no second scan is paid for.
+	 */
+	@OnlyIn(Dist.CLIENT)
+	private void tickFlowEffects() {
+		if (level == null)
+			return;
+		Player player = Minecraft.getInstance().player;
+		boolean teaching = player != null && GogglesItem.isWearingGoggles(player);
+		flowEffects.tick(level, engine, getAxis(), engine.getCylinderCount(), this::cylinderPosition, teaching);
 	}
 
 	// --- mechanical coupling ------------------------------------------------

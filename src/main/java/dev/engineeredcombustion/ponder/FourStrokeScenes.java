@@ -2,10 +2,15 @@ package dev.engineeredcombustion.ponder;
 
 import static dev.engineeredcombustion.ponder.PonderEngine.centre;
 
+import org.joml.Vector3f;
+
 import net.createmod.ponder.api.PonderPalette;
 import net.createmod.ponder.api.scene.SceneBuilder;
 import net.createmod.ponder.api.scene.SceneBuildingUtil;
 import net.minecraft.core.Direction;
+import net.minecraft.core.particles.DustParticleOptions;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * What actually happens inside a cylinder, once round.
@@ -34,11 +39,25 @@ import net.minecraft.core.Direction;
  * absent. What the scene says is: air and fuel go in, they are squeezed, they burn
  * and push, and the burnt gas is pushed out - twice round the crank for one push.
  * That is the whole of what a player needs to read their own engine.
+ *
+ * <h2>Where the gas goes, shown more plainly than in the world</h2>
+ * The intake and exhaust strokes carry the same two traces the Engineer's Goggles
+ * show on a real engine - cool at the intake valve, warm at the exhaust header -
+ * and the exhaust stroke ends with the puff from the stack. Here they are timed by
+ * the narration rather than by a running cycle, which is what a lesson is; in the
+ * world they are only ever driven by the engine's own cycle and its real
+ * combustion events, and without goggles only the puff is there at all.
  */
 public class FourStrokeScenes {
 
 	/** The inline-1 this is staged on. Must match ENGINES in the structure generator. */
 	private static final PonderEngine ENGINE = PonderEngine.of(3, 2, 2, 1);
+
+	/** The same colours EngineFlowEffects uses, a little larger so a lesson reads at a glance. */
+	private static final DustParticleOptions COOL_TRACE = new DustParticleOptions(new Vector3f(0.45F, 0.72F, 1.0F),
+		0.8F);
+	private static final DustParticleOptions WARM_TRACE = new DustParticleOptions(new Vector3f(1.0F, 0.48F, 0.18F),
+		0.8F);
 
 	public static void theFourStrokeCycle(SceneBuilder scene, SceneBuildingUtil util) {
 		scene.title("the_four_stroke_cycle", "The Four-Stroke Cycle");
@@ -80,6 +99,9 @@ public class FourStrokeScenes {
 			.attachKeyFrame()
 			.placeNearTarget()
 			.pointAt(ENGINE.bore(0));
+		scene.effects()
+			.emitParticles(ENGINE.intakeValve(0), scene.effects()
+				.simpleParticleEmitter(COOL_TRACE, new Vec3(0.01D, -0.02D, 0.01D)), 0.35F, 80);
 		scene.idle(100);
 
 		// STROKE 2 - COMPRESSION. Both valves shut, so the Cylinder alone.
@@ -117,10 +139,16 @@ public class FourStrokeScenes {
 				.position(ENGINE.cylinder(0)), 90);
 		scene.overlay()
 			.showText(90)
-			.text("4. Exhaust. The other valve opens and the burnt charge is pushed out.")
+			.text("4. Exhaust. The other valve opens and the burnt gas leaves by the exhaust.")
 			.attachKeyFrame()
 			.placeNearTarget()
-			.pointAt(ENGINE.bore(0));
+			.pointAt(ENGINE.exhaustOutlet());
+		scene.effects()
+			.emitParticles(ENGINE.exhaustPort(0), scene.effects()
+				.simpleParticleEmitter(WARM_TRACE, new Vec3(0.0D, 0.01D, 0.025D)), 0.35F, 80);
+		scene.effects()
+			.emitParticles(ENGINE.exhaustOutlet(), scene.effects()
+				.simpleParticleEmitter(ParticleTypes.SMOKE, new Vec3(0.0D, 0.05D, 0.0D)), 0.25F, 80);
 		scene.idle(100);
 
 		// The consequence, which is the whole reason a player needs this scene: the

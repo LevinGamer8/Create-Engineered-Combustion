@@ -125,7 +125,8 @@ public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity
 		boolean alongX = axis == Axis.X;
 		PartialModel pushrod = alongX ? ECPartialModels.PUSHROD_X : ECPartialModels.PUSHROD_Z;
 		PartialModel rocker = alongX ? ECPartialModels.ROCKER_X : ECPartialModels.ROCKER_Z;
-		PartialModel valve = alongX ? ECPartialModels.VALVE_X : ECPartialModels.VALVE_Z;
+		PartialModel intakeValve = alongX ? ECPartialModels.INTAKE_VALVE_X : ECPartialModels.INTAKE_VALVE_Z;
+		PartialModel exhaustValve = alongX ? ECPartialModels.EXHAUST_VALVE_X : ECPartialModels.EXHAUST_VALVE_Z;
 		Direction rotationAxis = Direction.get(AxisDirection.POSITIVE, axis);
 
 		for (int index = 0; index < EngineValvetrain.VALVE_X.length; index++) {
@@ -147,7 +148,7 @@ public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity
 				.light(light)
 				.renderInto(ms, vertices);
 
-			CachedBuffers.partial(valve, state)
+			CachedBuffers.partial(index == 0 ? intakeValve : exhaustValve, state)
 				.translate(alongX ? alongRun : 0.0F, -lift, alongX ? 0.0F : alongRun)
 				.light(light)
 				.renderInto(ms, vertices);

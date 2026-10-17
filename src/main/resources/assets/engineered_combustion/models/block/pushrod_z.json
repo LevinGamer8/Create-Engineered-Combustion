@@ -4,7 +4,8 @@
     "particle": "engineered_combustion:block/journal",
     "steel": "engineered_combustion:block/journal",
     "brass": "engineered_combustion:block/brass",
-    "web": "engineered_combustion:block/crank_web"
+    "web": "engineered_combustion:block/crank_web",
+    "hot": "engineered_combustion:block/exhaust_steel"
   },
   "elements": [
     {

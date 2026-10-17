@@ -56,7 +56,7 @@ second firing. Listen for that specifically.
 | **V1** | Stand back from an inline-4 and look at it side-on. | It reads as **one machine**, not four in a row: an unbroken crankcase, and the cam cradle and rocker shaft running the full length. |
 | **V2** | Look at the inline-4 from underneath. | One oil pan four bays long, with the Oil Sump as a deep service bowl bolted into one bay. Not a small tank hanging under cylinder 1. |
 | **V3** | Look at the top of the engine, above the rockers. | An intake manifold rail with a runner down into each head, starting at the Carburetor. |
-| **V4** | Look at the flank **opposite** the valve gear. | Completely clear. Nothing should be there; it is reserved for a future exhaust manifold. |
+| **V4** | Look at the flank **opposite** the valve gear. | Only the exhaust - header, log and stack, see V19-V21. No valve gear, controls or fittings have crept onto it. |
 | **V5** | Build the same engine along **Z** instead of X. | Spark plugs, connecting rods and valve gear all correctly oriented. This is the bug that was fixed; a quarter-turn error here is a regression. |
 | **V6** | Watch the valve gear on a running engine. | Cam turns at **half** crank speed. Pushrod rises as its valve is pushed down, because the rocker is a lever. Nothing jitters. |
 | **V7** | Remove the Camshaft. | The cradle and pushrod tunnels are visibly **empty**. No valve gear drawn at all. |
@@ -82,6 +82,27 @@ that defines a four-stroke was drawn nowhere at all.
 | **V17** | Watch one cylinder's pushrod and rocker through a full cycle. | The pushrod's foot stays **on** its lobe at every angle, the rocker visibly **pivots** rather than sliding, and its brass pad rises as the valve on the far side goes down. |
 | **V18** | Find the Spark Plug and the ignition switch. | The plug is still on the head and reachable; the switch has moved along the crankcase, out of the camshaft's way, and is still on the intake flank at eye level. |
 
+## V19-V30 — the exhaust side, flow and materials
+
+Why these exist is in `milestone-15b-exhaust-visuals.md`. In one line: the
+engine had no exhaust, you could not tell the valves apart, and nothing showed
+where the gas goes.
+
+| | Do this | Expect |
+| --- | --- | --- |
+| **V19** | Walk round an R1 to the side **opposite** the carburetor and valve gear. | A dark iron header off the head, a short log under it, and one short upright stack at the flywheel end with a sooted mouth. Nothing floating; the stack is clamped to the head. |
+| **V20** | Build an R2, R3 and R4 and look at the same side. | One header per cylinder, one **continuous** log with a bolted joint at every seam, and still **one** stack, at the flywheel end. No gaps, no doubled pipes at seams. |
+| **V21** | Repeat V19-V20 on an engine built along **Z**. | Identical, turned with the engine. The stack is still at the flywheel end and on the side opposite the intake. |
+| **V22** | Stand back from a running R4. | The two sides read differently at a glance: light clean alloy on the intake, dark heat-stained iron with temper-coloured joints on the exhaust. Not just "more grey". |
+| **V23** | Run an R1 and watch the stack. | One small grey puff **per combustion**, appearing on the exhaust stroke - just after the piston passes the bottom following a bang - not on the bang itself, and never continuous smoke. |
+| **V24** | Run with the throttle wide open, then at idle. | A little more smoke per puff with the throttle open. Still restrained: no steam-locomotive plume. |
+| **V25** | Motor the engine with another Create source, ignition **off** or no fuel. | **No** puffs at all. The engine is pumping air and burning nothing. |
+| **V26** | Run out of fuel while running. | Puffs stop within one cycle of the last bang. |
+| **V27** | Put on Engineer's Goggles near a running R1. | A faint **blue** trace at the intake valve while it is open, and a faint **orange** trace at the exhaust header while that cylinder vents. Neither shows without goggles. |
+| **V28** | With goggles, motor the engine with ignition off. | Blue intake traces continue (air is being drawn); **no** orange traces and no puffs. |
+| **V29** | Look at the top of the head on the intake side. | The intake valve's guide is light alloy and stands on the intake port; the exhaust valve's guide is dark iron with a cast passage running from it across to the exhaust side. The exhaust valve's spring and retainer are heat-coloured, the intake valve's are bright. |
+| **V30** | Look at the head, block, crankcase and sump together in normal daylight and at night. | The head reads lighter than the block; the crankcase and sump show oil grime and weeping. It should not all merge into one dark mass, and nothing should look shiny. |
+
 ---
 
 ## P — Ponder
@@ -89,7 +110,7 @@ that defines a four-stroke was drawn nowhere at all.
 | | Do this | Expect |
 | --- | --- | --- |
 | **P1** | Open Ponder on every engine block and page through all **nine** scenes to the end. | No crash, no missing scene, no scene that ends early. |
-| **P2** | Read the new **"The Four-Stroke Cycle"** scene. | Understandable with no engine knowledge. Intake, compression, power, exhaust, then why the flywheel matters. |
+| **P2** | Read the new **"The Four-Stroke Cycle"** scene. | Understandable with no engine knowledge. Intake, compression, power, exhaust, then why the flywheel matters. On the intake step a blue trace appears at the intake valve; on the exhaust step an orange trace at the header and grey smoke from the stack, which the text points at. |
 | **P3** | Read the assembly scene. | Camshaft installation is shown, and shown as **required** before the engine will start. |
 | **P4** | On every text step in every scene, check what is highlighted. | The highlight points at the object the sentence is teaching. No broad box covering half the machine; no highlight left over from the previous step. |
 | **P5** | Switch the game to German and repeat P1–P4. | Every line translated. No raw `engineered_combustion.…` keys anywhere, in Ponder, goggles or tooltips. |

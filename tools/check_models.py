@@ -150,6 +150,17 @@ ASSEMBLIES = {
         ("crankshaft_joined.json", (16, 0, 0)),
         ("cylinder_manifold_both.json", (16, 16, 0)),
     ],
+    # The flywheel end of an inline-4, which is where the exhaust stack stands:
+    # the log's last seam, the stack, and the flywheel the stack stands beside.
+    "the outlet end of an inline-4": [
+        ("crankshaft_joined.json", (0, 0, 0)),
+        ("crank_assembly_x.json", (0, 0, 0)),
+        ("cylinder_manifold_both.json", (0, 16, 0)),
+        ("crankshaft_joined.json", (16, 0, 0)),
+        ("cylinder_manifold_negative.json", (16, 16, 0)),
+        ("spark_plug_x.json", (16, 16, 0)),
+        ("flywheel_wheel_x.json", (32, 0, 0)),
+    ],
 }
 
 
@@ -293,9 +304,8 @@ STACKED_ONLY_VERTICALLY = ["cylinder.json", "cylinder_manifold_negative.json",
 #
 # What the bound buys is that it can never grow into the problem again:
 #
-#   * only towards NEGATIVE Z - the intake flank. The +Z flank stays clear for
-#     the exhaust manifold a later milestone will put there, and nothing may
-#     quietly start using it;
+#   * only towards NEGATIVE Z - the intake flank. The +Z flank belongs to the
+#     exhaust, which has a bound of its own below;
 #   * never past VALVETRAIN_REACH, so the gear hugs the engine instead of
 #     hanging off it. A block placed against the flank overlaps a couple of
 #     units of pushrod, the way a Create cogwheel overlaps its neighbour;
@@ -304,6 +314,17 @@ STACKED_ONLY_VERTICALLY = ["cylinder.json", "cylinder_manifold_negative.json",
 #
 # Must match VALVETRAIN_REACH in tools/generate_engine_models.py.
 VALVETRAIN_REACH = 2.0
+
+# THE EXHAUST, on the other flank, and the same kind of bound. The header, log
+# and outlet stack are one run from the first port to the last, carried on every
+# head, so they earn the exception the valve gear earned - and only the Cylinder
+# may take it. A Carburetor, a sump or a plug reaching out over the exhaust side
+# is still exactly the floating part this rule exists to stop.
+#
+# Must match EXHAUST_REACH in tools/generate_engine_models.py.
+EXHAUST_REACH = 2.75
+EXHAUST_CARRIERS = {"cylinder.json", "cylinder_manifold_negative.json",
+                    "cylinder_manifold_positive.json", "cylinder_manifold_both.json"}
 
 
 def check_sideways_reach():
@@ -318,11 +339,12 @@ def check_sideways_reach():
                     f"axis (x {lo[0]:.2f}..{hi[0]:.2f}) - it will collide with the "
                     "next section")
                 continue
-            if hi[2] > 16.0 + EPS:
+            reach = EXHAUST_REACH if name in EXHAUST_CARRIERS else 0.0
+            if hi[2] > 16.0 + reach + EPS:
                 problems.append(
-                    f"{name}: {lo}->{hi} reaches out of the block on the EXHAUST "
-                    f"flank (z up to {hi[2]:.2f}) - that side is reserved for the "
-                    "exhaust manifold and must stay clear")
+                    f"{name}: {lo}->{hi} reaches {hi[2] - 16.0:.2f} out of the block on "
+                    f"the EXHAUST flank, past the {reach} allowed there - only the "
+                    "Cylinder's exhaust may stand proud of that side, and only that far")
                 continue
             if lo[2] < -VALVETRAIN_REACH - EPS:
                 problems.append(
@@ -550,6 +572,48 @@ def check_shared_constants():
     return problems
 
 
+# THE EXHAUST PUFF HAS TO COME OUT OF THE PIPE.
+#
+# The stack's mouth is authored in the generator and the puff is emitted from a
+# point in EngineFlowEffects.java, and nothing else connects them. Moving the
+# stack without moving the point puts smoke in the air beside an engine whose
+# outlet is somewhere else - so the Java's point is checked against the
+# generator's EXHAUST_OUTLET, and against the written models: there has to be a
+# soot-floored recess directly under it, which is what the stack's mouth is.
+FLOW_JAVA = ASSETS.parents[2] / "java/dev/engineeredcombustion/content/engine/EngineFlowEffects.java"
+
+
+def check_exhaust_outlet():
+    problems = []
+    spec = importlib.util.spec_from_file_location("_generator", TOOLS / "generate_engine_models.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    expected = module.EXHAUST_OUTLET
+    java_text = FLOW_JAVA.read_text(encoding="utf-8") if FLOW_JAVA.exists() else ""
+    for axis, value in zip("XYZ", expected):
+        match = re.search(rf"\bOUTLET_{axis}\s*=\s*(-?[0-9.]+)D", java_text)
+        if not match:
+            problems.append(f"EXHAUST_OUTLET: no OUTLET_{axis} found in EngineFlowEffects.java")
+        elif abs(float(match.group(1)) - value) > 1e-6:
+            problems.append(
+                f"EXHAUST_OUTLET: the generator puts the stack's mouth at {axis} {value} and "
+                f"EngineFlowEffects.java's OUTLET_{axis} says {match.group(1)}")
+    x, y, z = expected
+    # The two variants an engine's LAST cylinder can be: an inline-1's, and the
+    # positive end of a longer run. Those are the only ones that carry the stack.
+    for name in ("cylinder.json", "cylinder_manifold_negative.json"):
+        model = json.loads((ROOT / name).read_text())
+        soot = model["textures"].get("soot")
+        floors = [e for e in model["elements"]
+                  if "up" in e["faces"]
+                  and model["textures"].get(e["faces"]["up"]["texture"].lstrip("#")) == soot
+                  and e["from"][0] < x < e["to"][0] and e["from"][2] < z < e["to"][2]
+                  and e["to"][1] < y]
+        if not floors:
+            problems.append(f"{name}: no sooted stack mouth under the exhaust outlet at {expected}")
+    return problems
+
+
 def check_references():
     """Every reference an asset makes has to land on something that exists.
 
@@ -560,7 +624,7 @@ def check_references():
     problems = []
     models = set()
     for path in sorted((ASSETS / "models").rglob("*.json")):
-        models.add(str(path.relative_to(ASSETS / "models")).replace(".json", ""))
+        models.add(path.relative_to(ASSETS / "models").as_posix().replace(".json", ""))
 
     for path in sorted((ASSETS / "models").rglob("*.json")):
         name = path.relative_to(ASSETS)
@@ -626,10 +690,11 @@ def main():
     bad += len(chamber)
 
     valvetrain = (check_moving_reach() + check_lobe_phase() + check_cam_sweep()
-                  + check_shared_constants())
+                  + check_shared_constants() + check_exhaust_outlet())
     print(f"\n{'ok ' if not valvetrain else 'BAD'} the moving valve gear"
           f" - reach within {VALVETRAIN_MOVING_REACH} units, lobes in phase with"
-          " the valves they lift, nothing swept through, one set of constants")
+          " the valves they lift, nothing swept through, one set of constants,"
+          " and the exhaust puff on the stack's mouth")
     for problem in valvetrain:
         print("      " + problem)
     bad += len(valvetrain)

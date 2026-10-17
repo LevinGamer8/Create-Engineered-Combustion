@@ -98,8 +98,8 @@ TRANSLATIONS = {
         "2. Verdichten. Beide Ventile sind zu, der Kolben verdichtet das Gemisch.",
     "3. Power. The Spark Plug lights it, and the Crankshaft is pushed round.":
         "3. Arbeiten. Die Zündkerze zündet es, und die Kurbelwelle wird angetrieben.",
-    "4. Exhaust. The other valve opens and the burnt charge is pushed out.":
-        "4. Ausstoßen. Das andere Ventil öffnet, das verbrannte Gemisch wird ausgeschoben.",
+    "4. Exhaust. The other valve opens and the burnt gas leaves by the exhaust.":
+        "4. Ausstoßen. Das andere Ventil öffnet, das verbrannte Gas geht in den Auspuff.",
     "Only one stroke pushes. The Flywheel carries the engine through the rest.":
         "Nur ein Takt treibt an. Das Schwungrad trägt den Motor durch die übrigen.",
     "That is why a single thumps, and why more cylinders run smoother.":

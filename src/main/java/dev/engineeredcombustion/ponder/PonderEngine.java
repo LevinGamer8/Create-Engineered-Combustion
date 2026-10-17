@@ -145,6 +145,27 @@ public record PonderEngine(BlockPos controller, Axis axis, int sections, int acc
 		return on(cylinder(index), 11.9, 19.4, 8.0);
 	}
 
+	/**
+	 * Beside a cylinder's intake valve, over the intake port it opens - the valve
+	 * standing on the clean alloy guide, on the intake side of the head.
+	 */
+	public Vec3 intakeValve(int index) {
+		return on(cylinder(index), 3.6, 18.0, 4.2);
+	}
+
+	/** Just outboard of a cylinder's exhaust header, on the hot side of the head. */
+	public Vec3 exhaustPort(int index) {
+		return on(cylinder(index), 8.0, 15.0, 18.8);
+	}
+
+	/**
+	 * The mouth of the engine's one exhaust stack, which stands on its last
+	 * Cylinder - see {@code exhaust_elements} and {@code EngineFlowEffects}.
+	 */
+	public Vec3 exhaustOutlet() {
+		return on(lastCylinder(), 13.0, 22.0, 17.3);
+	}
+
 	/** The middle of a bore, where the piston runs. */
 	public Vec3 bore(int index) {
 		return on(cylinder(index), 8.0, 7.0, 8.0);

@@ -156,6 +156,40 @@ def mottle(px, rng, layers):
             row[x] = shade(row[x], int(sum(f[y][x] * amp for (f, amp) in fields)))
 
 
+def patches(px, rng, cells, color, threshold, strength):
+    """Clusters of `color` where a lattice field rises past `threshold`.
+
+    Weathering is not uniform: scale on hot iron and oil on a crankcase gather
+    in patches, and those patches are what stop a dark texture reading as flat
+    paint. Built from the same tileable field `mottle` uses, so a patch that
+    runs off one edge of the sprite comes back in on the other.
+    """
+    field = value_noise(rng, cells, len(px))
+    for y in range(len(px)):
+        row = px[y]
+        for x in range(len(row)):
+            t = (field[y][x] - threshold) / max(1e-6, 1.0 - threshold)
+            if t > 0.0:
+                row[x] = mix(row[x], color, min(1.0, t * 1.6) * strength)
+
+
+def streaks(px, rng, count, color, strength, length=(6, 18)):
+    """Vertical runs of `color` from the top of the sprite down, fading out.
+
+    Oil weeping from a joint runs downhill, and that direction is the whole
+    difference between grime and dirt. The models use world-aligned UVs with v
+    running down the block, so on every side face these hang the right way up.
+    """
+    h = len(px)
+    for _ in range(count):
+        x = rng.rint(0, len(px[0]) - 1)
+        y0 = rng.rint(0, h // 3)
+        run = rng.rint(*length)
+        for y in range(y0, min(h, y0 + run)):
+            fade = 1.0 - (y - y0) / float(run)
+            px[y][x] = mix(px[y][x], color, strength * fade)
+
+
 def brushed(px, rng, amount, axis="x"):
     """Directional tool marks, the length of the sprite: a machined finish."""
     n = len(px) if axis == "x" else len(px[0])
@@ -213,7 +247,12 @@ def bolt(px, cx, cy, r, base):
 # --------------------------------------------------------------------------
 CAST = (74, 76, 82, 255)          # primary cast iron
 CAST_DARK = (54, 56, 61, 255)
-HEAD = (80, 77, 76, 255)          # cylinder head casting, a touch warmer
+HEAD = (92, 90, 88, 255)          # cylinder head: a finer, lighter casting than the block
+INTAKE = (124, 128, 132, 255)     # intake manifold and guide: clean cast alloy, cool
+EXHAUST = (54, 50, 49, 255)       # exhaust side: heat-aged cast iron, darker and warmer
+RUST = (88, 62, 48, 255)          # the scale that forms on iron that runs hot
+SOOT = (22, 20, 19, 255)          # inside the exhaust outlet
+OIL_GRIME = (36, 32, 26, 255)     # weeping oil and the dust it picks up
 DECK = (112, 117, 124, 255)       # machined deck / gasket faces
 STEEL = (168, 175, 184, 255)      # machined steel: journals, bolts
 FORGED = (136, 143, 154, 255)     # forged steel: connecting rod
@@ -259,6 +298,10 @@ def t_crankcase():
     rect(px, 0, 15, S, 17, shade(CAST, 6))
     rect(px, 0, 17, S, 18, shade(CAST, -18))
     noise(px, rng, 5)
+    # Oil that has wept from the deck joint above and collected dust on the way
+    # down: streaks, and darker patches where it has pooled.
+    streaks(px, rng, 7, OIL_GRIME, 0.38)
+    patches(px, rng, 5, OIL_GRIME, 0.35, 0.32)
     for (bx, by) in ((5, 5), (26, 5), (5, 26), (26, 26)):
         bolt(px, bx, by, 2.6, STEEL)
     return px
@@ -309,8 +352,13 @@ def t_cylinder_fin():
 
 
 def t_cylinder_head():
-    """Head casting: heavier grain plus stud bosses."""
-    px = t_cast_iron(83, HEAD, 10)
+    """Head casting: a finer, lighter pour than the block, with stud bosses.
+
+    Lighter on purpose. A head is the part of a small engine that is machined
+    all over, and drawing it in the same dark iron as the block is what made
+    head, barrel and crankcase merge into one grey mass at Minecraft's lighting.
+    """
+    px = t_cast_iron(83, HEAD, 7)
     rng = Rng(97)
     rect(px, 0, 24, S, 26, shade(HEAD, -20))
     rect(px, 0, 26, S, 27, shade(HEAD, 14))
@@ -457,7 +505,12 @@ def t_carburetor():
 
 
 def t_oil_sump():
-    """Oil pan casting: cast iron with a wet, slightly darker lower band."""
+    """Oil pan casting: cast iron with a wet, slightly darker lower band.
+
+    The dirtiest part of the engine, as it should be: oil weeps from the pan
+    gasket and runs down the side, and the wet lower band picks up a sheen along
+    its top edge where the film is thickest.
+    """
     px = t_cast_iron(251, CAST, 9)
     rng = Rng(257)
     rect(px, 0, 20, S, 21, shade(CAST, -22))
@@ -465,7 +518,90 @@ def t_oil_sump():
     rect(px, 0, 6, S, 7, shade(CAST, 16))
     noise(px, rng, 4)
     specks(px, rng, 12, -14)
+    streaks(px, rng, 10, OIL_GRIME, 0.5, (8, 24))
+    patches(px, rng, 4, OIL_GRIME, 0.25, 0.4)
+    rect(px, 0, 21, S, 22, shade(CAST, 6))
     border(px, 12, -18)
+    return px
+
+
+def t_intake_manifold():
+    """Intake manifold, runner and intake valve guide: clean cast alloy.
+
+    The cool side of the engine. Lighter and greyer than any iron on it, with a
+    fine grain and almost no weathering - cold air and fuel pass through it, and
+    nothing on it ever gets hot enough to scale. Its whole job, visually, is to
+    be unmistakably not the exhaust.
+    """
+    px = blank()
+    fill(px, INTAKE)
+    rng = Rng(281)
+    mottle(px, rng, ((4, 8), (8, 5), (16, 2)))
+    noise(px, rng, 3)
+    specks(px, rng, 10, -12)
+    specks(px, rng, 6, 10)
+    rect(px, 0, 15, S, 16, shade(INTAKE, -18))     # the parting line of the mould
+    rect(px, 0, 16, S, 17, shade(INTAKE, 10))
+    border(px, 14, -18)
+    return px
+
+
+def t_exhaust_manifold():
+    """Exhaust header, log and stack: heat-aged cast iron.
+
+    The hot side of the engine, and it has to read as hot when the engine is
+    switched off: darker than the block, warmer in hue, blotched with the rust
+    scale iron grows when it runs hot and cools again, and grimed with soot
+    towards the bottom of every face. Heavy grain - this is the roughest casting
+    on the machine.
+    """
+    px = t_cast_iron(293, EXHAUST, 11)
+    rng = Rng(307)
+    patches(px, rng, 5, RUST, 0.3, 0.35)
+    patches(px, rng, 9, shade(RUST, 14), 0.55, 0.2)
+    patches(px, rng, 7, SOOT, 0.25, 0.45)
+    for y in range(20, S):
+        t = (y - 20) / float(S - 20)
+        for x in range(S):
+            px[y][x] = mix(px[y][x], SOOT, 0.35 * t)
+    specks(px, rng, 14, -18)
+    specks(px, rng, 8, 16)
+    border(px, 8, -14)
+    return px
+
+
+def t_exhaust_steel():
+    """Studs, collars, the stack's lip and the exhaust valve's spring: hot steel.
+
+    Steel that has run hot takes on temper colours - straw, then bronze, then
+    blue - and keeps them. That is the one bright thing on the exhaust side, and
+    it is bright on purpose: it marks the joints of the hot side the way brass
+    marks the one contact that matters on the valve gear, and it is what tells
+    the exhaust valve apart from the intake valve beside it.
+    """
+    px = blank()
+    straw, bronze, blue = (146, 136, 118, 255), (124, 102, 92, 255), (92, 100, 122, 255)
+    for y in range(S):
+        t = y / float(S - 1)
+        c = mix(straw, bronze, t * 2.0) if t < 0.5 else mix(bronze, blue, (t - 0.5) * 2.0)
+        rect(px, 0, y, S, y + 1, c)
+    rng = Rng(311)
+    for y in range(S):
+        d = -12 if y % 4 == 0 else (8 if y % 4 == 2 else 0)
+        rect(px, 0, y, S, y + 1, shade(px[y][0], d))
+    mottle(px, rng, ((5, 10), (11, 5)))
+    noise(px, rng, 3)
+    return px
+
+
+def t_exhaust_soot():
+    """The inside of the outlet: near-black, with the last of the heat-brown."""
+    px = blank()
+    fill(px, SOOT)
+    rng = Rng(313)
+    mottle(px, rng, ((4, 6), (9, 4)))
+    patches(px, rng, 5, (48, 34, 26, 255), 0.4, 0.5)
+    noise(px, rng, 2)
     return px
 
 
@@ -1023,6 +1159,10 @@ TEXTURES = {
     "block/carburetor": t_carburetor,
     "block/brass": t_brass,
     "block/oil_sump": t_oil_sump,
+    "block/intake_manifold": t_intake_manifold,
+    "block/exhaust_manifold": t_exhaust_manifold,
+    "block/exhaust_steel": t_exhaust_steel,
+    "block/exhaust_soot": t_exhaust_soot,
     "block/indicator_off": t_indicator_off,
     "block/indicator_on": t_indicator_on,
     "block/spark_plug_ceramic": t_spark_plug_ceramic,

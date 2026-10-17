@@ -105,6 +105,8 @@ sourceSets {
             include "dev/engineeredcombustion/content/engine/*.java"
             exclude "dev/engineeredcombustion/content/engine/EngineComponents.java"
             exclude "dev/engineeredcombustion/content/engine/CombustionAudio.java"
+            // Particles, like the audio: it reads the simulation and adds nothing to it.
+            exclude "dev/engineeredcombustion/content/engine/EngineFlowEffects.java"
             // The four-stroke cycle, in production. Pure arithmetic by construction -
             // there is deliberately no Minecraft type anywhere under it, and this
             // include is what keeps that true rather than merely intended.

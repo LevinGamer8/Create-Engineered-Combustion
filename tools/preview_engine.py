@@ -307,7 +307,7 @@ def section(theta, index, count, carburetor, sump, spark_plug=True):
     q += quads_of("block/connecting_rod_x.json",
                   mk_xform((x, 16 + wl - 8.0, 0), pivot=(8, 8, 8),
                            angle=rod_swing(angle), axis="x"))
-    for valve_x, lift in zip(VALVE_X, lifts):
+    for valve_x, lift, valve in zip(VALVE_X, lifts, ("intake_valve", "exhaust_valve")):
         offset = valve_x - 8.0
         q += quads_of("block/pushrod_x.json",
                       mk_xform((x + offset, 16 + lift * VALVE_LIFT, 0)))
@@ -315,7 +315,7 @@ def section(theta, index, count, carburetor, sump, spark_plug=True):
                       mk_xform((x + offset, 16 + ROCKER_PIVOT_Y - 8.0, ROCKER_PIVOT_Z - 8.0),
                                pivot=(8, 8, 8),
                                angle=math.radians(-lift * ROCKER_SWING), axis="x"))
-        q += quads_of("block/valve_x.json", mk_xform((x + offset, 16 - lift * VALVE_LIFT, 0)))
+        q += quads_of(f"block/{valve}_x.json", mk_xform((x + offset, 16 - lift * VALVE_LIFT, 0)))
     if carburetor:
         q += quads_of("block/carburetor.json", mk_xform((x, 32, 0)))
     if sump:
@@ -357,12 +357,13 @@ if __name__ == "__main__":
         # pushrods and the rocker shaft all read at once, which is the thing
         # worth checking; the head-on one is how long an inline-4 looks.
         #
-        # The exhaust view is here too, and it is not decoration: that flank is
-        # deliberately kept clear for a future exhaust manifold, and a picture of
-        # it is how anyone notices the day something starts creeping onto it.
+        # The exhaust side gets two: head-on, for whether the log runs unbroken
+        # from the first port to the stack, and three-quarter, for whether the
+        # header, log and stack read as one hot assembly.
         for name, yaw, pitch in (("3q", math.radians(38), math.radians(20)),
                                  ("intake", math.radians(2), math.radians(6)),
-                                 ("exhaust", math.radians(182), math.radians(6))):
+                                 ("exhaust", math.radians(182), math.radians(6)),
+                                 ("exhaust_3q", math.radians(218), math.radians(20))):
             # One scale for every layout, so the four pictures can be put side
             # by side and compared: an inline-4 has to look four times as long
             # as an inline-1, not four times as small.
