@@ -13,7 +13,8 @@ commit what it wrote.
 | Recipes, tags, the Oil Shale loot table, worldgen | `tools/generate_survival_data.py` |
 | Static checks over what those wrote | `tools/check_models.py` |
 | Offline rasteriser for looking at it | `tools/preview_engine.py` |
-| Engine audio (unrelated, untouched) | `tools/generate_sounds.py` |
+| Synthetic engine audio (unrelated, untouched) | `tools/generate_sounds.py` |
+| Recorded engine audio | none - real recordings, see below |
 
 ```
 python3 tools/generate_engine_textures.py
@@ -109,3 +110,34 @@ of the assembled engine from three angles at four crank angles. It is not a
 Minecraft client and it does not prove anything about how the game will stitch
 the atlas - but it is how the geometry gets looked at at all in an environment
 that cannot resolve NeoForge, and a broken model is obvious in it.
+
+## Engine audio: synthetic and recorded
+
+The engine sounds come from two different places, and they are kept apart.
+
+**Synthetic.** `engine_mechanical`, `engine_combustion_loop`, `engine_fire_1..3`,
+`engine_spark`, `engine_start`, `engine_stall` and `engine_stop` are generated
+from noise, impulses and filters by `tools/generate_sounds.py`. Nothing in them is
+sampled or recorded. The generator only ever writes and removes the files it
+names, so re-running it leaves the recordings alone.
+
+**Recorded.** Three files are real recordings, made by and for this project from
+a privately owned, warm VW Golf 1 Cabrio with a four-cylinder petrol engine. No
+manufacturer supplied or endorsed them.
+
+| File | What it is | Sound event | Played |
+| --- | --- | --- | --- |
+| `golf_r4_idle_1000_loop.ogg` | ~1000 RPM, 9.75 s seamless loop, mono 48 kHz Vorbis | `engine_recorded_r4_idle` | by a running inline-4 |
+| `golf_r4_1500_loop.ogg` | ~1500 RPM, 9.75 s seamless loop, mono 48 kHz Vorbis | `engine_recorded_r4_1500` | by a running inline-4 |
+| `golf_r4_warm_start.ogg` | warm start, speech removed, 5.1 s | `engine_recorded_r4_warm_start` | **never** (see below) |
+
+They are not generator output: do not regenerate, re-encode or hand-edit them.
+The loops were cut to be cyclic, and any edit risks a click at the loop point.
+
+The warm-start clip is the real car's **electric starter motor**, while this mod's
+engines are started with a Hand Crank, so it is registered but nothing plays it.
+It is kept for future starter-motor work.
+
+How the loops are used - only for an inline-4, only while genuinely running,
+cross-faded by speed - is described in
+[`recorded-r4-audio.md`](recorded-r4-audio.md).

@@ -69,5 +69,32 @@
         "stream": false
       }
     ]
+  },
+  "engine_recorded_r4_idle": {
+    "subtitle": "subtitles.engineered_combustion.engine_recorded_r4_idle",
+    "sounds": [
+      {
+        "name": "engineered_combustion:golf_r4_idle_1000_loop",
+        "stream": false
+      }
+    ]
+  },
+  "engine_recorded_r4_1500": {
+    "subtitle": "subtitles.engineered_combustion.engine_recorded_r4_1500",
+    "sounds": [
+      {
+        "name": "engineered_combustion:golf_r4_1500_loop",
+        "stream": false
+      }
+    ]
+  },
+  "engine_recorded_r4_warm_start": {
+    "subtitle": "subtitles.engineered_combustion.engine_recorded_r4_warm_start",
+    "sounds": [
+      {
+        "name": "engineered_combustion:golf_r4_warm_start",
+        "stream": false
+      }
+    ]
   }
 }

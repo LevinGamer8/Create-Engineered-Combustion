@@ -43,6 +43,11 @@ import net.minecraft.world.level.Level;
  * separates an inline-1 at 0.53 Hz from an inline-4 at 6.4. The second is still
  * dormant, and exists so a faster engine is a tuning change rather than a rewrite.
  *
+ * <h2>Recorded inline-4 (experimental)</h2>
+ * While {@link RecordedEngineAudio#isActive} holds - an inline-4, genuinely
+ * running - the pulse is not played, because the engine's recorded loop already
+ * contains every firing. The rate is still measured from every event.
+ *
  * <h2>Why this is not in the client package</h2>
  * It is only ever driven from client-side paths, but it touches no client-only
  * type: {@code Level}, {@code BlockPos}, the sound registry, and
@@ -119,7 +124,11 @@ public final class CombustionAudio {
 		}
 		lastEventTick = now;
 
-		if (wantsIndividualPulse())
+		// The stride is advanced either way, so its count stays in step with the
+		// events. A running inline-4 is voiced by its recording, which already
+		// contains every firing; a synthetic bang on top would double each one. The
+		// event itself, and everything else it drives, is untouched.
+		if (wantsIndividualPulse() && RecordedEngineAudio.syntheticVoiceAudible(engine))
 			playPulse(level, cylinderPos, engine);
 	}
 

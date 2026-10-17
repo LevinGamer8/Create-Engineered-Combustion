@@ -59,9 +59,22 @@ Generator output is an original asset of this project and is covered by this
 document exactly as a hand-authored asset is. The fact that a file can be
 regenerated grants no permission to reuse it.
 
-## Future engine recordings
+## Engine recordings made for this project
 
-Any real-world engine recordings incorporated into this project in future remain
+The files `golf_r4_idle_1000_loop.ogg`, `golf_r4_1500_loop.ogg` and
+`golf_r4_warm_start.ogg` under
+`src/main/resources/assets/engineered_combustion/sounds/` are real recordings of a
+running engine, made specifically by and for this project from a privately owned
+VW Golf 1 Cabrio with a four-cylinder petrol engine. They are original assets of
+this project and are covered by this document exactly as every other asset is.
+
+They were not supplied, licensed or endorsed by Volkswagen or by any other
+manufacturer, and the vehicle's make is named only to describe what was recorded.
+
+## Third-party engine recordings
+
+Any real-world engine recordings from third parties incorporated into this
+project in future remain
 the property of their respective rights holders and are licensed to this project
 under their own terms. Nothing in this document claims ownership of such material,
 and nothing in this document grants you any right to it — reuse of a recording

@@ -168,13 +168,16 @@ public class EngineLoopSound extends AbstractTickableSoundInstance {
 		}
 
 		float eventRateHz = crankshaft.getCombustionEventRateHz();
-		targetVolume = layer.volumeFor(crankshaft.getEngineState(), eventRateHz);
-		if (targetVolume <= 0.0F) {
-			// This layer has nothing left to say - the engine stopped turning, or its
-			// firing rate dropped back below the aggregation threshold.
+		if (!layer.isWanted(crankshaft.getEngineState(), eventRateHz)) {
+			// This layer has nothing left to say - the engine stopped turning, its
+			// firing rate dropped back below the aggregation threshold, or a recorded
+			// inline-4 stopped running and handed back to the mechanical layer.
 			fadeOut();
 			return;
 		}
+		// May be zero while still wanted: a recorded band at the far end of its
+		// cross-fade stays alive, silent, rather than being restarted.
+		targetVolume = layer.volumeFor(crankshaft.getEngineState(), eventRateHz);
 		pitch = layer.pitchFor(crankshaft.getEngineState(), eventRateHz, level.getGameTime());
 	}
 }

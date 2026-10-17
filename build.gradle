@@ -154,6 +154,9 @@ var simulationTestClasses = [
     // The audio contract: that every bang is one paid combustion, at the rate the
     // four-stroke actually fires, and that nothing scales into inventing one.
     "EngineAudioTests",
+    // Experimental first recorded-R4 audio pass: which engines the real Golf
+    // recordings voice, and that the simulation never notices.
+    "RecordedEngineAudioTests",
 ]
 
 var simulationTestTasks = simulationTestClasses.collect { className ->

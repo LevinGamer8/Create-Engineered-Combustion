@@ -393,7 +393,9 @@ rather than an audio rewrite.
 ### Sound assets
 
 All original, all synthesised from noise, impulses and filters by
-`tools/generate_sounds.py`. Nothing sampled or recorded.
+`tools/generate_sounds.py`. Nothing sampled or recorded. (True of milestone 9.
+The mod has since gained real engine recordings for the inline-4, documented
+separately from these synthetic assets in [`assets.md`](assets.md).)
 
 The generator now seeds a fresh RNG per sound, from that sound's own name, so
 **milestone 7's rule about appending new sounds at the end no longer applies**.
