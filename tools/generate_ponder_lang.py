@@ -79,8 +79,8 @@ TRANSLATIONS = {
         "Jeder Zylinder braucht seine eigene Zündkerze, um Treibstoff zu zünden.",
     "The Carburetor holds Gasoline and controls the throttle.":
         "Der Vergaser fasst das Benzin und regelt das Gas.",
-    "The Oil Sump hangs under the crankcase and supplies lubrication.":
-        "Die Ölwanne hängt unter dem Kurbelgehäuse und versorgt den Motor mit Schmierung.",
+    "The Oil Sump bolts under the oil pan as its deep bowl, and supplies lubrication.":
+        "Die Ölwanne sitzt als tiefer Sumpf unter der Wanne und versorgt den Motor mit Schmierung.",
     "The Flywheel transfers engine power into a Create kinetic network.":
         "Das Schwungrad überträgt die Motorleistung in ein kinetisches Create-Netzwerk.",
     "Either end of the crankshaft will do.":
@@ -163,6 +163,8 @@ TRANSLATIONS = {
         "Benachbarte Kurbelwellensegmente bilden einen gemeinsamen Motor, nicht mehrere.",
     "One crankshaft, one Carburetor, one Oil Sump, one Flywheel - and several cylinders.":
         "Eine Kurbelwelle, ein Vergaser, eine Ölwanne, ein Schwungrad - und mehrere Zylinder.",
+    "The oil pan runs under every section. The one Oil Sump is its deep bowl.":
+        "Die Wanne läuft unter jedem Abschnitt durch. Die eine Ölwanne ist ihr tiefer Sumpf.",
     "Each cylinder fires at a different point in the crankshaft's rotation.":
         "Jeder Zylinder zündet an einem anderen Punkt der Kurbelwellenumdrehung.",
     "More cylinders provide more power, and consume more fuel.":

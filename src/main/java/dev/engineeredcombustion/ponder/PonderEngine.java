@@ -146,16 +146,16 @@ public record PonderEngine(BlockPos controller, Axis axis, int sections, int acc
 	}
 
 	/**
-	 * Beside a cylinder's intake valve, over the intake port it opens - the valve
-	 * standing on the clean alloy guide, on the intake side of the head.
+	 * The window into a cylinder's intake port, on the intake face of the head -
+	 * the opening the passage to the intake valve is seen through.
 	 */
-	public Vec3 intakeValve(int index) {
-		return on(cylinder(index), 3.6, 18.0, 4.2);
+	public Vec3 intakePort(int index) {
+		return on(cylinder(index), 6.5, 15.7, 0.4);
 	}
 
 	/** Just outboard of a cylinder's exhaust header, on the hot side of the head. */
 	public Vec3 exhaustPort(int index) {
-		return on(cylinder(index), 8.0, 15.0, 18.8);
+		return on(cylinder(index), 10.0, 15.0, 18.8);
 	}
 
 	/**

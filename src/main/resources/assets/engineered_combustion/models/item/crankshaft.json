@@ -3,6 +3,7 @@
   "textures": {
     "particle": "engineered_combustion:block/crankshaft",
     "case": "engineered_combustion:block/crankshaft",
+    "pan": "engineered_combustion:block/oil_pan",
     "cast": "engineered_combustion:block/cast_iron",
     "deck": "engineered_combustion:block/crankcase_deck",
     "steel": "engineered_combustion:block/journal",

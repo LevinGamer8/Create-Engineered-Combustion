@@ -103,6 +103,20 @@ where the gas goes.
 | **V29** | Look at the top of the head on the intake side. | The intake valve's guide is light alloy and stands on the intake port; the exhaust valve's guide is dark iron with a cast passage running from it across to the exhaust side. The exhaust valve's spring and retainer are heat-coloured, the intake valve's are bright. |
 | **V30** | Look at the head, block, crankcase and sump together in normal daylight and at night. | The head reads lighter than the block; the crankcase and sump show oil grime and weeping. It should not all merge into one dark mass, and nothing should look shiny. |
 
+## V31-V37 — ports, valves, oil pan, and the Z engine
+
+Why these exist is in `milestone-15b-geometry-realism.md`.
+
+| | Do this | Expect |
+| --- | --- | --- |
+| **V31** | Look at the intake side of an R1's head, between the pushrods. | A framed **opening** with depth behind it, not a dark square. Look in at an angle: the intake valve's stem stands in the passage and its seat ring is on the floor. |
+| **V32** | Look at an R4's intake side. | Four windows, each under its runner; every runner lands on its head. No runner ends against a solid face. |
+| **V33** | Look down on an R1 and an R4 from above the heads. | A sooted channel across each head from the exhaust valve's guide to the exhaust face, ending where the header goes in. |
+| **V34** | Run an R1 slowly and watch the top of the bore through the barrel's window. | Each valve's head drops out of the chamber roof on its own stroke and goes back; neither ever touches the piston. |
+| **V35** | Look under an R1, then an R4, from the side. | One dark pan under the whole crankcase, the same depth under every section, bolted to the block with no gap. The Oil Sump is one deeper bowl under one bay of it, not a full pan under one cylinder. |
+| **V36** | Find the dipstick and the oil feed. | Both climb the flank outside the pan; the dipstick's handle sits at the pan's rim, the feed reaches the oil gallery. |
+| **V37** | Build an R1 and an R4 along **Z**, fit a Camshaft, and run them. | The camshaft, pushrods, rockers, valves and timing gears are **in** their cradle, tunnels and guides on the intake flank, exactly as on an X engine. This changed in this pass; before it they stood on the opposite flank. |
+
 ---
 
 ## P — Ponder

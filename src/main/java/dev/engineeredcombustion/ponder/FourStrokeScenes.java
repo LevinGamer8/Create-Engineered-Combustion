@@ -42,7 +42,7 @@ import net.minecraft.world.phys.Vec3;
  *
  * <h2>Where the gas goes, shown more plainly than in the world</h2>
  * The intake and exhaust strokes carry the same two traces the Engineer's Goggles
- * show on a real engine - cool at the intake valve, warm at the exhaust header -
+ * show on a real engine - cool in the intake port, warm at the exhaust header -
  * and the exhaust stroke ends with the puff from the stack. Here they are timed by
  * the narration rather than by a running cycle, which is what a lesson is; in the
  * world they are only ever driven by the engine's own cycle and its real
@@ -100,8 +100,8 @@ public class FourStrokeScenes {
 			.placeNearTarget()
 			.pointAt(ENGINE.bore(0));
 		scene.effects()
-			.emitParticles(ENGINE.intakeValve(0), scene.effects()
-				.simpleParticleEmitter(COOL_TRACE, new Vec3(0.01D, -0.02D, 0.01D)), 0.35F, 80);
+			.emitParticles(ENGINE.intakePort(0), scene.effects()
+				.simpleParticleEmitter(COOL_TRACE, new Vec3(-0.006D, -0.004D, 0.02D)), 0.35F, 80);
 		scene.idle(100);
 
 		// STROKE 2 - COMPRESSION. Both valves shut, so the Cylinder alone.

@@ -24,7 +24,7 @@ import net.minecraft.world.level.Level;
  * visible from outside, and an engine permanently wreathed in coloured smoke would
  * be a worse thing to look at than one with none.
  *
- * <p><b>Teaching</b> (goggles): a cool trace at each cylinder's intake valve while
+ * <p><b>Teaching</b> (goggles): a cool trace in each cylinder's intake port while
  * it is open, and a warm one at each exhaust header while that cylinder is venting
  * a charge it really burned. This is the layer that answers "which valve is which,
  * and when does it open" - and it costs nothing for a player who is not asking.
@@ -74,15 +74,23 @@ public final class EngineFlowEffects {
 	public static final double OUTLET_Y = 22.0D;
 	public static final double OUTLET_Z = 17.3D;
 
-	/** Just outboard of a cylinder's exhaust header, where the warm trace starts. */
-	private static final double EXHAUST_PORT_X = 8.0D;
+	/**
+	 * Just outboard of a cylinder's exhaust header, where the warm trace starts. The
+	 * X is the header's centreline, {@code EXHAUST_HEADER_X} in the generator, and is
+	 * checked against it.
+	 */
+	public static final double EXHAUST_PORT_X = 10.0D;
 	private static final double EXHAUST_PORT_Y = 15.0D;
 	private static final double EXHAUST_PORT_Z = 18.8D;
 
-	/** Beside the intake valve's guide, over the intake port it opens. */
-	private static final double INTAKE_VALVE_X = 3.6D;
-	private static final double INTAKE_VALVE_Y = 18.0D;
-	private static final double INTAKE_VALVE_Z = 4.2D;
+	/**
+	 * In the mouth of the intake port's window, where the cool trace starts and
+	 * drifts inward towards the valve - so the goggles show the air going the way
+	 * the passage behind the window goes.
+	 */
+	private static final double INTAKE_PORT_X = 6.5D;
+	private static final double INTAKE_PORT_Y = 15.7D;
+	private static final double INTAKE_PORT_Z = 0.4D;
 
 	/** Each cylinder's teaching trace is drawn on one tick in this many. */
 	private static final int TEACHING_STRIDE_TICKS = 3;
@@ -160,8 +168,8 @@ public final class EngineFlowEffects {
 			}
 
 			if (teaching && turning && strideTick && ValveTiming.INTAKE.lift(angle) > TEACHING_MIN_LIFT)
-				emit(level, cylinderPos.apply(cylinder), axis, COOL_TRACE, INTAKE_VALVE_X, INTAKE_VALVE_Y,
-					INTAKE_VALVE_Z, 0.012D, -0.018D, 0.012D);
+				emit(level, cylinderPos.apply(cylinder), axis, COOL_TRACE, INTAKE_PORT_X, INTAKE_PORT_Y,
+					INTAKE_PORT_Z, -0.006D, -0.004D, 0.02D);
 		}
 
 		if (venting > 0)

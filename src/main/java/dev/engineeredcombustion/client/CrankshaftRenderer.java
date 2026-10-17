@@ -100,9 +100,12 @@ public class CrankshaftRenderer implements BlockEntityRenderer<CrankshaftBlockEn
 		// moved a quarter cycle apart.
 		float camAngle = (float) Math.toRadians(be.getEngineState()
 			.getLocalRenderCamshaftAngleDegrees(be.getCylinderIndex(), partialTicks));
+		// On a Z engine the offset makes the same quarter turn the blockstate gives
+		// the crankcase - the intake flank's -Z becomes +X - so it is negated onto X.
+		// See EngineValvetrain#flankOffset.
 		float offsetZ = EngineValvetrain.camOffsetZ();
 		CachedBuffers.partial(camshaft, be.getBlockState())
-			.translate(axis == Axis.X ? 0.0F : offsetZ, EngineValvetrain.camOffsetY(),
+			.translate(axis == Axis.X ? 0.0F : EngineValvetrain.flankOffset(offsetZ), EngineValvetrain.camOffsetY(),
 				axis == Axis.X ? offsetZ : 0.0F)
 			.rotateCentered(camAngle, rotationAxis)
 			.light(light)
@@ -127,7 +130,8 @@ public class CrankshaftRenderer implements BlockEntityRenderer<CrankshaftBlockEn
 		float driveOffsetZ = EngineValvetrain.timingDriveOffsetZ();
 		CachedBuffers.partial(axis == Axis.X ? ECPartialModels.TIMING_GEAR_X
 			: ECPartialModels.TIMING_GEAR_Z, be.getBlockState())
-			.translate(axis == Axis.X ? 0.0F : driveOffsetZ, EngineValvetrain.timingDriveOffsetY(),
+			.translate(axis == Axis.X ? 0.0F : EngineValvetrain.flankOffset(driveOffsetZ),
+				EngineValvetrain.timingDriveOffsetY(),
 				axis == Axis.X ? driveOffsetZ : 0.0F)
 			.rotateCentered(-angle, rotationAxis)
 			.light(light)

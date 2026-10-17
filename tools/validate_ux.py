@@ -449,7 +449,7 @@ TARGET_BLOCKS = {
     "lastCylinder": "cylinder",
     "bore": "cylinder",
     "sparkPlug": "cylinder",
-    "intakeValve": "cylinder",
+    "intakePort": "cylinder",
     "exhaustPort": "cylinder",
     "exhaustOutlet": "cylinder",
     "carburetor": "carburetor",
@@ -470,7 +470,7 @@ TARGET_SEATS = {"carburetorSeat", "oilSumpSeat"}
 # Which accessors take a section index, and therefore have to be checked against
 # every section when the argument is not a constant this can read - a loop
 # variable, say. Checking all of them is the right answer for a loop anyway.
-INDEXED_TARGETS = {"crankshaft", "cylinder", "bore", "sparkPlug", "intakeValve",
+INDEXED_TARGETS = {"crankshaft", "cylinder", "bore", "sparkPlug", "intakePort",
                    "exhaustPort", "carburetorSeat", "oilSumpSeat"}
 
 
@@ -609,7 +609,7 @@ def target_position(origin, accessor, index, sections):
     part = {"crankshaft": None, "lastCrankshaft": None,
             "cylinder": "cylinder", "lastCylinder": "cylinder",
             "bore": "cylinder", "sparkPlug": "cylinder",
-            "intakeValve": "cylinder", "exhaustPort": "cylinder",
+            "intakePort": "cylinder", "exhaustPort": "cylinder",
             "exhaustOutlet": "cylinder",
             "carburetor": "carburetor", "airFilter": "carburetor",
             "throttle": "carburetor", "floatBowl": "carburetor",
@@ -846,7 +846,7 @@ def check_ponder_highlight_lifetimes():
 # outlined cylinder. Everything else is one part, one box.
 HIGHLIGHT_NOUNS = {
     "crankshaft": {"crankshaft", "lastCrankshaft", "ignition"},
-    "cylinder": {"cylinder", "lastCylinder", "bore", "sparkPlug", "intakeValve",
+    "cylinder": {"cylinder", "lastCylinder", "bore", "sparkPlug", "intakePort",
                  "exhaustPort", "exhaustOutlet"},
     "piston": {"cylinder", "lastCylinder", "bore"},
     "spark plug": {"cylinder", "lastCylinder", "sparkPlug"},

@@ -241,6 +241,65 @@ def shift(spec, dx, dy, dz):
     return moved
 
 
+def subtract(spec, holes):
+    """`spec` with every box in `holes` cut out of it, as a list of specs.
+
+    Minecraft has no boolean geometry, so a port with real depth - an opening, a
+    tunnel behind it and a seat at the end - has to be the casting around it cut
+    into the cuboids that are left. This does the cutting once, from the casting
+    and the cavities, rather than by hand-authored fragments that would have to
+    be re-derived every time a port moved.
+
+    Each hole is a ((x0, y0, z0), (x1, y1, z1)) pair. Pieces keep the spec's
+    texture and face overrides; the faces left facing into a cavity are covered
+    by that cavity's lining, so what the casting's texture is there never shows.
+    """
+    pieces = [spec]
+    for hole in holes:
+        cut = []
+        for piece in pieces:
+            cut += _cut(piece, hole)
+        pieces = cut
+    # A sliver the CUT made thinner than this is two cavities' edges nearly
+    # coinciding, not casting anyone can see; kept, the separation pass would
+    # crush it to nothing. Parts that were authored thin - a lining, a seat
+    # ring - keep their thickness and are not slivers.
+    def sliver(piece):
+        return any(piece["to"][i] - piece["from"][i] < SLIVER
+                   and piece["to"][i] - piece["from"][i] < spec["to"][i] - spec["from"][i] - 1e-6
+                   for i in range(3))
+    return [piece for piece in pieces if not sliver(piece)]
+
+
+SLIVER = 0.15
+
+
+def _cut(spec, hole):
+    (h0, h1), f, t = hole, spec["from"], spec["to"]
+    if any(h1[i] <= f[i] + 1e-6 or h0[i] >= t[i] - 1e-6 for i in range(3)):
+        return [spec]
+    out, lo, hi = [], list(f), list(t)
+    # Y first, so the slabs above and below a cavity stay whole - fewer, larger
+    # pieces, and the ones a player sees most are not chopped up.
+    for axis in (1, 0, 2):
+        if h0[axis] > lo[axis] + 1e-6:
+            a, b = list(lo), list(hi)
+            b[axis] = h0[axis]
+            out.append({**spec, "from": a, "to": b})
+            lo[axis] = h0[axis]
+        if h1[axis] < hi[axis] - 1e-6:
+            a, b = list(lo), list(hi)
+            a[axis] = h1[axis]
+            out.append({**spec, "from": a, "to": b})
+            hi[axis] = h1[axis]
+    return out
+
+
+def frame(frm, to, hole, tex):
+    """A plate with a rectangular hole through it: a flange round an opening."""
+    return subtract(el(frm, to, tex), [hole])
+
+
 def steps(half, flat, corner):
     """The three-step section the engine was authored with.
 
@@ -541,7 +600,7 @@ def sprite_item(path):
 # ===========================================================================
 # Interior cavity: x 2..14, y 3..13, z 2.5..13.5. Everything that rotates is
 # sized to stay inside it (max swept radius 4.87 against a 5.0 limit).
-CASE_TEX = {"particle": "crankshaft", "case": "crankshaft",
+CASE_TEX = {"particle": "crankshaft", "case": "crankshaft", "pan": "oil_pan",
             "cast": "cast_iron", "deck": "crankcase_deck", "steel": "journal",
             "brass": "brass", "ind": "indicator_off"}
 
@@ -629,44 +688,15 @@ def crankcase_elements(ignition_on=False, joined=False):
     # both ends, from one flag.
     back = -0.5 if joined else 0.5
     e = []
-    # --- crankcase floor and the machined joint face the Oil Sump bolts to.
-    # The pan itself is NOT here: an Oil Sump block lives at crankshaft.below()
-    # and carries it, so duplicating a pan would give the engine two of them.
+    # --- crankcase floor, and the block rail the oil pan bolts to. The rail
+    # crosses every seam like the deck does, so the pan below meets one
+    # continuous joint rather than a row of separate bottom plates.
     e.append(el((1.5, 0.6, 2.0), (14.5, 3.0, 14.0), "case"))
     e.append(el((back, 0.0, 0.9), (15.5, 1.4, 15.1), "deck"))
-    # --- the shallow pan lip, hanging under the block.
-    # Every section has one and it crosses every seam, so the underside of an
-    # inline-4 is one continuous pan with the deep Oil Sump bolted under one
-    # bay of it - which is what the single shared sump actually is. Where a sump
-    # IS fitted this is entirely inside that block's top flange and draws
-    # nothing, so it costs the common case nothing and needs no block state to
-    # know whether a sump is there.
-    # THE SHARED LOWER CRANKCASE, and the answer to "the sump looks like a tiny
-    # tank hanging under cylinder 1".
-    #
-    # It is a real tray now rather than a lip: nearly three units deep, ribbed
-    # and bolted like the pan it is, and running unbroken across every seam. So
-    # the underside of an inline-4 is ONE oil pan four bays long, and the Oil
-    # Sump block is the deep service bowl bolted into one bay of it - which is
-    # exactly what a single shared sump is, and what the gallery along both
-    # flanks has always claimed.
-    #
-    # Every part of it stays inside z 1.0 .. 15.0 and above y -2.8, which is the
-    # box the Oil Sump's own top flange occupies. So where a sump IS fitted this
-    # is swallowed whole and draws nothing - no block state, no z-fighting, and
-    # no second pan.
-    e.append(el((back, -1.0, 1.05), (15.5, 0.0, 14.95), "cast"))
-    e.append(el((back, -2.0, 1.4), (15.5, -1.0, 14.6), "cast"))
-    e.append(el((back, -2.75, 2.3), (15.5, -2.0, 13.7), "cast"))
-    # Ribs down the tray, the same language the Oil Sump's own flanks use, so
-    # the shallow part and the deep part read as one pressing.
-    for x0, x1 in ((2.4, 3.6), (7.4, 8.6), (12.4, 13.6)):
-        e.append(el((x0, -2.6, 1.02), (x1, -0.2, 1.5), "cast"))
-        e.append(el((x0, -2.6, 14.5), (x1, -0.2, 14.98), "cast"))
-    # And the bolt line along its flange, which is what says "removable pan".
-    for x0 in (1.2, 5.2, 9.2, 13.2):
-        e.append(el((x0, -0.65, 1.0), (x0 + 1.1, -0.05, 1.35), "steel"))
-        e.append(el((x0, -0.65, 14.65), (x0 + 1.1, -0.05, 15.0), "steel"))
+    # --- THE OIL PAN: one pan under the whole engine.
+    # See oil_pan_elements. Every section carries its own length of it, and it
+    # crosses every seam, so an inline-4 has one pan four bays long.
+    e += oil_pan_elements(back)
     # --- side walls, cut away so the crank is visible ---------------------
     #
     # The intake flank of the FIRST section is cut away twice: once for the crank,
@@ -795,65 +825,110 @@ def crankcase_elements(ignition_on=False, joined=False):
 
 
 # ===========================================================================
-# OIL SUMP - the lower half of the crankcase, at crankshaft.below()
+# THE OIL PAN - one pan under the whole crankcase
+# ===========================================================================
+# The in-game look at an inline-4 found the pan wrong in exactly the way the
+# brief predicted: one bay had a deep Oil Sump hanging under it and the other
+# three had a strip a couple of units deep, which reads as one cylinder with a
+# sump and three without one. That is not a shared lubrication system; it is
+# four engines, one of which was given oil.
+#
+# So the PAN is part of the crankcase now - every section carries its own length
+# of it, full depth, and it runs across every seam - and the Oil Sump block is
+# what a real engine has under one bay of its pan: the DEEP BOWL, with the
+# drain, the dipstick and the feed to the gallery. One installed tank, one
+# service point, and visibly one pan that every crank bay drains into.
+#
+# No block state is needed for any of it. The pan sits wholly above PAN_BOTTOM
+# and the bowl wholly below it, so where a sump is fitted the two meet at one
+# plane - bowl's lip under pan's floor - and nothing is drawn twice.
+#
+# Below the first and last sections the pan ends in a plain wall half a unit
+# inside the block, like every other casting that crosses seams here; it is
+# continuous wherever a section is joined, because the joined section's length
+# starts half a unit behind its own boundary.
+PAN_BOTTOM = -6.5
+PAN_TEX = "pan"
+
+
+def oil_pan_elements(back):
+    """This section's length of the pan, from `back` to 15.5."""
+    e = [
+        # The pan's flange, bolted to the block rail above and a little wider
+        # than it, so the joint reads as a lip all the way along.
+        el((back, -0.8, 0.75), (15.5, 0.0, 15.25), PAN_TEX),
+        # The body: full depth, the same under every bay, tapering to its floor.
+        el((back, -4.0, 1.2), (15.5, -0.8, 14.8), PAN_TEX),
+        el((back, -6.0, 2.0), (15.5, -4.0, 14.0), PAN_TEX),
+        el((back, PAN_BOTTOM, 3.0), (15.5, -6.0, 13.0), PAN_TEX),
+        # One stiffening rib the length of the engine on each flank - the line
+        # that says the four bays are one pressing.
+        el((back, -4.3, 0.9), (15.5, -3.7, 1.2), PAN_TEX),
+        el((back, -4.3, 14.8), (15.5, -3.7, 15.1), PAN_TEX),
+    ]
+    # Cast ribs down the flanks, on the same pitch as the crank webs.
+    for x0, x1 in ((2.4, 3.6), (7.4, 8.6), (12.4, 13.6)):
+        e.append(el((x0, -3.7, 0.95), (x1, -0.8, 1.2), PAN_TEX))
+        e.append(el((x0, -3.7, 14.8), (x1, -0.8, 15.05), PAN_TEX))
+        e.append(el((x0, -5.8, 1.75), (x1, -4.3, 2.0), PAN_TEX))
+        e.append(el((x0, -5.8, 14.0), (x1, -4.3, 14.25), PAN_TEX))
+    # And the bolt line along its flange, which is what says "removable pan".
+    for x0 in (1.2, 5.2, 9.2, 13.2):
+        e.append(el((x0, -0.7, 0.45), (x0 + 1.1, -0.1, 0.75), "steel"))
+        e.append(el((x0, -0.7, 15.25), (x0 + 1.1, -0.1, 15.55), "steel"))
+    return e
+
+
+# ===========================================================================
+# OIL SUMP - the deep bowl under one bay of the pan, at crankshaft.below()
 # ===========================================================================
 # Its top flange runs 0.8 up into the crankshaft block and is wider than the
 # crankcase's own joint face, so the two swallow each other at the seam and the
 # pair reads as one crankcase assembly with a removable pan.
-SUMP_TEX = {"particle": "oil_sump", "sump": "oil_sump",
+SUMP_TEX = {"particle": "oil_sump", "sump": "oil_sump", "pan": "oil_pan",
             "deck": "crankcase_deck", "steel": "journal", "brass": "brass"}
 
 
 def oil_sump_elements():
-    """The one shared pan, and the two risers that say so.
+    """The deep bowl, and the service parts that hang off it.
 
-    A multi-cylinder engine has ONE Oil Sump, and the thing that has to be
-    visible is that the oil in it reaches every bearing rather than only the bay
-    it hangs under. The crankcase carries the gallery that does the reaching -
-    one pipe along each flank, running the whole length of the engine - and
-    these risers are where it is fed from: they leave the pan's flange at the
-    same z as the gallery and stand up into the crankcase block to meet it.
+    In this block's own coordinates the pan's floor is at 16 + PAN_BOTTOM, so
+    the bowl's lip comes up just past it and everything else hangs below. The
+    space above - the pan - is the crankcase's, which is what makes this one
+    bowl in one pan rather than a second pan bolted under the first.
 
-    The top flange is as wide as the block will allow rather than inset, so it
-    lands under the shallow pan lip every crankcase section hangs and the two
-    read as one pan with a deep sump bolted into one bay of it - which is what
-    the single shared sump is. A twentieth of a unit inside the boundary on each
-    side, for the same reason nothing else here touches it exactly: a face in the
-    block's own boundary plane fights with whatever is placed against it.
+    The dipstick and the oil feed both climb the +Z flank OUTSIDE the pan's
+    flange and bolts, so they read as service lines on the engine's side rather
+    than as tubes vanishing into the casting: the dipstick's handle at the pan's
+    rim, where a player looks for it, and the feed up to the crankcase's oil
+    gallery, which carries the oil to every bearing of every bay.
     """
+    floor = 16.0 + PAN_BOTTOM
     e = [
-        el((0.05, 13.2, 0.05), (15.95, 16.8, 15.95), "deck"),  # bolted top flange
-        el((1.6, 8.5, 1.6), (14.4, 14.0, 14.4), "sump"),      # pan, tapering down
-        el((2.8, 4.5, 2.8), (13.2, 9.2, 13.2), "sump"),
-        el((4.2, 2.0, 4.2), (11.8, 5.2, 11.8), "sump"),
-        el((7.0, 1.2, 3.6), (9.0, 3.0, 5.0), "steel"),        # drain plug
+        # The lip, bolted to the underside of the pan.
+        el((2.4, floor - 0.6, 2.4), (13.6, floor + 0.3, 13.6), "pan"),
+        # The bowl, tapering to its drain.
+        el((3.2, 4.0, 3.2), (12.8, floor - 0.6, 12.8), "sump"),
+        el((4.4, 1.8, 4.4), (11.6, 4.0, 11.6), "sump"),
+        el((7.0, 1.0, 7.0), (9.0, 1.8, 9.0), "steel"),        # drain plug
     ]
-    for x0, x1 in ((2.2, 3.8), (12.2, 13.8)):                 # flange bolts
-        e.append(el((x0, 13.8, 0.1), (x1, 15.4, 1.1), "steel"))
-        e.append(el((x0, 13.8, 14.9), (x1, 15.4, 15.9), "steel"))
-    # Ribs cast down the pan's flanks. A pressed or thinly cast oil pan is the
-    # one panel on an engine that is always ribbed, because otherwise it drums,
-    # and they give the largest blank face on the whole assembly something to
-    # catch the light with.
-    for x0, x1 in ((4.4, 5.8), (10.2, 11.6)):
-        e.append(el((x0, 9.0, 1.2), (x1, 13.6, 1.65), "sump"))
-        e.append(el((x0, 9.0, 14.35), (x1, 13.6, 14.8), "sump"))
-    # Dipstick, up the +Z flank. It has to stand proud of the top flange in Z
-    # rather than run up through it: the flange is one solid box across the
-    # whole top of the pan, so a tube inside its footprint would simply be
-    # swallowed and the handle would never appear.
-    e.append(el((6.9, 9.0, 15.45), (7.9, 15.2, 15.95), "steel"))
-    e.append(el((6.6, 15.2, 15.4), (8.2, 16.0, 16.0), "brass"))
-    # Oil feed risers, up to the crankcase's gallery. They stand at the same
-    # x as the gallery's union bosses and reach 1.6 into the block above, which
-    # is where that pipe runs - see crankcase_elements. Authored for a crank
-    # axis along X like everything else here; the blockstate turns the pan with
-    # the engine, so on a Z engine they come up under the gallery on that axis
-    # instead.
-    for x0, x1 in ((2.4, 3.6), (12.4, 13.6)):
-        for za, zb in ((0.2, 1.0), (15.0, 15.8)):
-            e.append(el((x0, 12.0, za), (x1, 17.6, zb), "steel"))
-            e.append(el((x0 - 0.3, 16.2, za - 0.1), (x1 + 0.3, 17.2, zb + 0.1), "brass"))
+    for x0, x1 in ((2.6, 3.4), (12.6, 13.4)):                 # lip bolts
+        for z0, z1 in ((2.6, 3.4), (12.6, 13.4)):
+            e.append(el((x0, floor - 1.0, z0), (x1, floor - 0.6, z1), "steel"))
+    # Ribs down the bowl, so the largest blank faces on the assembly catch the
+    # light and read as cast.
+    for x0, x1 in ((5.0, 5.6), (10.4, 11.0)):
+        e.append(el((x0, 4.2, 2.9), (x1, floor - 0.8, 3.2), "sump"))
+        e.append(el((x0, 4.2, 12.8), (x1, floor - 0.8, 13.1), "sump"))
+    # Dipstick: out of the bowl, under the pan's floor, and up the flank.
+    e.append(el((6.9, 7.0, 12.8), (7.9, 7.8, 15.95), "steel"))
+    e.append(el((6.9, 7.8, 15.45), (7.9, 15.9, 15.95), "steel"))
+    e.append(el((6.6, 15.9, 15.35), (8.2, 16.7, 16.0), "brass"))
+    # The oil feed, from the bowl up to the crankcase's gallery at the same x as
+    # its union boss - see crankcase_elements.
+    e.append(el((11.6, 5.8, 12.8), (12.6, 6.8, 15.95), "steel"))
+    e.append(el((11.6, 6.8, 15.3), (12.6, 17.6, 15.95), "steel"))
+    e.append(el((11.3, 16.2, 15.2), (12.9, 17.2, 16.0), "brass"))
     return e
 
 
@@ -955,7 +1030,7 @@ CYL_TEX = {"particle": "cylinder", "barrel": "cylinder", "fin": "cylinder_fin",
            "head": "cylinder_head", "deck": "crankcase_deck",
            "steel": "journal", "case": "crankshaft", "cast": "cast_iron",
            "intake": "intake_manifold", "exhaust": "exhaust_manifold",
-           "hot": "exhaust_steel", "soot": "exhaust_soot"}
+           "hot": "exhaust_steel", "soot": "exhaust_soot", "port": "intake_port"}
 
 # The manifold's own additions, kept off the plain Cylinder rather than folded
 # into CYL_TEX: an inline-1 has no brass on it, and a texture reference nothing
@@ -1163,7 +1238,7 @@ EXHAUST_LIP_TOP = 22.0
 EXHAUST_OUTLET = ((STACK_X0 + STACK_X1) / 2.0, EXHAUST_LIP_TOP, EXHAUST_CZ)
 # Where the log stops when the run does not continue. Just short of the first
 # runner, so it ends in a cap rather than in the middle of nothing.
-EXHAUST_LOG_END_BACK = 4.6
+EXHAUST_LOG_END_BACK = 7.6
 
 
 def exhaust_elements(link_back, link_ahead):
@@ -1171,22 +1246,26 @@ def exhaust_elements(link_back, link_ahead):
     x0 = 0.0 if link_back else EXHAUST_LOG_END_BACK
     # On the outlet's section the log runs on into the foot of the stack.
     x1 = 16.0 if link_ahead else STACK_X0 + 0.3
+    hx = EXHAUST_HEADER_X
     e = [
         # The header flange, bolted over the head's machined exhaust face and a
-        # little smaller than it, so the face shows round it as a gasket line.
-        el((5.7, 13.1, 16.0), (10.3, 16.6, 16.7), "exhaust"),
-        # The header: one heavy cast elbow out of the port and down into the log.
-        # Two crossed boxes rather than one, so it reads as a round pipe.
-        el((7.0, EXHAUST_LOG_Y1 - 0.4, 16.7), (9.0, 16.2, EXHAUST_Z1), "exhaust"),
-        el((7.3, EXHAUST_LOG_Y1 - 0.2, 16.45), (8.7, 15.9, EXHAUST_Z1 + 0.25), "exhaust"),
+        # little smaller than it, so the face shows round it as a gasket line. A
+        # frame, not a plate: the port mouth goes straight through it.
+        *frame((hx - 2.3, 13.1, 16.0), (hx + 2.3, 16.9, 16.7), EXHAUST_MOUTH, "exhaust"),
+        # The header: one heavy cast elbow, its nose pushed INTO the port mouth
+        # with a dark gap round it, then out and down into the log. Two crossed
+        # boxes rather than one, so it reads as a round pipe.
+        el((hx - 0.8, 14.6, 15.2), (hx + 0.8, 16.0, 16.7), "exhaust"),
+        el((hx - 0.9, EXHAUST_LOG_Y1 - 0.4, 16.7), (hx + 0.9, 16.2, EXHAUST_Z1), "exhaust"),
+        el((hx - 0.6, EXHAUST_LOG_Y1 - 0.2, 16.45), (hx + 0.6, 15.9, EXHAUST_Z1 + 0.25), "exhaust"),
         # The log collector, low along the fin band.
         el((x0, EXHAUST_LOG_Y0, EXHAUST_Z0), (x1, EXHAUST_LOG_Y1, EXHAUST_Z1), "exhaust"),
         el((x0, EXHAUST_LOG_Y0 + 0.3, EXHAUST_Z0 - 0.25),
            (x1, EXHAUST_LOG_Y1 - 0.3, EXHAUST_Z1 + 0.25), "exhaust"),
     ]
     # The flange's four studs, heat-coloured like every fitting on this side.
-    for x in (5.85, 9.45):
-        for y in (13.3, 15.6):
+    for x in (hx - 2.15, hx + 1.45):
+        for y in (13.3, 15.75):
             e.append(el((x, y, 16.7), (x + 0.7, y + 0.8, 17.05), "hot"))
     # A bolted joint at each seam, in halves, so two sections meet as one ring.
     joint = (EXHAUST_LOG_Y0 - 0.3, EXHAUST_Z0 - 0.35, EXHAUST_LOG_Y1 + 0.3, EXHAUST_Z1 + 0.35)
@@ -1358,34 +1437,150 @@ def rocker_shaft_elements(link_back, link_ahead):
     # temper-coloured cap. Two identical towers a hand's width apart were the
     # reason nobody could say which valve was which.
     for x, guide, cap in zip(VALVE_X, ("intake", "exhaust"), ("steel", "hot")):
-        e.append(el((x - 1.15, 17.0, VALVE_CZ - 1.15),
+        e.append(el((x - 1.15, 17.05, VALVE_CZ - 1.15),
                     (x + 1.15, HEAD_TOP + 1.3, VALVE_CZ + 1.15), guide))
         e.append(el((x - 0.85, HEAD_TOP + 1.3, VALVE_CZ - 0.85),
                     (x + 0.85, HEAD_TOP + 2.1, VALVE_CZ + 0.85), cap))
-    e += exhaust_passage_elements()
     return e
 
 
-def exhaust_passage_elements():
-    """The exhaust port's cast passage across the top of the head.
+# ---------------------------------------------------------------------------
+# The ports: where the air and the gas actually go through the head
+# ---------------------------------------------------------------------------
+# The first in-game look at the exhaust pass said the engine still read as
+# symbols: an intake that was a solid block under the Carburetor, an exhaust
+# header bolted to a blank face, and two valves standing next to - not in - the
+# passages they open. This is the head cut open, in the same cutaway language as
+# the barrel windows and the crankcase, so the path of the charge is something a
+# player can follow by eye:
+#
+#   INTAKE   runner or Carburetor -> inlet in the head top -> plenum -> throat
+#            -> the intake valve's seat in the chamber roof
+#   EXHAUST  the exhaust valve's seat -> pocket -> an open trough across the
+#            head -> the port mouth in the +Z face -> header -> log -> stack
+#
+# Each is a set of CAVITIES subtracted from the castings round them (see
+# subtract), lined with a dark interior - clean shadow on the intake, soot on
+# the exhaust - so the depth is real geometry and the colour only confirms it.
+#
+# THE VALVES ARE WHERE THE PORTS END, not beside them. Both valves have to stand
+# on the intake half of the head, because both are worked by pushrods on the
+# intake flank, and that is exactly why the ports are shaped the way they are:
+# the intake throat turns from under the inlet straight to its valve, and the
+# exhaust pocket round its valve opens into a trough that runs the whole width
+# of the head to the exhaust side. Each seat is a hole in the chamber roof with a
+# ring round it, and the valve's own head sits in it - so a valve opening is a
+# disc dropping out of a hole at the end of its passage.
+#
+# CLEARANCES these thread, all of them measured rather than hoped:
+#   * the spark plug's hex starts at x 11.15 between z 7.25 and 8.75, so the
+#     exhaust trough stays at x <= 11.0 and the pocket round the valve stops at
+#     z 7.0;
+#   * the pushrods are at z -1.35 .. -0.45, so the intake window's flange stands
+#     no further out than z -0.15;
+#   * the runner of a multi-cylinder engine lands on x 6.4 .. 9.6, z 1.2 .. 3.8,
+#     which is exactly the inlet, and an inline-1's Carburetor sits on the same
+#     place.
+PORT_FLOOR = 14.5            # the passages' floor: a half-unit skin over the chamber
+PORT_ROOF = 16.9             # and their ceiling, under the valve guides
+SEAT_HALF = 1.0              # a seat hole is two units across; the valve head 1.8
+VALVE_HEAD_R = 0.9
+INTAKE_THROAT = ((VALVE_X[0] - 1.4, PORT_FLOOR, 0.6), (VALVE_X[0] + 1.6, PORT_ROOF, VALVE_CZ + 1.4))
+INTAKE_PLENUM = ((VALVE_X[0] + 1.6, PORT_FLOOR, 0.6), (9.6, PORT_ROOF, 4.0))
+INTAKE_INLET = ((VALVE_X[0] + 1.6, PORT_ROOF, 1.2), (9.6, 17.35, 3.8))
+INTAKE_WINDOW = ((VALVE_X[0] - 1.2, 14.7, -0.2), (9.4, 16.7, 0.7))
+EXHAUST_POCKET = ((VALVE_X[1] - 1.4, PORT_FLOOR, VALVE_CZ - 1.2), (VALVE_X[1] + 1.4, PORT_ROOF, VALVE_CZ + 1.4))
+EXHAUST_TROUGH = ((9.0, PORT_FLOOR, VALVE_CZ + 1.4), (11.0, 17.5, 15.0))
+EXHAUST_MOUTH = ((8.8, 14.3, 14.6), (11.2, 16.4, 16.8))
+EXHAUST_HEADER_X = 10.0      # the header's centreline, on the mouth
 
-    The exhaust valve stands on the intake half of the head - both valves have to,
-    because both are worked by pushrods on the intake flank - so without this the
-    one valve whose gas leaves on the far side had no visible way of getting
-    there. A raised passage in the exhaust side's iron runs from beside its guide
-    straight across to the exhaust boss, which is what a crossflow head's exhaust
-    port is, drawn on the outside where a player can follow it.
 
-    It threads a gap that is worth writing down. The rocker over the exhaust valve
-    swings no wider than x 11.9, the spark plug's hex starts at x 11.15 and runs to
-    12.65, and the Carburetor's float bowl comes down to 17.0 over x 5.2..10.8 - so
-    the passage leaves the guide on its +X side, stays beyond 12.75 past the plug,
-    and never comes within reach of either.
+def seat_hole(x):
+    # Tall enough to go through the floor's lining and the seat ring standing on
+    # it as well as the casting: a seat is a hole all the way into the chamber.
+    return ((x - SEAT_HALF, 13.9, VALVE_CZ - SEAT_HALF), (x + SEAT_HALF, PORT_FLOOR + 0.3, VALVE_CZ + SEAT_HALF))
+
+
+HEAD_CAVITIES = [INTAKE_THROAT, INTAKE_PLENUM, INTAKE_INLET, INTAKE_WINDOW,
+                 EXHAUST_POCKET, EXHAUST_TROUGH, EXHAUST_MOUTH,
+                 seat_hole(VALVE_X[0]), seat_hole(VALVE_X[1])]
+
+
+def lining(box, faces, tex, skip=()):
+    """Thin skins on the named faces of a cavity, so its inside reads dark.
+
+    `faces` names which walls of the box are solid casting - the open ones, a
+    window or the mouth into the next cavity, are left out. Each skin is 0.1 thick
+    and stands inside the cavity, so it covers the casting's face behind it
+    instead of fighting it for the same plane. `skip` is cut out of every skin,
+    which is how a floor gets its seat hole.
     """
-    return [
-        el((12.0, 17.2, VALVE_CZ - 1.0), (13.7, 18.3, VALVE_CZ + 1.0), "exhaust"),
-        el((12.75, 17.2, VALVE_CZ + 1.0), (13.7, 17.95, 12.9), "exhaust"),
-    ]
+    (x0, y0, z0), (x1, y1, z1) = box
+    t = 0.1
+    skins = {
+        "down": ((x0, y0, z0), (x1, y0 + t, z1)),
+        "up": ((x0, y1 - t, z0), (x1, y1, z1)),
+        "west": ((x0, y0, z0), (x0 + t, y1, z1)),
+        "east": ((x1 - t, y0, z0), (x1, y1, z1)),
+        "north": ((x0, y0, z0), (x1, y1, z0 + t)),
+        "south": ((x0, y0, z1 - t), (x1, y1, z1)),
+    }
+    out = []
+    for face in faces:
+        out += subtract(el(*skins[face], tex), list(skip))
+    return out
+
+
+def seat_ring(x, tex):
+    """The valve seat: a ring round the hole, standing on the passage floor."""
+    hole = seat_hole(x)
+    return frame((x - SEAT_HALF - 0.3, PORT_FLOOR + 0.1, VALVE_CZ - SEAT_HALF - 0.3),
+                 (x + SEAT_HALF + 0.3, PORT_FLOOR + 0.18, VALVE_CZ + SEAT_HALF + 0.3), hole, tex)
+
+
+def port_elements():
+    """The linings, seats and flanges that make the head's cavities read as ports."""
+    ix = VALVE_X[0]
+    seats = [seat_hole(VALVE_X[0]), seat_hole(VALVE_X[1])]
+    e = []
+    # --- intake: plenum under the inlet, throat to the valve ---------------
+    e += lining(INTAKE_THROAT, ("down", "up", "west", "south"), "port", seats)
+    # The throat's +X wall only where the plenum is not: beyond the plenum's back.
+    (tx0, ty0, tz0), (tx1, ty1, tz1) = INTAKE_THROAT
+    e += lining(((tx1 - 0.1, ty0, INTAKE_PLENUM[1][2]), (tx1, ty1, tz1)), ("east",), "port")
+    e += lining(INTAKE_PLENUM, ("down", "east", "south"), "port")
+    (ix0, _, iz0), (ix1, _, iz1) = INTAKE_INLET
+    e += subtract(el((INTAKE_PLENUM[0][0], PORT_ROOF - 0.1, 0.6), (9.6, PORT_ROOF, 4.0), "port"),
+                  [((ix0, PORT_ROOF - 0.2, iz0), (ix1, PORT_ROOF + 0.1, iz1))])
+    e += lining(INTAKE_INLET, ("up", "west", "east", "north", "south"), "port")
+    # The outer flange round the window: a machined frame standing proud of the
+    # port's face, so the opening is an opening and not a dark patch.
+    (wx0, wy0, _), (wx1, wy1, _) = INTAKE_WINDOW
+    e += frame((wx0 - 0.4, wy0 - 0.4, -0.15), (wx1 + 0.4, wy1 + 0.4, 0.0),
+               ((wx0, wy0, -0.3), (wx1, wy1, 0.1)), "deck")
+    e += seat_ring(ix, "steel")
+    # --- exhaust: pocket round the valve, trough across, mouth out ---------
+    (px0, py0, pz0), (px1, py1, pz1) = EXHAUST_POCKET
+    (rx0, _, rz0), (rx1, _, rz1) = EXHAUST_TROUGH
+    e += lining(EXHAUST_POCKET, ("down", "up", "west", "east", "north"), "soot", seats)
+    e += lining(((rx1, py0, pz1 - 0.1), (px1, py1, pz1)), ("south",), "soot")
+    # Where the trough leaves the pocket: the step beside the opening, and the
+    # casting over it above the pocket's roof.
+    e += subtract(el((rx0, PORT_FLOOR, pz1), (rx1, 17.2, pz1 + 0.1), "soot"),
+                  [((px0, PORT_FLOOR - 0.1, pz1 - 0.1), (rx1, PORT_ROOF, pz1 + 0.2))])
+    # The trough's walls stand as high as the casting round them: the head's top
+    # over the head, the boss's top where it runs through the boss.
+    for z0, z1, top in ((rz0, 13.5, 17.2), (13.5, rz1, 16.6)):
+        e += lining(((rx0, PORT_FLOOR, z0), (rx1, top, z1)), ("down", "west", "east"), "soot")
+    (mx0, my0, mz0), (mx1, my1, mz1) = EXHAUST_MOUTH
+    e += lining(((mx0, my0, rz1), (mx1, my1, mz1 - 0.1)), ("down", "up", "west", "east"), "soot")
+    e += seat_ring(VALVE_X[1], "hot")
+    # --- the chamber roof: soot, with both seats through it ----------------
+    # Everything between the crown and the head is a place things burn, and the
+    # roof is the one surface of it a player sees through the barrel's window.
+    e += subtract(el((BORE_MIN + 0.05, CHAMBER_ROOF - 0.02, BORE_MIN + 0.05),
+                     (BORE_MAX - 0.05, CHAMBER_ROOF, BORE_MAX - 0.05), "soot"), seats)
+    return e
 
 
 def cylinder_elements(link_back=False, link_ahead=False):
@@ -1442,17 +1637,33 @@ def cylinder_elements(link_back=False, link_ahead=False):
                     "fin", flat, fin_uv))
     # --- head. Reaches past the top of the block so the Carburetor lands on
     # a flange belonging to the head instead of sitting on a bare block face.
-    e.append(el((1.2, 14.0, 1.2), (14.8, 15.6, 14.8), "head"))
-    e.append(el((2.5, 15.4, 2.5), (13.5, 17.2, 13.5), "head"))
+    #
+    # The lower slab runs to the block boundary on a linked side, as the fins do,
+    # so the heads of an inline-4 meet as one long casting rather than as four
+    # caps with a gap between each pair. Every casting of the head is then cut
+    # by the ports - see HEAD_CAVITIES.
+    head_lo = 0.0 if link_back else 1.2
+    head_hi = 16.0 if link_ahead else 14.8
+    head = [
+        el((head_lo, 14.0, 1.2), (head_hi, 15.6, 14.8), "head"),
+        el((2.5, 15.4, 2.5), (13.5, 17.2, 13.5), "head"),
+        # The intake port's casting, standing out of the head's intake face: the
+        # window the passage is seen through is cut in its front wall.
+        el((VALVE_X[0] - 1.9, 13.8, 0.0), (10.2, 17.6, 2.6), "head"),
+        # The flange the Carburetor or the runner lands on. It stops just under
+        # 17.8 so its top face misses the plane the Carburetor's float bowl floor
+        # sits in, one block up.
+        el((4.6, 16.6, 0.2), (11.4, 17.75, 4.2), "deck"),
+        # The exhaust boss and its machined face, on the port mouth.
+        el((EXHAUST_HEADER_X - 2.4, 13.8, 11.6), (EXHAUST_HEADER_X + 2.4, 16.6, 16.0), "exhaust"),
+        el((EXHAUST_HEADER_X - 2.8, 12.9, 15.0), (EXHAUST_HEADER_X + 2.8, 17.0, 16.0), "deck"),
+    ]
+    for part in head:
+        e += subtract(part, HEAD_CAVITIES)
     for x0, x1 in ((1.6, 3.2), (12.8, 14.4)):
         for z0, z1 in ((1.6, 3.2), (12.8, 14.4)):
             e.append(el((x0, 14.8, z0), (x1, 17.8, z1), "steel"))
-    e.append(el((5.4, 13.8, 0.0), (10.6, 17.6, 4.6), "head"))       # intake port
-    # The flange stops just under 17.8 so its top face misses the plane the
-    # Carburetor's float bowl floor sits in, one block up.
-    e.append(el((4.6, 16.6, 0.2), (11.4, 17.75, 4.2), "deck"))      # intake flange
-    e.append(el((6.0, 13.8, 11.6), (10.0, 16.4, 16.0), "exhaust"))  # exhaust boss
-    e.append(el((5.2, 12.9, 15.0), (10.8, 16.9, 16.0), "deck"))     # exhaust flange
+    e += port_elements()
     # The spark plug is NOT part of this model any more. It is an installable
     # component now, so it lives in its own model that the block entity renderer
     # draws only when one is fitted - see spark_plug_elements. The head keeps its
@@ -1809,9 +2020,13 @@ def rocker_running_elements():
 def valve_running_elements(exhaust=False):
     """One valve, authored seated. The renderer translates it DOWN to open it.
 
-    Stem, spring and retainer above the head; the head of the valve itself is
-    inside the casting and never seen, which is correct - a valve that showed
-    its face would be a valve hanging in the bore.
+    Since the ports were cut open the valve has its HEAD: a disc that sits in its
+    seat in the chamber roof, at the end of its port, and drops out of it into the
+    chamber as the valve opens. That disc is what makes a valve read as the thing
+    that opens a passage rather than as a rod standing beside one - seen from the
+    port it closes a hole, seen through the barrel's window it comes down into the
+    chamber over the piston. tools/check_models.py swings it against the piston
+    through the whole cycle.
 
     Two of them now, because the two valves of a cylinder are not the same part
     and a player trying to read the cycle needs to know which one moved. The
@@ -1822,7 +2037,9 @@ def valve_running_elements(exhaust=False):
     """
     metal = "hot" if exhaust else "steel"
     return [
-        el((-0.3, HEAD_TOP - 2.2, VALVE_CZ - 0.3), (0.3, HEAD_TOP + 2.9, VALVE_CZ + 0.3), "steel"),
+        el((-VALVE_HEAD_R, CHAMBER_ROOF, VALVE_CZ - VALVE_HEAD_R),
+           (VALVE_HEAD_R, CHAMBER_ROOF + 0.45, VALVE_CZ + VALVE_HEAD_R), metal),
+        el((-0.3, CHAMBER_ROOF + 0.4, VALVE_CZ - 0.3), (0.3, HEAD_TOP + 2.9, VALVE_CZ + 0.3), "steel"),
         # The spring, drawn as three coils so it reads as a spring rather than a
         # tube - and in STEEL, which is what a valve spring is. It was brass, and
         # with the rocker pads and the plug's terminal beside it the head had
@@ -2101,6 +2318,17 @@ def main():
     # and the spark plug already follow, because a partial model is not turned by
     # the blockstate.
     #
+    # TURNED, NOT MIRRORED, for Z. The baked castings a Z engine stands on are
+    # turned a quarter by the blockstate's "y": 90, which carries the intake flank
+    # from -Z to +X. A transposed copy is a MIRROR - it carries the same flank to
+    # -X - so ever since the valve gear went in, a Z engine
+    # had its camshaft, pushrods, rockers, valves and timing gears on the
+    # opposite flank from the cradle, tunnels and guides they belong in. The
+    # crank, rod, piston and flywheel never showed it, because each is symmetric
+    # about its swing plane, where a mirror and a quarter turn agree. So every
+    # asymmetric part here is built with rotate_y90, and the renderers turn their
+    # offsets the same way; tools/check_models.py now asserts both.
+    #
     # The camshaft comes in two: the plain slice every section draws, and the
     # DRIVE slice - the same shaft with its sprocket on the end - which only the
     # engine's first section has, because an engine has one timing drive and it
@@ -2109,23 +2337,23 @@ def main():
                           ("_drive", camshaft_running_elements(drive=True))):
         write(f"block/camshaft_running{suffix}_x.json", model(CAM_TEX, parts))
         write(f"block/camshaft_running{suffix}_z.json",
-              model(CAM_TEX, [transpose(x) for x in parts]))
+              model(CAM_TEX, [rotate_y90(x) for x in parts]))
     drive_gear = timing_drive_gear_elements()
     write("block/timing_gear_x.json", model(CAM_TEX, drive_gear))
-    write("block/timing_gear_z.json", model(CAM_TEX, [transpose(x) for x in drive_gear]))
+    write("block/timing_gear_z.json", model(CAM_TEX, [rotate_y90(x) for x in drive_gear]))
     case = timing_case_elements()
     write("block/timing_case_x.json", model({**CAM_TEX, **CASE_TEX}, case))
     write("block/timing_case_z.json",
-          model({**CAM_TEX, **CASE_TEX}, [transpose(x) for x in case]))
+          model({**CAM_TEX, **CASE_TEX}, [rotate_y90(x) for x in case]))
     for name, parts in (("pushrod", pushrod_running_elements()),
                         ("rocker", rocker_running_elements()),
                         ("intake_valve", valve_running_elements()),
                         ("exhaust_valve", valve_running_elements(exhaust=True))):
         # Authored about x = 0 so the renderer places each one at its own bore
-        # position; shifted onto the block before writing, and mirrored for Z.
+        # position; shifted onto the block before writing, and turned for Z.
         centred = [shift(part, 8.0, 0.0, 0.0) for part in parts]
         write(f"block/{name}_x.json", model(VALVETRAIN_TEX, centred))
-        write(f"block/{name}_z.json", model(VALVETRAIN_TEX, [transpose(x) for x in centred]))
+        write(f"block/{name}_z.json", model(VALVETRAIN_TEX, [rotate_y90(x) for x in centred]))
 
     write("block/spark_plug_x.json", model(SPARK_PLUG_TEX, plug))
     write("block/spark_plug_z.json",
@@ -2156,12 +2384,17 @@ def main():
     # --- item models -------------------------------------------------------
     # Blocks whose geometry is split between the chunk mesh and a renderer need
     # a combined model in the inventory, or the item shows half a machine.
+    # Without its length of oil pan: the pan is what the section contributes to
+    # the engine's ONE pan, and hung under the icon it would push the crankcase
+    # out of the top of the slot.
     write("item/crankshaft.json",
-          model({**CASE_TEX, **CRANK_TEX, "particle": "crankshaft"}, case + crank))
+          model({**CASE_TEX, **CRANK_TEX, "particle": "crankshaft"},
+                [x for x in case if x["to"][1] > 0.0] + crank))
     # The wheel faces along the crank axis, and the Z variant is the one that
     # turns its face towards the camera in the standard block-item pose.
     write("item/flywheel.json", model(FLY_TEX, [transpose(x) for x in fly]))
-    write("item/oil_sump.json", model(SUMP_TEX, sump))
+    write("item/oil_sump.json",
+          model(SUMP_TEX, sump + [shift(x, 0, 16, 0) for x in oil_pan_elements(0.5)]))
     write("item/cylinder.json", model(CYL_TEX, cyl))
     # The throttle lever is drawn by the block entity renderer in world, so the
     # item has to carry a static copy of it or the icon shows a carburetor with

@@ -197,7 +197,7 @@ public class EngineAssemblyScenes {
 				.position(ENGINE.oilSump()), 70);
 		scene.overlay()
 			.showText(70)
-			.text("The Oil Sump hangs under the crankcase and supplies lubrication.")
+			.text("The Oil Sump bolts under the oil pan as its deep bowl, and supplies lubrication.")
 			.attachKeyFrame()
 			.placeNearTarget()
 			.pointAt(centre(ENGINE.oilSump()));

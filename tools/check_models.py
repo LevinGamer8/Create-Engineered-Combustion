@@ -598,6 +598,11 @@ def check_exhaust_outlet():
             problems.append(
                 f"EXHAUST_OUTLET: the generator puts the stack's mouth at {axis} {value} and "
                 f"EngineFlowEffects.java's OUTLET_{axis} says {match.group(1)}")
+    match = re.search(r"\bEXHAUST_PORT_X\s*=\s*(-?[0-9.]+)D", java_text)
+    if not match or abs(float(match.group(1)) - module.EXHAUST_HEADER_X) > 1e-6:
+        problems.append(f"EXHAUST_HEADER_X: the generator puts the header at x {module.EXHAUST_HEADER_X}, "
+                        f"EngineFlowEffects.java's EXHAUST_PORT_X says "
+                        f"{match.group(1) if match else 'nothing'}")
     x, y, z = expected
     # The two variants an engine's LAST cylinder can be: an inline-1's, and the
     # positive end of a longer run. Those are the only ones that carry the stack.
@@ -611,6 +616,219 @@ def check_exhaust_outlet():
                   and e["to"][1] < y]
         if not floors:
             problems.append(f"{name}: no sooted stack mouth under the exhaust outlet at {expected}")
+    return problems
+
+
+# A Z ENGINE IS AN X ENGINE TURNED A QUARTER, NOT MIRRORED.
+#
+# The baked blocks of a Z engine are turned by the blockstate's "y": 90, which
+# carries (x, z) to (16 - z, x). The parts a block entity renderer draws are not
+# turned by anything, so each has its own _z model - and that model has to be the
+# SAME quarter turn of the _x one, or it lands on the other flank from the
+# casting it belongs in. It was a mirror for the whole valve gear, and nothing
+# noticed, because every _x model was fine and nobody had built along Z.
+#
+# Checked as geometry, not as JSON: every _z model's boxes must be its _x
+# model's boxes turned, to within the separation pass's nudge. A symmetric part
+# like the crank passes whichever way it was built, which is correct.
+TURN_TOLERANCE = 0.05
+
+
+def _turned(lo, hi):
+    return ([16.0 - hi[2], lo[1], lo[0]], [16.0 - lo[2], hi[1], hi[0]])
+
+
+def check_z_is_turned():
+    problems = []
+    for x_path in sorted(ROOT.glob("*_x.json")):
+        z_path = x_path.with_name(x_path.name[:-len("_x.json")] + "_z.json")
+        if not z_path.exists():
+            problems.append(f"{x_path.name}: has no _z partner")
+            continue
+        want = [_turned(*box(e)) for e in json.loads(x_path.read_text())["elements"]]
+        have = [box(e) for e in json.loads(z_path.read_text())["elements"]]
+        unmatched = list(have)
+        for lo, hi in want:
+            match = next((h for h in unmatched
+                          if all(abs(h[0][i] - lo[i]) <= TURN_TOLERANCE
+                                 and abs(h[1][i] - hi[i]) <= TURN_TOLERANCE for i in range(3))), None)
+            if match is None:
+                problems.append(f"{z_path.name}: has nothing where {x_path.name}'s {lo}->{hi} turns to - "
+                                "the Z model is not the X model turned a quarter (a mirror puts it on "
+                                "the other flank)")
+                break
+            unmatched.remove(match)
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# The ports and the pan, as topology
+# ---------------------------------------------------------------------------
+# What the geometry pass promised is that a player can FOLLOW the air, the gas
+# and the oil by eye. Those are claims about connectivity, so they are checked as
+# connectivity - is this point open, is that one solid, is there a lining - and
+# against the generator's own named cavities and constants, never against
+# coordinates written out here. An artistic edit that moves a port moves the
+# probes with it; an edit that blocks a passage, leaves a runner ending on a
+# wall or gives one bay a pan the others lack fails.
+def _generator():
+    spec = importlib.util.spec_from_file_location("_generator_ports", TOOLS / "generate_engine_models.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _inside(point, elements, tex=None, textures=None):
+    for element in elements:
+        lo, hi = box(element)
+        if all(lo[i] + EPS < point[i] < hi[i] - EPS for i in range(3)):
+            if tex is None:
+                return True
+            refs = {textures.get(f["texture"].lstrip("#")) for f in element["faces"].values()}
+            if tex in refs:
+                return True
+    return False
+
+
+def _open_along(points, elements):
+    """The first sample on a polyline that is inside a solid, or None."""
+    for a, b in zip(points, points[1:]):
+        steps = max(1, int(max(abs(b[i] - a[i]) for i in range(3)) / 0.2))
+        for k in range(steps + 1):
+            t = k / steps
+            q = tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
+            if _inside(q, elements):
+                return q
+    return None
+
+
+def _centre(cavity):
+    lo, hi = cavity
+    return tuple((lo[i] + hi[i]) / 2.0 for i in range(3))
+
+
+def check_ports():
+    g = _generator()
+    problems = []
+    ix, ex, cz = g.VALVE_X[0], g.VALVE_X[1], g.VALVE_CZ
+    mid = (g.PORT_FLOOR + g.PORT_ROOF) / 2.0
+    seat_y = (g.CHAMBER_ROOF + g.PORT_FLOOR) / 2.0
+    window = _centre(g.INTAKE_WINDOW)
+    plenum = _centre(g.INTAKE_PLENUM)
+    trough = g.EXHAUST_TROUGH
+    mouth = g.EXHAUST_MOUTH
+    intake_path = [(window[0], mid, window[2]), (plenum[0], mid, plenum[2]),
+                   (ix, mid, plenum[2]), (ix, mid, cz), (ix, seat_y, cz)]
+    exhaust_path = [(ex, seat_y, cz), (ex, mid, cz),
+                    (g.EXHAUST_HEADER_X, mid, trough[0][2] + 0.3),
+                    (g.EXHAUST_HEADER_X, mid, trough[1][2] - 0.2)]
+    for name in ("cylinder.json", "cylinder_manifold_negative.json",
+                 "cylinder_manifold_positive.json", "cylinder_manifold_both.json"):
+        model = json.loads((ROOT / name).read_text())
+        elements, textures = model["elements"], model["textures"]
+        port, soot = textures.get("port"), textures.get("soot")
+        blocked = _open_along(intake_path, elements)
+        if blocked:
+            problems.append(f"{name}: the intake passage from the window to the intake valve's seat "
+                            f"is blocked at {tuple(round(v, 2) for v in blocked)}")
+        blocked = _open_along(exhaust_path, elements)
+        if blocked:
+            problems.append(f"{name}: the exhaust passage from the exhaust valve's seat to the port "
+                            f"is blocked at {tuple(round(v, 2) for v in blocked)}")
+        # Each passage is a cavity, not a hole in nothing: there is casting under
+        # its floor beside the seat, over its roof at the valve, and a dark lining.
+        for label, x in (("intake", ix), ("exhaust", ex)):
+            if not _inside((x, seat_y, cz + g.SEAT_HALF + 0.2), elements):
+                problems.append(f"{name}: no floor round the {label} valve's seat")
+            if not _inside((x + 0.3, g.PORT_ROOF + 0.1, cz + 0.3), elements):
+                problems.append(f"{name}: no roof over the {label} valve's port")
+        if not _inside((plenum[0], g.PORT_FLOOR + 0.05, plenum[2]), elements, port, textures):
+            problems.append(f"{name}: the intake plenum has no lining - it would read as a hole in nothing")
+        if not _inside((g.EXHAUST_HEADER_X, g.PORT_FLOOR + 0.05, (trough[0][2] + trough[1][2]) / 2.0),
+                       elements, soot, textures):
+            problems.append(f"{name}: the exhaust trough has no soot lining")
+        # The header ends IN the port mouth, not against the face beside it.
+        nose = [e for e in elements
+                if textures.get(next(iter(e["faces"].values()))["texture"].lstrip("#")) == textures.get("exhaust")
+                and all(mouth[0][i] - EPS <= box(e)[0][i] and box(e)[1][i] <= mouth[1][i] + 0.2
+                        for i in (0, 1))
+                and box(e)[0][2] < mouth[1][2] - 0.5]
+        if not nose:
+            problems.append(f"{name}: no exhaust header reaches into the port mouth")
+    # Where a runner feeds the head, it lands on the inlet: the casting stops at
+    # the inlet's recess and the runner stands on it.
+    inlet = g.INTAKE_INLET
+    inlet_top = ((inlet[0][0] + inlet[1][0]) / 2.0, inlet[1][1] + 0.3, (inlet[0][2] + inlet[1][2]) / 2.0)
+    for name in ("cylinder_manifold_negative.json", "cylinder_manifold_positive.json",
+                 "cylinder_manifold_both.json"):
+        model = json.loads((ROOT / name).read_text())
+        if not _inside(inlet_top, model["elements"], model["textures"].get("intake"), model["textures"]):
+            problems.append(f"{name}: the intake runner does not land on the head's inlet")
+    return problems
+
+
+def check_oil_pan():
+    g = _generator()
+    problems = []
+    floor = g.PAN_BOTTOM
+    bays = [("crankshaft.json", 0)] + [("crankshaft_joined.json", 16 * i) for i in range(1, 4)]
+    pan = []
+    for name, dx in bays:
+        elements = [e for e in placed(name, (dx, 0, 0)) if box(e)[1][1] <= 0.0 + EPS]
+        if not elements:
+            problems.append(f"{name}: carries no length of the oil pan")
+            continue
+        bottom = min(box(e)[0][1] for e in elements)
+        if abs(bottom - floor) > EPS:
+            problems.append(f"{name}: its pan bottoms out at y {bottom}, not at PAN_BOTTOM {floor} - "
+                            "every bay's pan must be the same depth")
+        pan += elements
+    # One pan, four bays long: no gap anywhere under an inline-4.
+    for y in (floor / 2.0, floor + 0.3):
+        x = 0.6
+        while x < 63.4:
+            if not _inside((x, y, 8.0), pan):
+                problems.append(f"the oil pan of an inline-4 has a gap at x {x:.1f}, y {y:.1f}")
+                break
+            x += 0.2
+    # And exactly one deep bowl under it: the Oil Sump, deeper than the pan, its
+    # lip in the pan's floor - so one tank reads as part of the one pan.
+    sump = placed("oil_sump.json", (0, -16, 0))
+    deepest = min(box(e)[0][1] for e in sump)
+    if deepest > floor - 4.0:
+        problems.append(f"oil_sump.json: reaches only y {deepest}, which is not a deep bowl under a pan "
+                        f"whose floor is at {floor}")
+    if not any(box(e)[0][1] < floor < box(e)[1][1] for e in sump):
+        problems.append("oil_sump.json: nothing crosses the pan's floor - the bowl would hang under it "
+                        "with a gap instead of being bolted to it")
+    if any(box(e)[0][1] < floor - EPS for e in pan):
+        problems.append("the crankcase's pan reaches below PAN_BOTTOM - only the Oil Sump's bowl may")
+    return problems
+
+
+def check_valves_clear_piston():
+    """A valve head opening into the chamber must never meet the piston.
+
+    The valve heads are new: the disc that sits in each seat drops into the
+    chamber as its valve opens, and the chamber is half a unit tall at top dead
+    centre. So both valves are swung through a whole cycle with the lift the
+    simulation gives them and the piston CrankMath puts under them.
+    """
+    g = _generator()
+    problems = []
+    valves = (("intake_valve_x.json", g.VALVE_X[0], 540.0), ("exhaust_valve_x.json", g.VALVE_X[1], 360.0))
+    for name, x, opens in valves:
+        elements = [box(e) for e in json.loads((ROOT / name).read_text())["elements"]]
+        for cycle in range(0, 720, 4):
+            since = (cycle - opens) % 720.0
+            lift = 0.0 if since >= 180.0 else (1.0 - math.cos(2.0 * math.pi * since / 180.0)) / 2.0
+            drop = lift * g.VALVE_LIFT
+            moved = [([lo[0] + x - 8.0, lo[1] - drop, lo[2]], [hi[0] + x - 8.0, hi[1] - drop, hi[2]])
+                     for lo, hi in elements]
+            piston = piston_boxes(float(cycle % 360))
+            if any(intersects(v, q) for v in moved for q in piston):
+                problems.append(f"{name}: meets the piston at cycle {cycle} (lift {drop:.2f})")
+                break
     return problems
 
 
@@ -683,6 +901,7 @@ def main():
     bad += len(references)
 
     chamber, tdc = check_chamber()
+    chamber += check_valves_clear_piston()
     print(f"\n{'ok ' if not chamber else 'BAD'} combustion chamber"
           f" - piston crown at TDC y {tdc:.2f}, head at y {CHAMBER_ROOF:.2f}")
     for problem in chamber:
@@ -690,14 +909,24 @@ def main():
     bad += len(chamber)
 
     valvetrain = (check_moving_reach() + check_lobe_phase() + check_cam_sweep()
-                  + check_shared_constants() + check_exhaust_outlet())
+                  + check_shared_constants() + check_exhaust_outlet()
+                  + check_z_is_turned())
     print(f"\n{'ok ' if not valvetrain else 'BAD'} the moving valve gear"
           f" - reach within {VALVETRAIN_MOVING_REACH} units, lobes in phase with"
           " the valves they lift, nothing swept through, one set of constants,"
-          " and the exhaust puff on the stack's mouth")
+          " the exhaust puff on the stack's mouth, and every Z part turned rather"
+          " than mirrored")
     for problem in valvetrain:
         print("      " + problem)
     bad += len(valvetrain)
+
+    flow = check_ports() + check_oil_pan()
+    print(f"\n{'ok ' if not flow else 'BAD'} ports and pan - every intake and exhaust passage open"
+          " from its opening to its valve and lined, runners and headers ending in their ports,"
+          " one pan the same depth under every bay with no gap, one deep bowl under it")
+    for problem in flow:
+        print("      " + problem)
+    bad += len(flow)
 
     seams = check_assembly()
     print(f"\n{'ok ' if not seams else 'BAD'} assembled engine - "

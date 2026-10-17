@@ -82,6 +82,20 @@ public final class EngineValvetrain {
 		return (TIMING_DRIVE_Z - 8.0F) * UNIT;
 	}
 
+	/**
+	 * Where an offset authored across the engine - towards the intake flank, in
+	 * Z - lands on an engine running along Z, in blocks along X.
+	 *
+	 * <p>Negated, because the blockstate's {@code "y": 90} turns the baked castings
+	 * a quarter clockwise, carrying (x, z) to (16 - z, x): the intake flank at -Z
+	 * becomes +X. The Z partials are built with the same turn, so the offset that
+	 * puts a part on its axis has to make it too. Leaving it un-negated is what
+	 * mirroring looks like, and it put the whole valve gear on the wrong flank.
+	 */
+	public static float flankOffset(float offsetAcrossEngine) {
+		return -offsetAcrossEngine;
+	}
+
 	/** The rocker shaft, as an offset from the block centre, in blocks. */
 	public static float rockerOffsetY() {
 		return (ROCKER_PIVOT_Y - 8.0F) * UNIT;

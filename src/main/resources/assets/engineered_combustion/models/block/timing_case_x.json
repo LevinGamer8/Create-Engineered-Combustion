@@ -6,6 +6,7 @@
     "web": "engineered_combustion:block/crank_web",
     "gear": "engineered_combustion:block/cast_iron",
     "case": "engineered_combustion:block/crankshaft",
+    "pan": "engineered_combustion:block/oil_pan",
     "cast": "engineered_combustion:block/cast_iron",
     "deck": "engineered_combustion:block/crankcase_deck",
     "brass": "engineered_combustion:block/brass",

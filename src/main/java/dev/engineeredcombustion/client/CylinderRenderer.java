@@ -142,7 +142,7 @@ public class CylinderRenderer implements BlockEntityRenderer<CylinderBlockEntity
 			// the same order the camshaft uses, and for the same reason.
 			float offsetZ = EngineValvetrain.rockerOffsetZ();
 			CachedBuffers.partial(rocker, state)
-				.translate(alongX ? alongRun : offsetZ, EngineValvetrain.rockerOffsetY(),
+				.translate(alongX ? alongRun : EngineValvetrain.flankOffset(offsetZ), EngineValvetrain.rockerOffsetY(),
 					alongX ? offsetZ : alongRun)
 				.rotateCentered(-EngineValvetrain.rockerSwing(index, cycleAngle), rotationAxis)
 				.light(light)

@@ -252,6 +252,8 @@ INTAKE = (124, 128, 132, 255)     # intake manifold and guide: clean cast alloy,
 EXHAUST = (54, 50, 49, 255)       # exhaust side: heat-aged cast iron, darker and warmer
 RUST = (88, 62, 48, 255)          # the scale that forms on iron that runs hot
 SOOT = (22, 20, 19, 255)          # inside the exhaust outlet
+PORT_SHADOW = (40, 45, 52, 255)   # inside the intake passages: clean, cool shadow
+PAN = (58, 58, 60, 255)           # oil pan: dark cast steel
 OIL_GRIME = (36, 32, 26, 255)     # weeping oil and the dust it picks up
 DECK = (112, 117, 124, 255)       # machined deck / gasket faces
 STEEL = (168, 175, 184, 255)      # machined steel: journals, bolts
@@ -591,6 +593,43 @@ def t_exhaust_steel():
         rect(px, 0, y, S, y + 1, shade(px[y][0], d))
     mottle(px, rng, ((5, 10), (11, 5)))
     noise(px, rng, 3)
+    return px
+
+
+def t_intake_port():
+    """Inside the intake passages: the cool alloy in its own shadow.
+
+    Dark, so a cavity reads as depth, but blue-grey and clean rather than the
+    exhaust side's brown-black soot - the two ports are told apart by what has
+    been through them.
+    """
+    px = blank()
+    fill(px, PORT_SHADOW)
+    rng = Rng(317)
+    mottle(px, rng, ((4, 5), (9, 3)))
+    noise(px, rng, 2)
+    specks(px, rng, 6, 8)
+    return px
+
+
+def t_oil_pan():
+    """The oil pan: dark cast steel, grimed at the flange and along the bottom.
+
+    Darker than the crankcase it bolts to, so the pan reads as its own part
+    under the whole engine, and dirtiest exactly where a pan is - oil weeping
+    from the flange joint at the top and collecting along the lower edge.
+    """
+    px = t_cast_iron(331, PAN, 8)
+    rng = Rng(337)
+    rect(px, 0, 0, S, 2, shade(PAN, 14))           # the flange's lit edge
+    rect(px, 0, 2, S, 3, shade(PAN, -18))
+    streaks(px, rng, 12, OIL_GRIME, 0.45, (6, 20))
+    for y in range(22, S):
+        t = (y - 22) / float(S - 22)
+        for x in range(S):
+            px[y][x] = mix(px[y][x], OIL_GRIME, 0.45 * t)
+    patches(px, rng, 5, OIL_GRIME, 0.35, 0.3)
+    border(px, 10, -16)
     return px
 
 
@@ -1163,6 +1202,8 @@ TEXTURES = {
     "block/exhaust_manifold": t_exhaust_manifold,
     "block/exhaust_steel": t_exhaust_steel,
     "block/exhaust_soot": t_exhaust_soot,
+    "block/intake_port": t_intake_port,
+    "block/oil_pan": t_oil_pan,
     "block/indicator_off": t_indicator_off,
     "block/indicator_on": t_indicator_on,
     "block/spark_plug_ceramic": t_spark_plug_ceramic,

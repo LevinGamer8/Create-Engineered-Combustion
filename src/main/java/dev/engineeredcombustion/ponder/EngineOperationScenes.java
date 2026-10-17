@@ -326,6 +326,24 @@ public class EngineOperationScenes {
 			.pointAt(centre(INLINE.carburetor()));
 		scene.idle(110);
 
+		// And one pan. Every crankshaft section carries its length of it, so the
+		// run is outlined with the one Oil Sump that is its deep bowl - which is
+		// what makes one tank of oil the lubrication of every bay, rather than of
+		// the one it happens to hang under.
+		scene.overlay()
+			.showOutline(PonderPalette.GREEN, "shared_pan", util.select()
+				.fromTo(INLINE.crankshaft(0), INLINE.lastCrankshaft()), 90);
+		scene.overlay()
+			.showOutline(PonderPalette.GREEN, "pan_bowl", util.select()
+				.position(INLINE.oilSump()), 90);
+		scene.overlay()
+			.showText(90)
+			.text("The oil pan runs under every section. The one Oil Sump is its deep bowl.")
+			.attachKeyFrame()
+			.placeNearTarget()
+			.pointAt(INLINE.dipstick());
+		scene.idle(100);
+
 		// Firing order - each cylinder at its own point in the rotation, so each
 		// cylinder gets its own outline rather than one box around the row.
 		for (int index = 0; index < INLINE.sections(); index++)

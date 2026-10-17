@@ -247,21 +247,61 @@ def valve_lift(cycle_angle, open_angle):
     return lift_curve(since / STROKE)
 
 
-def section(theta, index, count, carburetor, sump, spark_plug=True):
+class Placer:
+    """Puts a model where the game would, for an engine along either axis.
+
+    Along X this is the identity the previewer always applied. Along Z it is the
+    game's own two transforms, kept apart on purpose because they are different
+    mechanisms: a BAKED block model is turned by the blockstate's "y": 90, which
+    carries (x, z) to (16 - z, x); a PARTIAL is not turned at all, so the
+    renderer picks the _z model and turns its offset itself - the same quarter
+    turn, (dx, dz) to (-dz, dx), which is what EngineValvetrain.flankOffset does.
+    Rendering a Z engine from a camera turned back by a quarter must therefore
+    give the X engine's picture, and the day it does not, one of the two
+    pipelines has drifted - which is how the mirrored valve gear was found.
+    """
+
+    def __init__(self, axis):
+        self.axis = axis
+
+    def block(self, index, y):
+        return (index * 16, y, 0) if self.axis == "x" else (0, y, index * 16)
+
+    def baked(self, path, index, y):
+        origin = self.block(index, y)
+        if self.axis == "x":
+            return quads_of(path, mk_xform(origin))
+
+        def f(point, vector=False):
+            x, py, z = point
+            if vector:
+                return (-z, py, x)
+            return (16.0 - z + origin[0], py + origin[1], x + origin[2])
+        return quads_of(path, f)
+
+    def partial(self, stem, index, y, offset=(0.0, 0.0, 0.0), angle=0.0, suffix=True):
+        ox, oy, oz = self.block(index, y)
+        dx, dy, dz = offset
+        if self.axis == "z":
+            dx, dz = -dz, dx
+        name = f"block/{stem}_{self.axis}.json" if suffix else f"block/{stem}.json"
+        return quads_of(name, mk_xform((ox + dx, oy + dy, oz + dz), pivot=(8, 8, 8),
+                                       angle=angle, axis=self.axis))
+
+
+def section(theta, index, count, carburetor, sump, spark_plug=True, axis="x"):
     """One bay of an engine: crankcase, throw, bore, and whatever is bolted on.
 
     `index` and `count` pick the same block state variants the game would: which
     way the run continues decides the crankcase's seam geometry and which share
     of the shared intake manifold this cylinder carries.
     """
-    x = index * 16
+    at = Placer(axis)
     back, ahead = index > 0, index < count - 1
     angle = theta + phase_offset(index, count)
     q = []
-    q += quads_of("block/crankshaft_joined.json" if back else "block/crankshaft.json",
-                  mk_xform((x, 0, 0)))
-    q += quads_of("block/crank_assembly_x.json",
-                  mk_xform((x, 0, 0), pivot=(8, 8, 8), angle=math.radians(angle), axis="x"))
+    q += at.baked("block/crankshaft_joined.json" if back else "block/crankshaft.json", index, 0)
+    q += at.partial("crank_assembly", index, 0, angle=math.radians(angle))
     # THE VALVE GEAR. The camshaft turns at half crank speed about its own
     # centreline; each pushrod rides its lobe; each rocker swings by the lift its
     # pushrod gave it; each valve is pushed down by the same amount. Every one of
@@ -271,26 +311,18 @@ def section(theta, index, count, carburetor, sump, spark_plug=True):
     # Translate onto the real axis, THEN turn about the block centre - which is
     # exactly the pair CrankshaftRenderer applies, in the same order, because
     # Create's rotateCentered can only pivot about the block's own centre.
-    # The first section carries the timing drive - the sprocket on the end of the
-    # camshaft, the smaller one on the crank, and the chain between them. One per
-    # engine, at the free end, opposite the flywheel.
-    q += quads_of("block/camshaft_running_drive_x.json" if index == 0
-                  else "block/camshaft_running_x.json",
-                  mk_xform((x, CAM_CY - 8.0, CAM_CZ - 8.0), pivot=(8, 8, 8),
-                           angle=math.radians(cycle / 2.0), axis="x"))
+    # The first section carries the timing drive. One per engine, at the free
+    # end, opposite the flywheel.
+    q += at.partial("camshaft_running_drive" if index == 0 else "camshaft_running", index, 0,
+                    (0.0, CAM_CY - 8.0, CAM_CZ - 8.0), math.radians(cycle / 2.0))
     if index == 0:
-        # The drive gear turns at crank speed and the camshaft's at half, which
-        # is the whole point - and it is the same pair of transforms, translate
-        # then rotate about the block centre, for the same reason.
         # NEGATED, and that is not a fudge: meshing gears turn in opposite senses,
         # so a drive gear drawn the same way round as the wheel it drives would be
         # visibly impossible at the one place a player looks - where the teeth
-        # meet. Its speed is still exactly the crank's, which is what a gear
-        # geared 1:1 to the crankshaft through the case turns at.
-        q += quads_of("block/timing_gear_x.json",
-                      mk_xform((x, TIMING_DRIVE_CY - 8.0, TIMING_DRIVE_CZ - 8.0),
-                               pivot=(8, 8, 8), angle=math.radians(-angle), axis="x"))
-        q += quads_of("block/timing_case_x.json", mk_xform((x, 0, 0)))
+        # meet. Its speed is still exactly the crank's.
+        q += at.partial("timing_gear", index, 0,
+                        (0.0, TIMING_DRIVE_CY - 8.0, TIMING_DRIVE_CZ - 8.0), math.radians(-angle))
+        q += at.partial("timing_case", index, 0)
     lifts = (valve_lift(cycle, INTAKE_OPEN), valve_lift(cycle, EXHAUST_OPEN))
     cylinder = "block/cylinder.json"
     if back and ahead:
@@ -299,32 +331,28 @@ def section(theta, index, count, carburetor, sump, spark_plug=True):
         cylinder = "block/cylinder_manifold_negative.json"
     elif ahead:
         cylinder = "block/cylinder_manifold_positive.json"
-    q += quads_of(cylinder, mk_xform((x, 16, 0)))
+    q += at.baked(cylinder, index, 16)
     if spark_plug:
-        q += quads_of("block/spark_plug_x.json", mk_xform((x, 16, 0)))
+        q += at.partial("spark_plug", index, 16)
     wl = wrist_local(angle)
-    q += quads_of("block/piston_head.json", mk_xform((x, 16 + wl - 8.0, 0)))
-    q += quads_of("block/connecting_rod_x.json",
-                  mk_xform((x, 16 + wl - 8.0, 0), pivot=(8, 8, 8),
-                           angle=rod_swing(angle), axis="x"))
+    q += at.partial("piston_head", index, 16, (0.0, wl - 8.0, 0.0), suffix=False)
+    q += at.partial("connecting_rod", index, 16, (0.0, wl - 8.0, 0.0), rod_swing(angle))
     for valve_x, lift, valve in zip(VALVE_X, lifts, ("intake_valve", "exhaust_valve")):
         offset = valve_x - 8.0
-        q += quads_of("block/pushrod_x.json",
-                      mk_xform((x + offset, 16 + lift * VALVE_LIFT, 0)))
-        q += quads_of("block/rocker_x.json",
-                      mk_xform((x + offset, 16 + ROCKER_PIVOT_Y - 8.0, ROCKER_PIVOT_Z - 8.0),
-                               pivot=(8, 8, 8),
-                               angle=math.radians(-lift * ROCKER_SWING), axis="x"))
-        q += quads_of(f"block/{valve}_x.json", mk_xform((x + offset, 16 - lift * VALVE_LIFT, 0)))
+        q += at.partial("pushrod", index, 16, (offset, lift * VALVE_LIFT, 0.0))
+        q += at.partial("rocker", index, 16,
+                        (offset, ROCKER_PIVOT_Y - 8.0, ROCKER_PIVOT_Z - 8.0),
+                        math.radians(-lift * ROCKER_SWING))
+        q += at.partial(valve, index, 16, (offset, -lift * VALVE_LIFT, 0.0))
     if carburetor:
-        q += quads_of("block/carburetor.json", mk_xform((x, 32, 0)))
+        q += at.baked("block/carburetor.json", index, 32)
     if sump:
-        q += quads_of("block/oil_sump.json", mk_xform((x, -16, 0)))
+        q += at.baked("block/oil_sump.json", index, -16)
     return q
 
 
 def assemble(theta, sections=1, with_carb=True, flywheel=True, spark_plug=True,
-             sump=True):
+             sump=True, axis="x"):
     """A whole inline-N, laid out exactly as EngineComponents says one is.
 
     One crankshaft, one Carburetor, one Oil Sump and one Flywheel however many
@@ -335,11 +363,9 @@ def assemble(theta, sections=1, with_carb=True, flywheel=True, spark_plug=True,
     for index in range(sections):
         q += section(theta, index, sections,
                      carburetor=with_carb and index == 0,
-                     sump=sump and index == 0, spark_plug=spark_plug)
+                     sump=sump and index == 0, spark_plug=spark_plug, axis=axis)
     if flywheel:
-        q += quads_of("block/flywheel_wheel_x.json",
-                      mk_xform((sections * 16, 0, 0), pivot=(8, 8, 8),
-                               angle=math.radians(theta), axis="x"))
+        q += Placer(axis).partial("flywheel_wheel", sections, 0, angle=math.radians(theta))
     return q
 
 
