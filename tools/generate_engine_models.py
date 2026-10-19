@@ -748,6 +748,16 @@ def crankcase_elements(ignition_on=False, joined=False):
             if y0 < py0 - 0.2:
                 e.append(el((max(a, px0), y0, zg), (min(b, px1), py0, z1), "case"))
         e.append(el((12.5, 2.0, z0), (15.0, 14.0, z1), "case"))    # post
+    # --- the cam side is CLOSED behind the crank.
+    # Both flanks used to be open, so the crank was seen through the engine and
+    # out of the other side - which is what a cage looks like, not a casting. The
+    # exhaust flank keeps its window; on the intake flank a wall stands just
+    # inboard of the cam's sweep, so the crank is seen against the inside of its
+    # own case, and the cam side shows what it is for: the camshaft, the timing
+    # gears and the pushrods' feet. tools/check_models.py sweeps the cam past it.
+    back_wall = el((3.5, 5.0, CAM_GALLERY_Z), (12.5, 12.8, 2.5), "case")
+    e += subtract(back_wall, [] if joined else
+                  [((px0 - 0.1, py0, -1.0), (px1, py1, pz + 0.1))])
     # --- the main oil gallery, along both flanks just above the joint band.
     # It is the lubrication system made visible: one pipe fed from the one Oil
     # Sump and running the whole length of the engine, past every bearing, so an
@@ -849,34 +859,37 @@ def crankcase_elements(ignition_on=False, joined=False):
 # starts half a unit behind its own boundary.
 PAN_BOTTOM = -6.5
 PAN_TEX = "pan"
+PAN_FLANGE_Y = -0.9
+# The four steps under the flange: (y0, y1) and the (z0, z1) each one spans.
+PAN_STEPS_Y = ((-2.3, PAN_FLANGE_Y), (-3.7, -2.3), (-5.1, -3.7), (PAN_BOTTOM, -5.1))
+PAN_STEPS_Z = ((0.6, 15.4), (1.6, 14.4), (2.6, 13.4), (3.6, 12.4))
 
 
 def oil_pan_elements(back):
-    """This section's length of the pan, from `back` to 15.5."""
+    """This section's length of the pan, from `back` to 15.5.
+
+    THE PROFILE IS THE POINT. A pan with near-vertical walls reads, under
+    Minecraft's flat light, as a dark slab hung under the engine; what makes a pan
+    read as a pan is that its walls fall away inwards from a flange wider than the
+    block. So the flange runs the full width of the block, and below it four steps
+    each come a unit in for 1.4 down - about the angle of a pressed pan's side - to
+    a floor less than half the flange's width. Every bay has the same profile, so
+    the steps run unbroken the length of an inline-4 and draw the long horizontal
+    lines that make it one engine.
+    """
     e = [
-        # The pan's flange, bolted to the block rail above and a little wider
-        # than it, so the joint reads as a lip all the way along.
-        el((back, -0.8, 0.75), (15.5, 0.0, 15.25), PAN_TEX),
-        # The body: full depth, the same under every bay, tapering to its floor.
-        el((back, -4.0, 1.2), (15.5, -0.8, 14.8), PAN_TEX),
-        el((back, -6.0, 2.0), (15.5, -4.0, 14.0), PAN_TEX),
-        el((back, PAN_BOTTOM, 3.0), (15.5, -6.0, 13.0), PAN_TEX),
-        # One stiffening rib the length of the engine on each flank - the line
-        # that says the four bays are one pressing.
-        el((back, -4.3, 0.9), (15.5, -3.7, 1.2), PAN_TEX),
-        el((back, -4.3, 14.8), (15.5, -3.7, 15.1), PAN_TEX),
+        # The flange: the full width of the block, bolted to the rail above.
+        el((back, PAN_FLANGE_Y, 0.1), (15.5, 0.0, 15.9), PAN_TEX),
     ]
-    # Cast ribs down the flanks, on the same pitch as the crank webs.
-    for x0, x1 in ((2.4, 3.6), (7.4, 8.6), (12.4, 13.6)):
-        e.append(el((x0, -3.7, 0.95), (x1, -0.8, 1.2), PAN_TEX))
-        e.append(el((x0, -3.7, 14.8), (x1, -0.8, 15.05), PAN_TEX))
-        e.append(el((x0, -5.8, 1.75), (x1, -4.3, 2.0), PAN_TEX))
-        e.append(el((x0, -5.8, 14.0), (x1, -4.3, 14.25), PAN_TEX))
-    # And the bolt line along its flange, which is what says "removable pan".
+    for (y0, y1), (z0, z1) in zip(PAN_STEPS_Y, PAN_STEPS_Z):
+        e.append(el((back, y0, z0), (15.5, y1, z1), PAN_TEX))
+    # The bolt line along the flange's outer edge, which is what says
+    # "removable pan" - and nothing else: the taper is the pan's detail.
     for x0 in (1.2, 5.2, 9.2, 13.2):
-        e.append(el((x0, -0.7, 0.45), (x0 + 1.1, -0.1, 0.75), "steel"))
-        e.append(el((x0, -0.7, 15.25), (x0 + 1.1, -0.1, 15.55), "steel"))
+        e.append(el((x0, -0.75, -0.2), (x0 + 1.1, -0.15, 0.1), "steel"))
+        e.append(el((x0, -0.75, 15.9), (x0 + 1.1, -0.15, 16.2), "steel"))
     return e
+
 
 
 # ===========================================================================
@@ -890,46 +903,44 @@ SUMP_TEX = {"particle": "oil_sump", "sump": "oil_sump", "pan": "oil_pan",
 
 
 def oil_sump_elements():
-    """The deep bowl, and the service parts that hang off it.
+    """The deep bowl: the pan's own taper, carried on down under one bay.
 
-    In this block's own coordinates the pan's floor is at 16 + PAN_BOTTOM, so
-    the bowl's lip comes up just past it and everything else hangs below. The
-    space above - the pan - is the crankcase's, which is what makes this one
-    bowl in one pan rather than a second pan bolted under the first.
+    It used to be a tank with a lip, bolted under a flat pan floor, and it read as
+    exactly that - a separate box hung on the pan. Now its top step is the pan's
+    floor, the same width, and every step below comes in by the same unit the
+    pan's own walls do, in X as well as Z. So the pan's sides simply keep falling
+    under this bay: one pan, deeper here, which is what a sump is.
 
-    The dipstick and the oil feed both climb the +Z flank OUTSIDE the pan's
-    flange and bolts, so they read as service lines on the engine's side rather
-    than as tubes vanishing into the casting: the dipstick's handle at the pan's
-    rim, where a player looks for it, and the feed up to the crankcase's oil
-    gallery, which carries the oil to every bearing of every bay.
+    It stops well short of the block's floor. A bowl as deep as the block made the
+    whole engine a block taller to the eye than its own working parts needed.
+
+    The dipstick and the oil feed climb the +Z flank and pass through the pan's
+    flange at its edge, which is where a real dipstick tube goes in: the handle at
+    the pan's rim, where a player looks for it, and the feed up to the
+    crankcase's oil gallery, which carries the oil to every bearing of every bay.
     """
     floor = 16.0 + PAN_BOTTOM
-    e = [
-        # The lip, bolted to the underside of the pan.
-        el((2.4, floor - 0.6, 2.4), (13.6, floor + 0.3, 13.6), "pan"),
-        # The bowl, tapering to its drain.
-        el((3.2, 4.0, 3.2), (12.8, floor - 0.6, 12.8), "sump"),
-        el((4.4, 1.8, 4.4), (11.6, 4.0, 11.6), "sump"),
-        el((7.0, 1.0, 7.0), (9.0, 1.8, 9.0), "steel"),        # drain plug
-    ]
-    for x0, x1 in ((2.6, 3.4), (12.6, 13.4)):                 # lip bolts
-        for z0, z1 in ((2.6, 3.4), (12.6, 13.4)):
-            e.append(el((x0, floor - 1.0, z0), (x1, floor - 0.6, z1), "steel"))
-    # Ribs down the bowl, so the largest blank faces on the assembly catch the
-    # light and read as cast.
-    for x0, x1 in ((5.0, 5.6), (10.4, 11.0)):
-        e.append(el((x0, 4.2, 2.9), (x1, floor - 0.8, 3.2), "sump"))
-        e.append(el((x0, 4.2, 12.8), (x1, floor - 0.8, 13.1), "sump"))
-    # Dipstick: out of the bowl, under the pan's floor, and up the flank.
-    e.append(el((6.9, 7.0, 12.8), (7.9, 7.8, 15.95), "steel"))
-    e.append(el((6.9, 7.8, 15.45), (7.9, 15.9, 15.95), "steel"))
+    (_, _), (fz0, fz1) = PAN_STEPS_Y[-1], PAN_STEPS_Z[-1]
+    e = []
+    top = floor
+    for i, height in enumerate((1.4, 1.4, 1.4, 1.0)):
+        inset = float(i)
+        e.append(el((1.0 + inset * 1.2, top - height, fz0 + inset * 0.6),
+                    (15.0 - inset * 1.2, top, fz1 - inset * 0.6), "pan"))
+        top -= height
+    bowl_bottom = top
+    e.append(el((7.0, bowl_bottom - 0.8, 7.0), (9.0, bowl_bottom, 9.0), "steel"))   # drain plug
+    # Dipstick: out of the bowl's side, across under the pan, and up its flank.
+    e.append(el((6.9, 8.4, fz1 - 0.2), (7.9, 9.2, 15.95), "steel"))
+    e.append(el((6.9, 9.2, 15.55), (7.9, 15.9, 15.95), "steel"))
     e.append(el((6.6, 15.9, 15.35), (8.2, 16.7, 16.0), "brass"))
     # The oil feed, from the bowl up to the crankcase's gallery at the same x as
     # its union boss - see crankcase_elements.
-    e.append(el((11.6, 5.8, 12.8), (12.6, 6.8, 15.95), "steel"))
-    e.append(el((11.6, 6.8, 15.3), (12.6, 17.6, 15.95), "steel"))
-    e.append(el((11.3, 16.2, 15.2), (12.9, 17.2, 16.0), "brass"))
+    e.append(el((11.6, 7.0, fz1 - 0.8), (12.6, 7.8, 15.95), "steel"))
+    e.append(el((11.6, 7.8, 15.55), (12.6, 17.6, 15.95), "steel"))
+    e.append(el((11.3, 16.2, 15.25), (12.9, 17.2, 16.0), "brass"))
     return e
+
 
 
 # ===========================================================================
@@ -1159,8 +1170,8 @@ def spark_plug_elements():
 # sits above it - which is where a plenum on an overhead-valve engine goes, and
 # which puts the two systems in the order a player reads them: valves on the
 # head, air above.
-RAIL_Y0, RAIL_Y1 = 20.9, 22.8
-RAIL_Z0, RAIL_Z1 = 0.55, 3.95
+RAIL_Y0, RAIL_Y1 = 20.8, 23.0
+RAIL_Z0, RAIL_Z1 = 0.45, 4.05
 # Where the rail stops when the run does. Far enough inside the block to leave
 # room for the end cap, and to read as a manifold that ends rather than as one
 # that was cut off at the block boundary.
@@ -1171,14 +1182,19 @@ def manifold_elements(link_back, link_ahead):
     """The rail, this cylinder's runner, and whatever finishes each end."""
     x0 = 0.0 if link_back else RAIL_END_BACK
     x1 = 16.0 if link_ahead else RAIL_END_AHEAD
+    cy, cz = (RAIL_Y0 + RAIL_Y1) / 2.0, (RAIL_Z0 + RAIL_Z1) / 2.0
     e = [
-        el((x0, RAIL_Y0, RAIL_Z0), (x1, RAIL_Y1, RAIL_Z1), "intake"),   # the rail
+        # The rail, as a pipe: two crossed boxes, so it has a round section and
+        # reads as a pipe rather than as a beam.
+        el((x0, RAIL_Y0, RAIL_Z0 + 0.5), (x1, RAIL_Y1, RAIL_Z1 - 0.5), "intake"),
+        el((x0, RAIL_Y0 + 0.35, RAIL_Z0), (x1, RAIL_Y1 - 0.35, RAIL_Z1), "intake"),
         # The runner: down out of the rail, past the rocker gear on the outboard
         # side of it, and onto the head's intake flange, which reaches up to
         # 17.75 and is therefore already inside it. It is the one part of this
         # that is per-cylinder, and it is what makes a shared rail visibly feed
         # THIS bore rather than merely pass over it.
-        el((6.4, 17.4, 1.2), (9.6, RAIL_Y0 + 0.15, 3.8), "intake"),
+        el((6.6, 17.4, 1.55), (9.4, cy, 3.45), "intake"),
+        el((7.0, 17.4, 1.2), (9.0, cy, 3.8), "intake"),
         # The joint face where the runner meets the head, so a player can see the
         # bolted flange rather than a pipe growing out of the casting. It sits
         # BETWEEN the two rockers, which is where a runner enters a crossflow
@@ -1229,7 +1245,7 @@ def manifold_elements(link_back, link_ahead):
 # heavier and darker. The intake is one clean alloy rail over the rockers; the
 # exhaust is four dark iron elbows dropping into a fat log with temper-coloured
 # joints, and a stack whose mouth is black with soot.
-EXHAUST_LOG_Y0, EXHAUST_LOG_Y1 = 8.4, 10.6
+EXHAUST_LOG_Y0, EXHAUST_LOG_Y1 = 11.0, 13.2
 EXHAUST_Z0, EXHAUST_Z1 = 16.4, 18.2            # the log's and the runners' core
 EXHAUST_CZ = (EXHAUST_Z0 + EXHAUST_Z1) / 2.0
 STACK_X0, STACK_X1 = 12.0, 14.0
@@ -1251,22 +1267,22 @@ def exhaust_elements(link_back, link_ahead):
         # The header flange, bolted over the head's machined exhaust face and a
         # little smaller than it, so the face shows round it as a gasket line. A
         # frame, not a plate: the port mouth goes straight through it.
-        *frame((hx - 2.3, 13.1, 16.0), (hx + 2.3, 16.9, 16.7), EXHAUST_MOUTH, "exhaust"),
+        *frame((hx - 2.5, 13.2, 16.0), (hx + 2.5, 17.5, 17.0), EXHAUST_MOUTH, "exhaust"),
         # The header: one heavy cast elbow, its nose pushed INTO the port mouth
         # with a dark gap round it, then out and down into the log. Two crossed
         # boxes rather than one, so it reads as a round pipe.
-        el((hx - 0.8, 14.6, 15.2), (hx + 0.8, 16.0, 16.7), "exhaust"),
-        el((hx - 0.9, EXHAUST_LOG_Y1 - 0.4, 16.7), (hx + 0.9, 16.2, EXHAUST_Z1), "exhaust"),
-        el((hx - 0.6, EXHAUST_LOG_Y1 - 0.2, 16.45), (hx + 0.6, 15.9, EXHAUST_Z1 + 0.25), "exhaust"),
+        el((hx - 1.0, 14.6, 15.2), (hx + 1.0, 16.3, 17.0), "exhaust"),
+        el((hx - 0.9, EXHAUST_LOG_Y1 - 0.4, 17.0), (hx + 0.9, 16.2, EXHAUST_Z1), "exhaust"),
+        el((hx - 0.6, EXHAUST_LOG_Y1 - 0.2, 16.85), (hx + 0.6, 15.9, EXHAUST_Z1 + 0.25), "exhaust"),
         # The log collector, low along the fin band.
         el((x0, EXHAUST_LOG_Y0, EXHAUST_Z0), (x1, EXHAUST_LOG_Y1, EXHAUST_Z1), "exhaust"),
         el((x0, EXHAUST_LOG_Y0 + 0.3, EXHAUST_Z0 - 0.25),
            (x1, EXHAUST_LOG_Y1 - 0.3, EXHAUST_Z1 + 0.25), "exhaust"),
     ]
     # The flange's four studs, heat-coloured like every fitting on this side.
-    for x in (hx - 2.15, hx + 1.45):
-        for y in (13.3, 15.75):
-            e.append(el((x, y, 16.7), (x + 0.7, y + 0.8, 17.05), "hot"))
+    for x in (hx - 2.3, hx + 1.6):
+        for y in (13.4, 16.5):
+            e.append(el((x, y, 17.0), (x + 0.7, y + 0.8, 17.35), "hot"))
     # A bolted joint at each seam, in halves, so two sections meet as one ring.
     joint = (EXHAUST_LOG_Y0 - 0.3, EXHAUST_Z0 - 0.35, EXHAUST_LOG_Y1 + 0.3, EXHAUST_Z1 + 0.35)
     if link_back:
@@ -1274,7 +1290,7 @@ def exhaust_elements(link_back, link_ahead):
     else:
         e.append(el((x0 - 0.5, EXHAUST_LOG_Y0 - 0.2, EXHAUST_Z0 - 0.15),
                     (x0, EXHAUST_LOG_Y1 + 0.2, EXHAUST_Z1 + 0.15), "exhaust"))
-        e.append(el((x0 - 0.7, 9.0, 16.8), (x0 - 0.5, 10.0, 17.8), "hot"))
+        e.append(el((x0 - 0.7, EXHAUST_LOG_Y0 + 0.6, 16.8), (x0 - 0.5, EXHAUST_LOG_Y1 - 0.6, 17.8), "hot"))
     if link_ahead:
         e.append(el((14.8, joint[0], joint[1]), (16.0, joint[2], joint[3]), "hot"))
     else:
@@ -1373,37 +1389,17 @@ def camshaft_cradle_elements(joined):
 
 
 def pushrod_guide_elements(link_back, link_ahead):
-    """Guides and a valve-gear gallery up the cylinder's intake flank.
+    """The pushrods' foot rail, along the barrel's intake flank.
 
-    The gallery is the continuous part - a shallow cast channel running the whole
-    length at barrel height - and the two guides standing in it are this
-    cylinder's. Together they turn the stretch of flank between the cam and the
-    head from bare fin ends into the side of a valve gear.
+    It used to be a gallery of ribs, tunnels and collars up the whole flank, and
+    with the fins it was most of what made the cylinder read as a cage. The rods
+    now stand free in front of the barrel's wall - which is where a player wants to
+    watch them - guided at the foot by one cast rail that runs the length of the
+    engine and at the top by the rockers.
     """
     lo = 0.0 if link_back else 0.4
     hi = 16.0 if link_ahead else 15.6
-    z0, z1 = -VALVETRAIN_REACH + 0.4, 0.55
-    e = [
-        # The gallery: a shallow cast channel at the foot of the flank and a rail
-        # at the top of it, both running the whole block. Between them the two
-        # tunnels this cylinder's rods run in.
-        el((lo, 0.0, z0), (hi, 1.3, z1), "cast"),
-        el((lo, 12.1, z0), (hi, 13.5, z1), "cast"),
-    ]
-    for x in VALVE_X:
-        # A tunnel rather than a slab: two ribs with the rod running between them,
-        # open along the front. A solid tower would hide the one part of the valve
-        # gear whose movement is worth watching, and the fins either side of it
-        # would lose their run.
-        for side in (-1.0, 1.0):
-            e.append(el((x + side * 1.05 - 0.45, 1.3, z0 + 0.2),
-                        (x + side * 1.05 + 0.45, 12.1, z1), "cast"))
-        e.append(el((x - 1.05, 1.3, z1 - 0.45), (x + 1.05, 12.1, z1), "case"))
-        # Cast collars where the tunnel passes a fin, so the two meet as one
-        # casting instead of the tunnel merely crossing in front.
-        for y in (3.4, 9.2):
-            e.append(el((x - 1.75, y, z0 + 0.05), (x + 1.75, y + 1.1, z1), "cast"))
-    return e
+    return [el((lo, 0.0, -VALVETRAIN_REACH + 0.4), (hi, 1.3, BARREL_OUTER[0]), "cast")]
 
 
 def rocker_shaft_elements(link_back, link_ahead):
@@ -1488,10 +1484,10 @@ VALVE_HEAD_R = 0.9
 INTAKE_THROAT = ((VALVE_X[0] - 1.4, PORT_FLOOR, 0.6), (VALVE_X[0] + 1.6, PORT_ROOF, VALVE_CZ + 1.4))
 INTAKE_PLENUM = ((VALVE_X[0] + 1.6, PORT_FLOOR, 0.6), (9.6, PORT_ROOF, 4.0))
 INTAKE_INLET = ((VALVE_X[0] + 1.6, PORT_ROOF, 1.2), (9.6, 17.35, 3.8))
-INTAKE_WINDOW = ((VALVE_X[0] - 1.2, 14.7, -0.2), (9.4, 16.7, 0.7))
+INTAKE_WINDOW = ((VALVE_X[0] - 1.4, 14.5, -0.6), (9.6, 16.9, 0.7))
 EXHAUST_POCKET = ((VALVE_X[1] - 1.4, PORT_FLOOR, VALVE_CZ - 1.2), (VALVE_X[1] + 1.4, PORT_ROOF, VALVE_CZ + 1.4))
 EXHAUST_TROUGH = ((9.0, PORT_FLOOR, VALVE_CZ + 1.4), (11.0, 17.5, 15.0))
-EXHAUST_MOUTH = ((8.8, 14.3, 14.6), (11.2, 16.4, 16.8))
+EXHAUST_MOUTH = ((8.4, 14.2, 14.6), (11.6, 16.7, 17.1))
 EXHAUST_HEADER_X = 10.0      # the header's centreline, on the mouth
 
 
@@ -1556,8 +1552,10 @@ def port_elements():
     # The outer flange round the window: a machined frame standing proud of the
     # port's face, so the opening is an opening and not a dark patch.
     (wx0, wy0, _), (wx1, wy1, _) = INTAKE_WINDOW
-    e += frame((wx0 - 0.4, wy0 - 0.4, -0.15), (wx1 + 0.4, wy1 + 0.4, 0.0),
-               ((wx0, wy0, -0.3), (wx1, wy1, 0.1)), "deck")
+    # Deep enough to have a silhouette of its own: it stands 0.4 proud, which is as
+    # far as the pushrods passing in front of it allow.
+    e += frame((wx0 - 0.5, wy0 - 0.45, -0.4), (wx1 + 0.5, wy1 + 0.45, 0.0),
+               ((wx0, wy0, -0.5), (wx1, wy1, 0.1)), "deck")
     e += seat_ring(ix, "steel")
     # --- exhaust: pocket round the valve, trough across, mouth out ---------
     (px0, py0, pz0), (px1, py1, pz1) = EXHAUST_POCKET
@@ -1570,7 +1568,7 @@ def port_elements():
                   [((px0, PORT_FLOOR - 0.1, pz1 - 0.1), (rx1, PORT_ROOF, pz1 + 0.2))])
     # The trough's walls stand as high as the casting round them: the head's top
     # over the head, the boss's top where it runs through the boss.
-    for z0, z1, top in ((rz0, 13.5, 17.2), (13.5, rz1, 16.6)):
+    for z0, z1, top in ((rz0, 14.4, 17.2), (14.4, rz1, 17.0)):
         e += lining(((rx0, PORT_FLOOR, z0), (rx1, top, z1)), ("down", "west", "east"), "soot")
     (mx0, my0, mz0), (mx1, my1, mz1) = EXHAUST_MOUTH
     e += lining(((mx0, my0, rz1), (mx1, my1, mz1 - 0.1)), ("down", "up", "west", "east"), "soot")
@@ -1580,6 +1578,48 @@ def port_elements():
     # roof is the one surface of it a player sees through the barrel's window.
     e += subtract(el((BORE_MIN + 0.05, CHAMBER_ROOF - 0.02, BORE_MIN + 0.05),
                      (BORE_MAX - 0.05, CHAMBER_ROOF, BORE_MAX - 0.05), "soot"), seats)
+    return e
+
+
+HEAD_OUTER = (0.6, 15.4)       # the head's footprint, overhanging the barrel all round
+BARREL_OUTER = (1.0, 15.0)     # the barrel's footprint on an unlinked side
+BARREL_TOP = CHAMBER_ROOF      # the barrel meets the head at the chamber roof
+BARREL_WINDOW = (4.8, 11.2, 2.8, 13.2)   # x0, x1 across a flank, then y0, y1
+
+
+def barrel_elements(link_back, link_ahead):
+    """The cylinder barrel: one cast body round the bore, with windows cut in it.
+
+    WHY IT CHANGED. It was four corner columns and four rings of fins, which made
+    the piston beautifully visible and made the CYLINDER disappear: from a few
+    blocks away an inline-1 read as a narrow tower of bars, and an inline-4 as
+    four of them in a row. A cutaway engine is a casting with pieces taken out of
+    it, so this is a casting with pieces taken out of it: one body round the bore,
+    walls two units thick, and one large window in each face that the piston and
+    rod are seen through. The walls' cut edges show their thickness, which is
+    what makes a window read as a section rather than as a gap between bars.
+
+    The windows are on the two FLANKS only. With one in each end as well, an
+    inline-1's barrel was four corner posts again - the cage by another route -
+    so the ends are solid casting, and the surround of each window is wide enough
+    to read as wall. Linked sides run to the block boundary, so the barrels of an
+    inline-4 are ONE long cylinder block with a window on each side of each bore -
+    the seams stay, because the faces still meet there, but the first thing the
+    eye takes in is one block.
+    """
+    x0 = 0.0 if link_back else BARREL_OUTER[0]
+    x1 = 16.0 if link_ahead else BARREL_OUTER[1]
+    z0, z1 = BARREL_OUTER
+    w0, w1, wy0, wy1 = BARREL_WINDOW
+    cuts = [((BORE_MIN, -0.1, BORE_MIN), (BORE_MAX, BARREL_TOP + 0.1, BORE_MAX)),
+            ((w0, wy0, z0 - 0.1), (w1, wy1, BORE_MIN + 0.1)),
+            ((w0, wy0, BORE_MAX - 0.1), (w1, wy1, z1 + 0.1))]
+    e = []
+    # The base flange the barrel stands on, bolted to the crankcase deck: a
+    # little wider than the barrel, so the joint reads as a joint.
+    e += subtract(el((0.0 if link_back else 0.6, 0.0, 0.6), (16.0 if link_ahead else 15.4, 1.4, 15.4),
+                     "case"), cuts[:1])
+    e += subtract(el((x0, 1.4, z0), (x1, BARREL_TOP, z1), "barrel"), cuts)
     return e
 
 
@@ -1597,44 +1637,7 @@ def cylinder_elements(link_back=False, link_ahead=False):
     The bores themselves are untouched, and so are the seams: a player can still
     count the cylinders, which is the point of building an engine out of them.
     """
-    # How far the shared castings reach on each side.
-    lo = 0.0 if link_back else 1.6
-    hi = 16.0 if link_ahead else 14.4
-    base_lo = 0.0 if link_back else 1.5
-    base_hi = 16.0 if link_ahead else 14.5
-    e = []
-    # --- flange bolted to the crankcase deck ------------------------------
-    e.append(el((base_lo, 0.0, 1.5), (base_hi, 1.6, BORE_MIN), "case"))
-    e.append(el((base_lo, 0.0, BORE_MAX), (base_hi, 1.6, 14.5), "case"))
-    e.append(el((base_lo, 0.0, 3.0), (BORE_MIN, 1.6, 13.0), "case"))
-    e.append(el((BORE_MAX, 0.0, 3.0), (base_hi, 1.6, 13.0), "case"))
-    for f, t in (((7.2, 1.2, 1.7), (8.8, 2.6, 3.3)),
-                 ((7.2, 1.2, 12.7), (8.8, 2.6, 14.3)),
-                 ((1.7, 1.2, 7.2), (3.3, 2.6, 8.8)),
-                 ((12.7, 1.2, 7.2), (14.3, 2.6, 8.8))):
-        e.append(el(f, t, "steel"))
-    # --- corner columns: the cast structure the cutaway windows sit between
-    for x0, x1 in ((1.5, 4.25), (11.75, 14.5)):
-        for z0, z1 in ((1.5, 4.25), (11.75, 14.5)):
-            e.append(el((x0, 1.4, z0), (x1, 14.2, z1), "barrel"))
-    # --- cooling fins. Full rings, so the silhouette reads as air-cooled;
-    # bored out to the cylinder bore so the piston is never touched. Four of
-    # them on a 2.8 pitch rather than three on 3.2: closer-packed fins are what
-    # an air-cooled barrel actually looks like, and the extra ring fills the
-    # bare stretch that used to sit between the top fin and the head.
-    # Side faces take the whole fin texture height on purpose - that is what
-    # gives every fin its lit top edge and shadowed root.
-    fin_uv = {"north": [0, 0, 16, 16], "south": [0, 0, 16, 16],
-              "east": [0, 0, 16, 16], "west": [0, 0, 16, 16]}
-    flat = {"up": "barrel", "down": "barrel"}
-    for y0 in (2.9, 5.7, 8.5, 11.3):
-        y1 = y0 + 0.9
-        e.append(el((lo, y0, 0.6), (hi, y1, BORE_MIN), "fin", flat, fin_uv))
-        e.append(el((lo, y0, BORE_MAX), (hi, y1, 15.4), "fin", flat, fin_uv))
-        e.append(el((0.0 if link_back else 0.6, y0, 1.6), (BORE_MIN, y1, 14.4),
-                    "fin", flat, fin_uv))
-        e.append(el((BORE_MAX, y0, 1.6), (16.0 if link_ahead else 15.4, y1, 14.4),
-                    "fin", flat, fin_uv))
+    e = barrel_elements(link_back, link_ahead)
     # --- head. Reaches past the top of the block so the Carburetor lands on
     # a flange belonging to the head instead of sitting on a bare block face.
     #
@@ -1642,11 +1645,17 @@ def cylinder_elements(link_back=False, link_ahead=False):
     # so the heads of an inline-4 meet as one long casting rather than as four
     # caps with a gap between each pair. Every casting of the head is then cut
     # by the ports - see HEAD_CAVITIES.
-    head_lo = 0.0 if link_back else 1.2
-    head_hi = 16.0 if link_ahead else 14.8
+    #
+    # HEAVIER THAN IT WAS, on purpose. The head is the casting everything on the
+    # top end belongs to - chamber roof, both ports, the plug's seat, the guides,
+    # the rocker pedestals - and it was drawn narrower than the barrel under it, so
+    # the top end read as parts stacked on a post. It now overhangs the barrel on
+    # every side, which is what a head does, and its upper deck is nearly as wide.
+    head_lo = 0.0 if link_back else HEAD_OUTER[0]
+    head_hi = 16.0 if link_ahead else HEAD_OUTER[1]
     head = [
-        el((head_lo, 14.0, 1.2), (head_hi, 15.6, 14.8), "head"),
-        el((2.5, 15.4, 2.5), (13.5, 17.2, 13.5), "head"),
+        el((head_lo, 14.0, HEAD_OUTER[0]), (head_hi, 15.8, HEAD_OUTER[1]), "head"),
+        el((1.6, 15.6, 1.6), (14.4, 17.2, 14.4), "head"),
         # The intake port's casting, standing out of the head's intake face: the
         # window the passage is seen through is cut in its front wall.
         el((VALVE_X[0] - 1.9, 13.8, 0.0), (10.2, 17.6, 2.6), "head"),
@@ -1655,8 +1664,8 @@ def cylinder_elements(link_back=False, link_ahead=False):
         # sits in, one block up.
         el((4.6, 16.6, 0.2), (11.4, 17.75, 4.2), "deck"),
         # The exhaust boss and its machined face, on the port mouth.
-        el((EXHAUST_HEADER_X - 2.4, 13.8, 11.6), (EXHAUST_HEADER_X + 2.4, 16.6, 16.0), "exhaust"),
-        el((EXHAUST_HEADER_X - 2.8, 12.9, 15.0), (EXHAUST_HEADER_X + 2.8, 17.0, 16.0), "deck"),
+        el((EXHAUST_HEADER_X - 2.4, 13.8, 11.6), (EXHAUST_HEADER_X + 2.4, 17.0, 16.0), "exhaust"),
+        el((EXHAUST_HEADER_X - 2.8, 12.9, 15.0), (EXHAUST_HEADER_X + 2.8, 17.4, 16.0), "deck"),
     ]
     for part in head:
         e += subtract(part, HEAD_CAVITIES)

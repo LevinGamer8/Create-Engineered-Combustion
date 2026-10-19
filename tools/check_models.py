@@ -798,9 +798,9 @@ def check_oil_pan():
     if deepest > floor - 4.0:
         problems.append(f"oil_sump.json: reaches only y {deepest}, which is not a deep bowl under a pan "
                         f"whose floor is at {floor}")
-    if not any(box(e)[0][1] < floor < box(e)[1][1] for e in sump):
-        problems.append("oil_sump.json: nothing crosses the pan's floor - the bowl would hang under it "
-                        "with a gap instead of being bolted to it")
+    if not any(box(e)[0][1] < floor <= box(e)[1][1] + EPS for e in sump):
+        problems.append("oil_sump.json: nothing reaches the pan's floor - the bowl would hang under it "
+                        "with a gap instead of carrying the pan on down")
     if any(box(e)[0][1] < floor - EPS for e in pan):
         problems.append("the crankcase's pan reaches below PAN_BOTTOM - only the Oil Sump's bowl may")
     return problems
@@ -829,6 +829,52 @@ def check_valves_clear_piston():
             if any(intersects(v, q) for v in moved for q in piston):
                 problems.append(f"{name}: meets the piston at cycle {cycle} (lift {drop:.2f})")
                 break
+    return problems
+
+
+def rod_swing(degrees):
+    """CrankMath.rodSwing: the rod's lean, in radians, for a crank angle."""
+    return math.asin(CRANK_RADIUS * math.sin(math.radians(degrees)) / ROD_LENGTH)
+
+
+def check_rod_clear():
+    """The connecting rod swings through the barrel's base and the crankcase deck.
+
+    The barrel became a solid casting with a bore cut through it, so the rod -
+    which leans as it goes round and reaches a block below its own - now passes
+    through openings rather than through open air. Each rod box is sampled at its
+    corners, edge midpoints and face centres, swung exactly as CylinderRenderer
+    swings it, and tested against every static casting it can reach.
+    """
+    problems = []
+    rod = [box(e) for e in json.loads((ROOT / "connecting_rod_x.json").read_text())["elements"]]
+    statics = []
+    for name in ("cylinder.json", "cylinder_manifold_both.json"):
+        statics += [(name, box(e)) for e in json.loads((ROOT / name).read_text())["elements"]]
+    for name in ("crankshaft.json", "crankshaft_joined.json"):
+        statics += [(name, ([lo[0], lo[1] - 16.0, lo[2]], [hi[0], hi[1] - 16.0, hi[2]]))
+                    for lo, hi in (box(e) for e in json.loads((ROOT / name).read_text())["elements"])]
+    margin = 0.05
+    hits = set()
+    for degrees in range(0, 360, 3):
+        lift = wrist_pin_height(degrees) - WRIST_PIN_MODEL_HEIGHT
+        swing = rod_swing(degrees)
+        c, s_ = math.cos(swing), math.sin(swing)
+        for lo, hi in rod:
+            for fx in (0.0, 0.5, 1.0):
+                for fy in (0.0, 0.5, 1.0):
+                    for fz in (0.0, 0.5, 1.0):
+                        x = lo[0] + (hi[0] - lo[0]) * fx
+                        y = lo[1] + (hi[1] - lo[1]) * fy - 8.0
+                        z = lo[2] + (hi[2] - lo[2]) * fz - 8.0
+                        y, z = y * c - z * s_, y * s_ + z * c
+                        point = (x, y + 8.0 + lift, z + 8.0)
+                        for name, (slo, shi) in statics:
+                            if all(slo[i] + margin < point[i] < shi[i] - margin for i in range(3)):
+                                hits.add((name, tuple(slo), tuple(shi), degrees))
+    for name, slo, shi, degrees in sorted(hits)[:6]:
+        problems.append(f"{name}: {list(slo)}->{list(shi)} is in the connecting rod's way "
+                        f"at crank angle {degrees}")
     return problems
 
 
@@ -901,7 +947,7 @@ def main():
     bad += len(references)
 
     chamber, tdc = check_chamber()
-    chamber += check_valves_clear_piston()
+    chamber += check_valves_clear_piston() + check_rod_clear()
     print(f"\n{'ok ' if not chamber else 'BAD'} combustion chamber"
           f" - piston crown at TDC y {tdc:.2f}, head at y {CHAMBER_ROOF:.2f}")
     for problem in chamber:

@@ -117,6 +117,19 @@ Why these exist is in `milestone-15b-geometry-realism.md`.
 | **V36** | Find the dipstick and the oil feed. | Both climb the flank outside the pan; the dipstick's handle sits at the pan's rim, the feed reaches the oil gallery. |
 | **V37** | Build an R1 and an R4 along **Z**, fit a Camshaft, and run them. | The camshaft, pushrods, rockers, valves and timing gears are **in** their cradle, tunnels and guides on the intake flank, exactly as on an X engine. This changed in this pass; before it they stood on the opposite flank. |
 
+## V38-V42 — primary form and silhouette
+
+Why these exist is in `milestone-15b-silhouette.md`; before/after renders are in
+`docs/renders/milestone-15b-silhouette/`.
+
+| | Do this | Expect |
+| --- | --- | --- |
+| **V38** | Stand four or five blocks from an R1, no goggles, no particles. | First read: a compact single-cylinder engine - cylinder and head, crankcase, oil pan, carburetor, exhaust, flywheel. **Not** a tower of bars. The barrel should read as cast metal, not as a flat grey box. |
+| **V39** | Look at an R1's barrel from each side. | One window in each flank showing the piston and rod; the ends solid. The window's edges show wall thickness. Nothing clips the rod at any point of the stroke. |
+| **V40** | Look into the crankcase from the exhaust side, then from the intake side. | Exhaust side: the crank turning inside its case, against a back wall - not seen through the engine. Intake side: the camshaft, timing gears and pushrods' feet in front of a closed wall. The crank should still be **visible** in Minecraft's light. |
+| **V41** | Look under an R1 and an R4 from the side and from below. | One pan whose walls step inwards from a full-width flange, the same under every section; under one section the same walls keep falling into the deeper bowl. It should read as a taper, not as stripes. |
+| **V42** | Stand back from an R4 along both flanks. | First impression: **one inline-four** - one long block with four windows, one head line, one exhaust log along the top, one intake rail, one pan. Section seams visible but secondary. |
+
 ---
 
 ## P — Ponder
